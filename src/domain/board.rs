@@ -33,6 +33,8 @@ pub struct Board {
     pub zobrist: Arc<ZobristKeys>,
     pub hash: u64,
     pub history: Vec<u64>,
+    pub en_passant_target: Option<usize>,
+    pub castling_rights: u8,
 }
 
 impl Board {
@@ -58,11 +60,14 @@ impl Board {
             zobrist,
             hash,
             history: Vec::new(),
+            en_passant_target: None,
+            castling_rights: 0,
         }
     }
 
     pub fn new(dimension: usize, side: usize) -> Self {
         let mut board = Self::new_empty(dimension, side);
+        board.castling_rights = 0xF; // Assume standard start rights
         board.setup_standard_chess();
         board
     }
@@ -283,6 +288,134 @@ impl Board {
 
         self.history.push(self.hash);
 
+        // --- En Passant Logic ---
+        // 1. Check if this is an EP capture
+        if moving_piece.piece_type == PieceType::Pawn {
+            // If moving to EP target ..
+            if let Some(ep_idx) = self.en_passant_target {
+                if to_idx == ep_idx {
+                    // Capture the pawn "behind" the target.
+                    // The target is "behind" the pawn relative to its movement?
+                    // No, "En Passant Target" is the square skipped over by the enemy pawn.
+                    // The enemy pawn is actually at `to - forward`.
+                    // Wait, standard convention: EP target is the square BEHIND the pawn that just moved.
+                    // So if White Pawn moves A2 -> A4, EP target is A3.
+                    // Black Pawn captures on A3. Black Pawn ends up on A3.
+                    // The captured pawn is on A4.
+                    // Relation: Captured Pawn is at `to - forward_step_of_capturer`?
+                    // No. `to` is A3. Capturer (Black) moves B4 -> A3 (Forward is -1).
+                    // Captured White Pawn is at A4. A4 = A3 - (-1) = A3 + 1.
+                    // Correct. Captured Pawn is at `to - (forward_dir)` of the moving pawn.
+
+                    let capture_dir = match moving_piece.owner {
+                        Player::White => 1,
+                        Player::Black => -1,
+                    };
+                    // We need to calculate the index of the captured pawn.
+                    // `to` coords - (dir in dim 0).
+                    let mut captured_coords = mv.to.values.clone();
+                    // Note: stored dim is variable but standard chess is dim 0 for ranks.
+                    let rank = captured_coords[0] as isize - capture_dir;
+                    if rank >= 0 && rank < self.side as isize {
+                        captured_coords[0] = rank as usize;
+                        if let Some(cap_idx) = self.coords_to_index(&captured_coords) {
+                            self.remove_piece_at_index(cap_idx);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Clear EP target for the next turn
+        self.en_passant_target = None;
+
+        // 3. Set EP target if double push
+        if moving_piece.piece_type == PieceType::Pawn {
+            let dist = (mv.from.values[0] as isize - mv.to.values[0] as isize).abs();
+            if dist == 2 {
+                // Set target to the square skipped.
+                let dir = if mv.to.values[0] > mv.from.values[0] {
+                    1
+                } else {
+                    -1
+                };
+                let mut target_vals = mv.from.values.clone();
+                target_vals[0] = (target_vals[0] as isize + dir) as usize;
+                self.en_passant_target = self.coords_to_index(&target_vals);
+            }
+        }
+
+        // --- Castling Logic ---
+        let mut castling_rook_move = None;
+
+        // Update Rights
+        // If King moves, lose all rights for that player
+        if moving_piece.piece_type == PieceType::King {
+            match moving_piece.owner {
+                Player::White => self.castling_rights &= !0x3, // Clear 0, 1 (White Kingside/Queenside)
+                Player::Black => self.castling_rights &= !0xC, // Clear 2, 3 (Black Kingside/Queenside)
+            }
+        }
+
+        // If Rook moves or is captured, logic is trickier without tracking which rook is which.
+        // Simplified: Check typical rook starting squares.
+        // White KS Rook: (0, 7) -> 0x1
+        // White QS Rook: (0, 0) -> 0x2
+        // Black KS Rook: (7, 7) -> 0x4
+        // Black QS Rook: (7, 0) -> 0x8
+        // Note: Assuming standard board setup
+        if self.dimension == 2 && self.side == 8 {
+            // Check From (Rook move) and To (Rook capture)
+            for idx in [from_idx, to_idx] {
+                match idx {
+                    7 => self.castling_rights &= !0x1,  // White KS Rook (H1)
+                    0 => self.castling_rights &= !0x2,  // White QS Rook (A1)
+                    63 => self.castling_rights &= !0x4, // Black KS Rook (H8)
+                    56 => self.castling_rights &= !0x8, // Black QS Rook (A8) - Wait, A8 is sq 56?
+                    // 0-7 is rank 0. 56-63 is rank 7.
+                    // A1=0, H1=7. A8=56, H8=63. Correct.
+                    _ => {}
+                }
+            }
+        }
+
+        // Check if this IS a castling move (King moves 2 squares)
+        if moving_piece.piece_type == PieceType::King {
+            let dist = (mv.from.values[1] as isize - mv.to.values[1] as isize).abs();
+            if dist == 2 {
+                // Identify Rook and Move it.
+                // Kingside: y increases. Queenside: y decreases.
+                let is_kingside = mv.to.values[1] > mv.from.values[1];
+                let _rank = mv.from.values[0]; // 0 or 7
+                let (rook_from_y, rook_to_y) = if is_kingside {
+                    (self.side - 1, mv.to.values[1] - 1) // H -> F
+                } else {
+                    (0, mv.to.values[1] + 1) // A -> D
+                };
+
+                let mut rook_from_coords = mv.from.values.clone();
+                rook_from_coords[1] = rook_from_y;
+                let rook_from_idx = self
+                    .coords_to_index(&rook_from_coords)
+                    .ok_or("Invalid rook from")?;
+
+                let mut rook_to_coords = mv.from.values.clone();
+                rook_to_coords[1] = rook_to_y;
+                let rook_to_idx = self
+                    .coords_to_index(&rook_to_coords)
+                    .ok_or("Invalid rook to")?;
+
+                // Remove Rook from old pos, Place in new.
+                // Need to know WHO owns it (same as king)
+                let rook_piece = Piece {
+                    piece_type: PieceType::Rook,
+                    owner: moving_piece.owner,
+                };
+                castling_rook_move = Some((rook_from_idx, rook_to_idx, rook_piece));
+            }
+        }
+
+        // --- Apply Main Move ---
         self.remove_piece_at_index(from_idx);
         self.remove_piece_at_index(to_idx);
 
@@ -296,6 +429,12 @@ impl Board {
         };
 
         self.place_piece_at_index(to_idx, piece_to_place);
+
+        // --- Apply Castling Rook Move (Secondary) ---
+        if let Some((r_from, r_to, r_piece)) = castling_rook_move {
+            self.remove_piece_at_index(r_from);
+            self.place_piece_at_index(r_to, r_piece);
+        }
 
         self.hash = self.zobrist.get_hash(self, moving_piece.owner.opponent());
 
@@ -361,7 +500,9 @@ impl BitBoard {
     pub fn set_bit(&mut self, index: usize) {
         match self {
             BitBoard::Small(b) => *b |= 1 << index,
-            BitBoard::Medium(b) => *b |= 1 << index,
+            BitBoard::Medium(b) => {
+                *b |= 1 << index;
+            }
             BitBoard::Large { data } => {
                 let vec_idx = index / 64;
                 if vec_idx < data.len() {

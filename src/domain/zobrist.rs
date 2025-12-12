@@ -6,6 +6,8 @@ use rand::Rng;
 pub struct ZobristKeys {
     pub piece_keys: Vec<u64>,
     pub black_to_move: u64,
+    pub en_passant_keys: Vec<u64>,
+    pub castling_keys: Vec<u64>,
 }
 
 impl ZobristKeys {
@@ -16,9 +18,31 @@ impl ZobristKeys {
         for _ in 0..size {
             piece_keys.push(rng.r#gen());
         }
+
+        // En Passant keys: one per file?
+        // Actually, EP target is an index. But it's restricted to specific ranks.
+        // It's cleaner to have one key per FILE (column).
+        // Total files = side^(dimension-1)? Or just 'side' if we assume 2D-like columns?
+        // Actually, let's just use `total_cells` size for simplicity, or just map 'index' -> key.
+        // Let's use `total_cells` to support EP on any square (technically only rank 2/5 etc)
+        // Optimization: typical EP is only valid on specific files.
+        // We'll trust the board size isn't massive.
+        let mut en_passant_keys = Vec::with_capacity(total_cells);
+        for _ in 0..total_cells {
+            en_passant_keys.push(rng.r#gen());
+        }
+
+        // Castling rights: 16 combinations (4 bits)
+        let mut castling_keys = Vec::with_capacity(16);
+        for _ in 0..16 {
+            castling_keys.push(rng.r#gen());
+        }
+
         Self {
             piece_keys,
             black_to_move: rng.r#gen(),
+            en_passant_keys,
+            castling_keys,
         }
     }
 
@@ -26,6 +50,17 @@ impl ZobristKeys {
         let mut hash = 0;
         if current_player == Player::Black {
             hash ^= self.black_to_move;
+        }
+
+        if let Some(ep_target) = board.en_passant_target {
+            if ep_target < self.en_passant_keys.len() {
+                hash ^= self.en_passant_keys[ep_target];
+            }
+        }
+
+        let rights = board.castling_rights as usize;
+        if rights < self.castling_keys.len() {
+            hash ^= self.castling_keys[rights];
         }
 
         for i in 0..board.total_cells {

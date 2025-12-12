@@ -14,6 +14,10 @@ impl Rules {
                 moves.push(mv);
             }
         }
+
+        // Castling moves
+        Self::generate_castling_moves(board, player, &mut moves);
+
         moves
     }
 
@@ -283,6 +287,102 @@ impl Rules {
         } else {
             // No king? For testing (sandbox), assume safe.
             false
+        }
+    }
+
+    fn generate_castling_moves(board: &Board, player: Player, moves: &mut Vec<Move>) {
+        if board.dimension != 2 || board.side != 8 {
+            return;
+        }
+
+        let (rights_mask, rank) = match player {
+            Player::White => (0x3, 0),              // Rights 1 & 2 (KS, QS)
+            Player::Black => (0xC, board.side - 1), // Rights 4 & 8 (KS, QS)
+        };
+
+        let my_rights = board.castling_rights & rights_mask;
+        if my_rights == 0 {
+            return;
+        }
+
+        if Self::is_square_attacked(board, &Coordinate::new(vec![rank, 4]), player.opponent()) {
+            return; // King in check
+        }
+
+        // Kingside
+        let ks_mask = match player {
+            Player::White => 0x1,
+            Player::Black => 0x4,
+        };
+        if (my_rights & ks_mask) != 0 {
+            let f_sq = vec![rank, 5];
+            let g_sq = vec![rank, 6];
+            let f_idx = board.coords_to_index(&f_sq).unwrap();
+            let g_idx = board.coords_to_index(&g_sq).unwrap();
+
+            let all_occupancy = board
+                .white_occupancy
+                .clone()
+                .or_with(&board.black_occupancy);
+            let f_occ = all_occupancy.get_bit(f_idx);
+            let g_occ = all_occupancy.get_bit(g_idx);
+
+            if !f_occ && !g_occ {
+                if !Self::is_square_attacked(
+                    board,
+                    &Coordinate::new(f_sq.clone()),
+                    player.opponent(),
+                ) && !Self::is_square_attacked(
+                    board,
+                    &Coordinate::new(g_sq.clone()),
+                    player.opponent(),
+                ) {
+                    moves.push(Move {
+                        from: Coordinate::new(vec![rank, 4]),
+                        to: Coordinate::new(g_sq),
+                        promotion: None,
+                    });
+                }
+            }
+        }
+
+        // Queenside
+        let qs_mask = match player {
+            Player::White => 0x2,
+            Player::Black => 0x8,
+        };
+        if (my_rights & qs_mask) != 0 {
+            let b_sq = vec![rank, 1];
+            let c_sq = vec![rank, 2];
+            let d_sq = vec![rank, 3];
+            let b_idx = board.coords_to_index(&b_sq).unwrap();
+            let c_idx = board.coords_to_index(&c_sq).unwrap();
+            let d_idx = board.coords_to_index(&d_sq).unwrap();
+
+            let all_occupancy = board
+                .white_occupancy
+                .clone()
+                .or_with(&board.black_occupancy);
+            if !all_occupancy.get_bit(b_idx)
+                && !all_occupancy.get_bit(c_idx)
+                && !all_occupancy.get_bit(d_idx)
+            {
+                if !Self::is_square_attacked(
+                    board,
+                    &Coordinate::new(d_sq.clone()),
+                    player.opponent(),
+                ) && !Self::is_square_attacked(
+                    board,
+                    &Coordinate::new(c_sq.clone()),
+                    player.opponent(),
+                ) {
+                    moves.push(Move {
+                        from: Coordinate::new(vec![rank, 4]),
+                        to: Coordinate::new(c_sq),
+                        promotion: None,
+                    });
+                }
+            }
         }
     }
 
@@ -584,6 +684,36 @@ impl Rules {
                                 player,
                                 moves,
                             );
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. En Passant
+        if let Some(ep_idx) = board.en_passant_target {
+            let ep_coords = board.index_to_coords(ep_idx);
+            let diff_rank = ep_coords[0] as isize - origin.values[0] as isize;
+
+            // Should be exactly forward_dir
+            if diff_rank == forward_dir {
+                // Check if adjacent file (dist 1 in other dimensions)
+                for i in 1..board.dimension {
+                    let abs_diff = (ep_coords[i] as isize - origin.values[i] as isize).abs();
+                    if abs_diff == 1 {
+                        let mut is_valid_relation = true;
+                        for j in 1..board.dimension {
+                            if i != j && origin.values[j] != ep_coords[j] {
+                                is_valid_relation = false;
+                            }
+                        }
+
+                        if is_valid_relation {
+                            moves.push(Move {
+                                from: origin.clone(),
+                                to: Coordinate::new(ep_coords.clone()),
+                                promotion: None,
+                            });
                         }
                     }
                 }
