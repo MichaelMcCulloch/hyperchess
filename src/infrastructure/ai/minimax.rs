@@ -77,12 +77,11 @@ impl MinimaxBot {
         }
 
         let mut score = 0;
-        for i in 0..board.total_cells {
-            if board.white_occupancy.get_bit(i) {
-                score += self.get_piece_value(board, i);
-            } else if board.black_occupancy.get_bit(i) {
-                score -= self.get_piece_value(board, i);
-            }
+        for i in board.white_occupancy.iter_indices() {
+            score += self.get_piece_value(board, i);
+        }
+        for i in board.black_occupancy.iter_indices() {
+            score -= self.get_piece_value(board, i);
         }
         score
     }

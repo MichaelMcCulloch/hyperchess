@@ -12,6 +12,94 @@ pub enum BitBoard {
     Large { data: Vec<u64> },
 }
 
+pub struct BitIterator<'a> {
+    board: &'a BitBoard,
+    current_chunk_idx: usize,
+    current_chunk: u64,
+}
+
+impl<'a> BitIterator<'a> {
+    pub fn new(board: &'a BitBoard) -> Self {
+        let (first_chunk, start_idx) = match board {
+            BitBoard::Small(b) => (*b as u64, 0),
+            BitBoard::Medium(b) => (*b as u64, 0),
+            BitBoard::Large { data } => {
+                if data.is_empty() {
+                    (0, 0)
+                } else {
+                    (data[0], 0)
+                }
+            }
+        };
+
+        Self {
+            board,
+            current_chunk_idx: start_idx,
+            current_chunk: first_chunk,
+        }
+    }
+}
+
+impl<'a> Iterator for BitIterator<'a> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.current_chunk != 0 {
+                // Hardware intrinsic: TZCNT via trailing_zeros()
+                let trailing = self.current_chunk.trailing_zeros();
+
+                // Hardware intrinsic: BLSR (Reset lowest set bit)
+                // self.current_chunk &= self.current_chunk - 1;
+                // Note: Rust compiler optimizes the below to BLSR if BMI1 is enabled.
+                // We use the safe XOR approach or just clear the bit directly.
+                // Resetting via XOR is clean.
+                self.current_chunk &= !(1 << trailing);
+
+                // For medium board, we need to handle the upper bits if it was > 64 bits?
+                // Wait, Small(u32) is fine (fits in u64). Medium(u128) might be > 64 bits.
+                // My logic for Medium below treats it as 2 chunks.
+
+                // Correction for Medium(u128):
+                // In `new`, I took `*b as u64`. That only grabs the lower 64 bits.
+                // I need to handle the Medium case correctly in `next`.
+
+                let index = if let BitBoard::Medium(_) = self.board {
+                    self.current_chunk_idx * 64 + trailing as usize
+                } else if let BitBoard::Large { .. } = self.board {
+                    self.current_chunk_idx * 64 + trailing as usize
+                } else {
+                    // Small
+                    trailing as usize
+                };
+
+                return Some(index);
+            }
+
+            // Move to next chunk if needed
+            match self.board {
+                BitBoard::Small(_) => return None, // Small only has 1 chunk (and we just processed it)
+                BitBoard::Medium(b) => {
+                    if self.current_chunk_idx == 0 {
+                        self.current_chunk_idx = 1;
+                        self.current_chunk = (b >> 64) as u64;
+                    } else {
+                        return None;
+                    }
+                }
+                BitBoard::Large { data } => {
+                    self.current_chunk_idx += 1;
+                    if self.current_chunk_idx < data.len() {
+                        self.current_chunk = data[self.current_chunk_idx];
+                    } else {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Board {
     pub dimension: usize,
@@ -569,14 +657,26 @@ impl BitBoard {
             (BitBoard::Small(a), BitBoard::Small(b)) => BitBoard::Small(a | b),
             (BitBoard::Medium(a), BitBoard::Medium(b)) => BitBoard::Medium(a | b),
             (BitBoard::Large { mut data }, BitBoard::Large { data: other_data }) => {
-                for (i, x) in data.iter_mut().enumerate() {
-                    if i < other_data.len() {
-                        *x |= other_data[i];
-                    }
+                // Determine the common length for vectorization
+                let len = std::cmp::min(data.len(), other_data.len());
+
+                // This slice-based loop allows LLVM to generate AVX2 instructions
+                // (vpor ymm0, ymm0, ymm1)
+                for (d, o) in data[0..len].iter_mut().zip(&other_data[0..len]) {
+                    *d |= *o;
                 }
+
+                // Handle size mismatches (rare in static board dimensions)
+                if other_data.len() > data.len() {
+                    data.extend_from_slice(&other_data[len..]);
+                }
+
                 BitBoard::Large { data }
             }
             _ => panic!("Mismatched BitBoard types"),
         }
+    }
+    pub fn iter_indices(&self) -> BitIterator<'_> {
+        BitIterator::new(self)
     }
 }

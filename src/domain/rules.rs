@@ -195,79 +195,77 @@ impl Rules {
     fn generate_pseudo_legal_moves(board: &Board, player: Player) -> Vec<Move> {
         let mut moves = Vec::new();
         // Iterate all cells, find pieces owned by player
-        for i in 0..board.total_cells {
-            let occupancy = match player {
-                Player::White => &board.white_occupancy,
-                Player::Black => &board.black_occupancy,
+        let occupancy = match player {
+            Player::White => &board.white_occupancy,
+            Player::Black => &board.black_occupancy,
+        };
+
+        for i in occupancy.iter_indices() {
+            let coord_vals = board.index_to_coords(i);
+            let coord = Coordinate::new(coord_vals.clone());
+
+            // Identify piece type
+            let piece_type = if board.pawns.get_bit(i) {
+                PieceType::Pawn
+            } else if board.knights.get_bit(i) {
+                PieceType::Knight
+            } else if board.bishops.get_bit(i) {
+                PieceType::Bishop
+            } else if board.rooks.get_bit(i) {
+                PieceType::Rook
+            } else if board.queens.get_bit(i) {
+                PieceType::Queen
+            } else if board.kings.get_bit(i) {
+                PieceType::King
+            } else {
+                continue; // Error?
             };
 
-            if occupancy.get_bit(i) {
-                let coord_vals = board.index_to_coords(i);
-                let coord = Coordinate::new(coord_vals.clone());
-
-                // Identify piece type
-                let piece_type = if board.pawns.get_bit(i) {
-                    PieceType::Pawn
-                } else if board.knights.get_bit(i) {
-                    PieceType::Knight
-                } else if board.bishops.get_bit(i) {
-                    PieceType::Bishop
-                } else if board.rooks.get_bit(i) {
-                    PieceType::Rook
-                } else if board.queens.get_bit(i) {
-                    PieceType::Queen
-                } else if board.kings.get_bit(i) {
-                    PieceType::King
-                } else {
-                    continue; // Error?
-                };
-
-                match piece_type {
-                    PieceType::Pawn => Self::generate_pawn_moves(board, &coord, player, &mut moves),
-                    PieceType::Knight => Self::generate_leaper_moves(
-                        board,
-                        &coord,
-                        player,
-                        &Self::get_knight_offsets(board.dimension),
-                        &mut moves,
-                    ),
-                    PieceType::King => Self::generate_leaper_moves(
-                        board,
-                        &coord,
-                        player,
-                        &Self::get_king_offsets(board.dimension),
-                        &mut moves,
-                    ),
-                    PieceType::Rook => Self::generate_slider_moves(
+            match piece_type {
+                PieceType::Pawn => Self::generate_pawn_moves(board, &coord, player, &mut moves),
+                PieceType::Knight => Self::generate_leaper_moves(
+                    board,
+                    &coord,
+                    player,
+                    &Self::get_knight_offsets(board.dimension),
+                    &mut moves,
+                ),
+                PieceType::King => Self::generate_leaper_moves(
+                    board,
+                    &coord,
+                    player,
+                    &Self::get_king_offsets(board.dimension),
+                    &mut moves,
+                ),
+                PieceType::Rook => Self::generate_slider_moves(
+                    board,
+                    &coord,
+                    player,
+                    &Self::get_rook_directions(board.dimension),
+                    &mut moves,
+                ),
+                PieceType::Bishop => Self::generate_slider_moves(
+                    board,
+                    &coord,
+                    player,
+                    &Self::get_bishop_directions(board.dimension),
+                    &mut moves,
+                ),
+                PieceType::Queen => {
+                    Self::generate_slider_moves(
                         board,
                         &coord,
                         player,
                         &Self::get_rook_directions(board.dimension),
                         &mut moves,
-                    ),
-                    PieceType::Bishop => Self::generate_slider_moves(
+                    );
+                    Self::generate_slider_moves(
                         board,
                         &coord,
                         player,
                         &Self::get_bishop_directions(board.dimension),
                         &mut moves,
-                    ),
-                    PieceType::Queen => {
-                        Self::generate_slider_moves(
-                            board,
-                            &coord,
-                            player,
-                            &Self::get_rook_directions(board.dimension),
-                            &mut moves,
-                        );
-                        Self::generate_slider_moves(
-                            board,
-                            &coord,
-                            player,
-                            &Self::get_bishop_directions(board.dimension),
-                            &mut moves,
-                        );
-                    }
+                    );
                 }
             }
         }
