@@ -5,7 +5,6 @@ use smallvec::{smallvec, SmallVec};
 use std::fmt;
 use std::sync::Arc;
 
-// BitBoard implementation as Domain Primitive for Board Representation
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BitBoard {
     Small(u32),
@@ -54,39 +53,23 @@ impl<'a> Iterator for BitIterator<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if self.current_chunk != 0 {
-                // Hardware intrinsic: TZCNT via trailing_zeros()
                 let trailing = self.current_chunk.trailing_zeros();
 
-                // Hardware intrinsic: BLSR (Reset lowest set bit)
-                // self.current_chunk &= self.current_chunk - 1;
-                // Note: Rust compiler optimizes the below to BLSR if BMI1 is enabled.
-                // We use the safe XOR approach or just clear the bit directly.
-                // Resetting via XOR is clean.
                 self.current_chunk &= !(1 << trailing);
-
-                // For medium board, we need to handle the upper bits if it was > 64 bits?
-                // Wait, Small(u32) is fine (fits in u64). Medium(u128) might be > 64 bits.
-                // My logic for Medium below treats it as 2 chunks.
-
-                // Correction for Medium(u128):
-                // In `new`, I took `*b as u64`. That only grabs the lower 64 bits.
-                // I need to handle the Medium case correctly in `next`.
 
                 let index = if let BitBoard::Medium(_) = self.board {
                     self.current_chunk_idx * 64 + trailing as usize
                 } else if let BitBoard::Large { .. } = self.board {
                     self.current_chunk_idx * 64 + trailing as usize
                 } else {
-                    // Small
                     trailing as usize
                 };
 
                 return Some(index);
             }
 
-            // Move to next chunk if needed
             match self.board {
-                BitBoard::Small(_) => return None, // Small only has 1 chunk (and we just processed it)
+                BitBoard::Small(_) => return None,
                 BitBoard::Medium(b) => {
                     if self.current_chunk_idx == 0 {
                         self.current_chunk_idx = 1;
@@ -114,7 +97,6 @@ pub struct Board {
     pub side: usize,
     pub total_cells: usize,
 
-    // Occupancy (fast collision check)
     pub white_occupancy: BitBoard,
     pub black_occupancy: BitBoard,
 
@@ -125,11 +107,10 @@ pub struct Board {
     pub queens: BitBoard,
     pub kings: BitBoard,
 
-    // Hashing and History
     pub zobrist: Arc<ZobristKeys>,
     pub hash: u64,
     pub history: Vec<u64>,
-    pub en_passant_target: Option<(usize, usize)>, // (target_index, victim_index)
+    pub en_passant_target: Option<(usize, usize)>,
     pub castling_rights: u8,
 }
 
@@ -163,15 +144,10 @@ impl Board {
 
     pub fn new(dimension: usize, side: usize) -> Self {
         let mut board = Self::new_empty(dimension, side);
-        board.castling_rights = 0xF; // Assume standard start rights
+        board.castling_rights = 0xF;
         board.setup_standard_chess();
         board
     }
-
-    // NOTE: Temporarily duplicating helper for now to avoid circular dep if needed,
-    // but ideally we move coords_to_index utility to domain too?
-    // Actually, persistence.rs will be DELETED, so we need to move the utility functions!
-    // I will add them to this file at the bottom or as methods.
 
     pub fn coords_to_index(&self, coords: &[usize]) -> Option<usize> {
         let mut index = 0;
@@ -188,9 +164,7 @@ impl Board {
 
     pub fn index_to_coords(&self, index: usize) -> SmallVec<[usize; 4]> {
         let mut coords = SmallVec::with_capacity(self.dimension);
-        // Fill with zeros first then overwrite? Or verify strict logic.
-        // Logic: coords[i] = temp % side...
-        // We know dimension.
+
         coords.resize(self.dimension, 0);
         let mut temp = index;
         for i in 0..self.dimension {
@@ -229,11 +203,9 @@ impl Board {
 
     pub fn setup_standard_chess(&mut self) {
         for file_y in 0..self.side {
-            // --- White Pieces (z=0, w=0, ...) ---
             let mut white_coords = vec![0; self.dimension];
             white_coords[1] = file_y;
 
-            // Place Pawn at Rank 1
             white_coords[0] = 1;
             if let Some(idx) = self.coords_to_index(&white_coords) {
                 self.place_piece_at_index(
@@ -245,7 +217,6 @@ impl Board {
                 );
             }
 
-            // Place Backrank at Rank 0
             white_coords[0] = 0;
             if let Some(idx) = self.coords_to_index(&white_coords) {
                 let piece_type = self.determine_backrank_piece(file_y, self.side);
@@ -258,13 +229,10 @@ impl Board {
                 );
             }
 
-            // --- Black Pieces (z=side-1, w=side-1, ...) ---
-            // Initialize all coords to side-1 (for z, w, ...)
             let mut black_coords = vec![self.side - 1; self.dimension];
-            // But 'y' varies
+
             black_coords[1] = file_y;
 
-            // Place Pawn at Rank side-2
             if self.side > 3 {
                 black_coords[0] = self.side - 2;
                 if let Some(idx) = self.coords_to_index(&black_coords) {
@@ -278,7 +246,6 @@ impl Board {
                 }
             }
 
-            // Place Backrank at Rank side-1
             black_coords[0] = self.side - 1;
             if let Some(idx) = self.coords_to_index(&black_coords) {
                 let piece_type = self.determine_backrank_piece(file_y, self.side);
@@ -295,7 +262,6 @@ impl Board {
     }
 
     fn determine_backrank_piece(&self, file_idx: usize, total_files: usize) -> PieceType {
-        // Special case for 2D 8x8 standard chess
         if self.dimension == 2 && self.side == 8 {
             return match file_idx {
                 0 | 7 => PieceType::Rook,
@@ -414,24 +380,19 @@ impl Board {
             .get_piece_at_index(from_idx)
             .ok_or("No piece at from")?;
 
-        // 0. Prepare Unmake Info
         let saved_ep = self.en_passant_target;
         let saved_castling = self.castling_rights;
         let mut captured = None;
 
-        // Check if there is a piece at destination (Standard Capture)
         if let Some(target_p) = self.get_piece_at_index(to_idx) {
             captured = Some((to_idx, target_p));
         }
 
         self.history.push(self.hash);
 
-        // 1. Check if this is an EP capture
         if moving_piece.piece_type == PieceType::Pawn {
             if let Some((target, victim)) = self.en_passant_target {
                 if to_idx == target {
-                    // EP Capture: Remove the victim pawn
-                    // Capture info needs to be updated to the victim
                     if let Some(victim_p) = self.get_piece_at_index(victim) {
                         captured = Some((victim, victim_p));
                     }
@@ -440,10 +401,8 @@ impl Board {
             }
         }
 
-        // 2. Clear EP target for the next turn
         self.en_passant_target = None;
 
-        // 3. Set EP target if double push
         if moving_piece.piece_type == PieceType::Pawn {
             let mut diffs = SmallVec::<[usize; 4]>::new();
             for i in 0..self.dimension {
@@ -473,10 +432,8 @@ impl Board {
             }
         }
 
-        // --- Castling Logic ---
         let mut castling_rook_move: Option<(usize, usize, Piece)> = None;
 
-        // Update Rights if King Moves
         if moving_piece.piece_type == PieceType::King {
             match moving_piece.owner {
                 Player::White => self.castling_rights &= !0x3,
@@ -484,7 +441,6 @@ impl Board {
             }
         }
 
-        // Update Rights if Rook Moves/Captured (Side=8 enforced)
         if self.side == 8 {
             let w_rank = 0;
             let b_rank = 7;
@@ -503,8 +459,6 @@ impl Board {
             let b_qs = self.coords_to_index(&b_qs_c);
             let b_ks = self.coords_to_index(&b_ks_c);
 
-            // Important: Logic check for rook capture or move.
-            // If captured (to_idx), rights lost. If moved (from_idx), rights lost.
             for idx in [from_idx, to_idx] {
                 if Some(idx) == w_qs {
                     self.castling_rights &= !0x2;
@@ -518,7 +472,6 @@ impl Board {
             }
         }
 
-        // Check Execution (King moves 2 sq on Axis 1)
         if moving_piece.piece_type == PieceType::King {
             let dist_file = (mv.from.values[1] as isize - mv.to.values[1] as isize).abs();
 
@@ -531,8 +484,6 @@ impl Board {
             }
 
             if dist_file == 2 && !other_axes_moved {
-                // Must be castling.
-                // Kingside: 4 -> 6. Queenside: 4 -> 2.
                 let is_kingside = mv.to.values[1] > mv.from.values[1];
                 let rook_file_from = if is_kingside { 7 } else { 0 };
                 let rook_file_to = if is_kingside { 5 } else { 3 };
@@ -555,14 +506,8 @@ impl Board {
             }
         }
 
-        // --- Apply Main Move ---
         self.remove_piece_at_index(from_idx);
-        // If standard capture, remove piece at to_idx.
-        // If EP, we already removed victim.
-        // If no capture, to_idx is empty.
-        // NOTE: if captured is set, we need to ensure the piece is gone.
-        // remove_piece_at_index(to_idx) is safe even if empty?
-        // Yes, clears bits.
+
         self.remove_piece_at_index(to_idx);
 
         let piece_to_place = if let Some(promo_type) = mv.promotion {
@@ -576,7 +521,6 @@ impl Board {
 
         self.place_piece_at_index(to_idx, piece_to_place);
 
-        // --- Apply Castling Rook Move (Secondary) ---
         if let Some((r_from, r_to, r_piece)) = castling_rook_move {
             self.remove_piece_at_index(r_from);
             self.place_piece_at_index(r_to, r_piece);
@@ -592,28 +536,16 @@ impl Board {
     }
 
     pub fn unmake_move(&mut self, mv: &Move, info: UnmakeInfo) {
-        // Restore hash
         if let Some(h) = self.history.pop() {
             self.hash = h;
         }
 
-        // Restore State
         self.en_passant_target = info.en_passant_target;
         self.castling_rights = info.castling_rights;
 
-        let from_idx = self.coords_to_index(&mv.from.values).unwrap(); // Should exist
+        let from_idx = self.coords_to_index(&mv.from.values).unwrap();
         let to_idx = self.coords_to_index(&mv.to.values).unwrap();
 
-        // 1. In reverse: Handle Castling first? Or just move pieces back.
-        // If it was Castling, move Rook back.
-        // Same logic to detect castling from move.
-        // Moving piece was likely King if castling. Checks...
-        // We need 'moving_piece' type. usage of get_piece_at_index(to_idx)
-        // after move applied gives us the piece. (Or promoted piece).
-
-        // Actually, we can just check if Dist=2 for King logic.
-        // But what if we don't know it was a King?
-        // We can inspect the piece at `to_idx` before we move it back.
         let moved_piece = self
             .get_piece_at_index(to_idx)
             .expect("Piece missing in unmake");
@@ -628,8 +560,6 @@ impl Board {
                 }
             }
             if dist_file == 2 && !other_axes_moved {
-                // Castling! Move rook back.
-                // Inverse: Rook went from r_from -> r_to. We move r_to -> r_from.
                 let is_kingside = mv.to.values[1] > mv.from.values[1];
                 let rook_file_from = if is_kingside { 7 } else { 0 };
                 let rook_file_to = if is_kingside { 5 } else { 3 };
@@ -650,7 +580,6 @@ impl Board {
             }
         }
 
-        // 2. Move Piece back (to -> from)
         self.remove_piece_at_index(to_idx);
 
         let original_piece = if mv.promotion.is_some() {
@@ -663,7 +592,6 @@ impl Board {
         };
         self.place_piece_at_index(from_idx, original_piece);
 
-        // 3. Restore Captured
         if let Some((idx, piece)) = info.captured {
             self.place_piece_at_index(idx, piece);
         }
@@ -703,11 +631,8 @@ impl Board {
     }
 }
 
-// Display trait implementation - might move to presentation/display?
-// For now, keep generic Debug or Display
 impl fmt::Display for Board {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Needs display.rs logic.. will refactor later.
         write!(f, "Board(dim={}, side={})", self.dimension, self.side)
     }
 }
@@ -781,16 +706,12 @@ impl BitBoard {
             (BitBoard::Small(a), BitBoard::Small(b)) => BitBoard::Small(a | b),
             (BitBoard::Medium(a), BitBoard::Medium(b)) => BitBoard::Medium(a | b),
             (BitBoard::Large { mut data }, BitBoard::Large { data: other_data }) => {
-                // Determine the common length for vectorization
                 let len = std::cmp::min(data.len(), other_data.len());
 
-                // This slice-based loop allows LLVM to generate AVX2 instructions
-                // (vpor ymm0, ymm0, ymm1)
                 for (d, o) in data[0..len].iter_mut().zip(&other_data[0..len]) {
                     *d |= *o;
                 }
 
-                // Handle size mismatches (rare in static board dimensions)
                 if other_data.len() > data.len() {
                     data.extend_from_slice(&other_data[len..]);
                 }

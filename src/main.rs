@@ -9,11 +9,11 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     let mut dimension = 2;
-    let side = 8; // Default side 8 for HyperChess
+    let side = 8;
     let mut player_white_type = "h";
     let mut player_black_type = "c";
     let mut depth = 4;
-    let time_limit = 1000; // ms
+    let time_limit = 1000;
 
     if args.len() > 1 {
         if let Ok(d) = args[1].parse::<usize>() {

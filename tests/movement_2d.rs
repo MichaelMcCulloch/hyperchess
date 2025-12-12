@@ -12,7 +12,6 @@ fn coord(x: usize, y: usize) -> Coordinate {
 fn test_pawn_moves_white_start() {
     let mut board = Board::new_empty(2, 8);
 
-    // Setup: White Pawn at Rank 1, File 3
     let pawn_pos = coord(1, 3);
     let p = Piece {
         piece_type: PieceType::Pawn,
@@ -22,10 +21,6 @@ fn test_pawn_moves_white_start() {
 
     let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let dests: HashSet<Coordinate> = moves.iter().map(|m| m.to.clone()).collect();
-
-    // Expect:
-    // Axis 0 (Rank): Single push (2, 3), Double push (3, 3).
-    // Axis 1 (File): Forbidden by new rules.
 
     assert!(
         dests.contains(&coord(2, 3)),
@@ -65,13 +60,9 @@ fn test_pawn_blocked() {
                 owner: Player::Black,
             },
         )
-        .unwrap(); // Enemy blocks
+        .unwrap();
 
     let moves = Rules::generate_legal_moves(&mut board, Player::White);
-
-    // Pawn cannot move forward on Axis 0 (blocked).
-    // Axis 1 (File) is forbidden for pushes.
-    // Expect 0 moves.
 
     assert_eq!(
         moves.len(),
@@ -84,7 +75,7 @@ fn test_pawn_blocked() {
 fn test_pawn_capture() {
     let mut board = Board::new_empty(2, 8);
     let pawn_pos = coord(3, 3);
-    let enemy_pos = coord(4, 4); // Diagonally forward right
+    let enemy_pos = coord(4, 4);
 
     board
         .set_piece(
@@ -107,11 +98,6 @@ fn test_pawn_capture() {
 
     let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let dests: HashSet<Coordinate> = moves.iter().map(|m| m.to.clone()).collect();
-
-    // Moves:
-    // 1. (4, 3) [Axis 0 Push] - Allowed.
-    // 2. (3, 4) [Axis 1 Push] - Forbidden.
-    // 3. (4, 4) [Capture] - Allowed (Axis 0 Move + Axis 1 Offset).
 
     assert!(dests.contains(&coord(4, 3)), "Single push rank");
     assert!(!dests.contains(&coord(3, 4)), "Single push file forbidden");
@@ -136,11 +122,10 @@ fn test_knight_moves_center() {
 
     let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
-    // 8 possible moves in 2D
     assert_eq!(moves.len(), 8);
 
     let dests: HashSet<Coordinate> = moves.iter().map(|m| m.to.clone()).collect();
-    // +/- 2 on one axis, +/- 1 on other
+
     assert!(dests.contains(&coord(6, 5)));
     assert!(dests.contains(&coord(6, 3)));
     assert!(dests.contains(&coord(2, 5)));
@@ -165,7 +150,6 @@ fn test_rook_moves() {
         )
         .unwrap();
 
-    // Add a blocker
     board
         .set_piece(
             &coord(4, 6),
@@ -174,25 +158,21 @@ fn test_rook_moves() {
                 owner: Player::White,
             },
         )
-        .unwrap(); // Clean block
+        .unwrap();
 
     let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let rook_moves: Vec<_> = moves.into_iter().filter(|m| m.from == pos).collect();
     let dests: HashSet<Coordinate> = rook_moves.iter().map(|m| m.to.clone()).collect();
 
-    // Axis 0 (Vertical/Rank): (0..8) except 4 -> 7 squares.
-    // Axis 1 (Horizontal/File): 4 is blocked at 6. Can go 0,1,2,3,5.
-    // Total: 7 + 5 = 12 moves
-
     assert_eq!(rook_moves.len(), 12);
-    assert!(!dests.contains(&coord(4, 6))); // Blocked
-    assert!(!dests.contains(&coord(4, 7))); // Behind blocker
+    assert!(!dests.contains(&coord(4, 6)));
+    assert!(!dests.contains(&coord(4, 7)));
 }
 
 #[test]
 fn test_bishop_moves() {
     let mut board = Board::new_empty(2, 8);
-    let pos = coord(0, 0); // Corner
+    let pos = coord(0, 0);
     board
         .set_piece(
             &pos,
@@ -204,7 +184,7 @@ fn test_bishop_moves() {
         .unwrap();
 
     let moves = Rules::generate_legal_moves(&mut board, Player::White);
-    // Main diagonal only: (1,1) .. (7,7) -> 7 moves
+
     assert_eq!(moves.len(), 7);
 }
 
@@ -223,6 +203,6 @@ fn test_king_moves() {
         .unwrap();
 
     let moves = Rules::generate_legal_moves(&mut board, Player::White);
-    // 8 neighbors
+
     assert_eq!(moves.len(), 8);
 }

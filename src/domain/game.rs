@@ -6,8 +6,6 @@ pub enum GameError {
     InvalidMove(String),
 }
 
-/// The Game Aggregate Root.
-/// It controls the lifecycle of the game, turns, and winning conditions.
 pub struct Game {
     board: Board,
     turn: Player,

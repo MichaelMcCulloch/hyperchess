@@ -65,9 +65,7 @@ impl PlayerStrategy for HumanConsolePlayer {
                     let from_coord = Self::index_to_coord(from_idx, dim, side);
                     let to_coord = Self::index_to_coord(to_idx, dim, side);
 
-                    // Optional promotion?
                     let promotion = if parts.len() > 2 {
-                        // primitive parsing for now
                         match parts[2] {
                             "Q" | "q" | "4" => Some(crate::domain::models::PieceType::Queen),
                             "R" | "r" | "3" => Some(crate::domain::models::PieceType::Rook),

@@ -5,13 +5,10 @@ use hyperchess::domain::rules::Rules;
 
 #[test]
 fn test_5d_bishop_movement() {
-    // 5D board, side length 2 (3^5 = 243 cells if side 3, but side 2 is 2^5 = 32 cells)
-    // Small side ensures we don't explode memory if vec size depends on (side^N) linearly.
     let dimension = 5;
     let side = 3;
     let mut board = Board::new_empty(dimension, side);
 
-    // Center-ish: (1, 1, 1, 1, 1)
     let center = Coordinate::new(vec![1, 1, 1, 1, 1]);
     board
         .set_piece(
@@ -25,7 +22,6 @@ fn test_5d_bishop_movement() {
 
     let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
-    // Valid moves must have EVEN number of unit steps.
     for m in moves {
         let diff = diff_coords(&center, &m.to);
         let non_zeros = diff.iter().filter(|&&d| d != 0).count();
@@ -59,7 +55,6 @@ fn test_5d_rook_movement() {
 
     let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
-    // Valid moves must have EXACTLY ONE unit step.
     for m in moves {
         let diff = diff_coords(&center, &m.to);
         let non_zeros = diff.iter().filter(|&&d| d != 0).count();
@@ -73,7 +68,7 @@ fn test_5d_rook_movement() {
 #[test]
 fn test_5d_knight_movement() {
     let dimension = 5;
-    let side = 5; // Need enough space for L-jump
+    let side = 5;
     let mut board = Board::new_empty(dimension, side);
 
     let center = Coordinate::new(vec![2, 2, 2, 2, 2]);

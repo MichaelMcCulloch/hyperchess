@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 const CHECKMATE_SCORE: i32 = 30000;
 const TIMEOUT_CHECK_INTERVAL: usize = 2048;
 
-// Material values
 const VAL_PAWN: i32 = 100;
 const VAL_KNIGHT: i32 = 320;
 const VAL_BISHOP: i32 = 330;
@@ -39,8 +38,8 @@ impl MinimaxBot {
             stop_flag: Arc::new(AtomicBool::new(false)),
             nodes_searched: std::sync::atomic::AtomicUsize::new(0),
             _randomized: true,
-            use_mcts: false,      // Default off
-            mcts_iterations: 100, // Default 100
+            use_mcts: false,
+            mcts_iterations: 100,
         }
     }
 
@@ -48,7 +47,7 @@ impl MinimaxBot {
         self.use_mcts = true;
         self.mcts_iterations = iterations;
         Self {
-            depth: if self.use_mcts { 2 } else { self.depth }, // Reduce depth if MCTS is on to compensate?
+            depth: if self.use_mcts { 2 } else { self.depth },
             ..self
         }
     }
@@ -56,18 +55,12 @@ impl MinimaxBot {
     fn evaluate(&self, board: &Board, player_at_leaf: Option<Player>) -> i32 {
         if self.use_mcts {
             if let Some(player) = player_at_leaf {
-                // Run MCTS
-                // Note: MCTS is expensive.
                 let mut mcts = MCTS::new(board, player, Some(self.tt.clone()));
                 let win_rate = mcts.run(board, self.mcts_iterations);
 
-                // win_rate is [0, 1] for `player`.
-                // Map to score. 1.0 -> 20000, 0.0 -> -20000.
-                // value = (win_rate - 0.5) * 2 * 20000
                 let val_f = (win_rate - 0.5) * 2.0 * (VAL_KING as f64);
                 let val = val_f as i32;
 
-                // Return White-centric score
                 if player == Player::Black {
                     return -val;
                 } else {
@@ -116,16 +109,15 @@ impl MinimaxBot {
         if self.nodes_searched.fetch_add(1, Ordering::Relaxed) % TIMEOUT_CHECK_INTERVAL == 0 {
             if start_time.elapsed() > self.time_limit {
                 self.stop_flag.store(true, Ordering::Relaxed);
-                return 0; // Abort
+                return 0;
             }
         }
         if self.stop_flag.load(Ordering::Relaxed) {
             return 0;
         }
 
-        // Check for repetition
         if board.is_repetition() {
-            return 0; // Draw
+            return 0;
         }
 
         let hash = board.hash;
@@ -157,7 +149,7 @@ impl MinimaxBot {
                     return -CHECKMATE_SCORE + (self.depth - depth) as i32;
                 }
             }
-            return 0; // Stalemate
+            return 0;
         }
 
         let mut best_score = -i32::MAX;
@@ -214,10 +206,8 @@ impl PlayerStrategy for MinimaxBot {
 
         let start_time = Instant::now();
         let mut best_score = -i32::MAX;
-        let mut best_moves = Vec::new(); // Collect all best moves
+        let mut best_moves = Vec::new();
 
-        // Root Search
-        // Clone board once to create mutable working copy
         let mut root_board = board.clone();
 
         let moves = Rules::generate_legal_moves(&mut root_board, player);
@@ -231,9 +221,7 @@ impl PlayerStrategy for MinimaxBot {
                 Err(_) => continue,
             };
 
-            if root_board.is_repetition() {
-                // Repetition handling logic (implicit via minimax returning 0 for it usually)
-            }
+            if root_board.is_repetition() {}
 
             let score = -self.minimax(
                 &mut root_board,
@@ -255,7 +243,6 @@ impl PlayerStrategy for MinimaxBot {
             }
         }
 
-        // Pick random best move
         if !best_moves.is_empty() {
             let mut rng = rand::thread_rng();
             use rand::seq::SliceRandom;

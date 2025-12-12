@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use std::f64;
 
-const UCT_C: f64 = 1.4142; // Sqrt(2)
+const UCT_C: f64 = 1.4142;
 const CHECKMATE_SCORE: i32 = 30000;
 
 struct Node {
@@ -59,7 +59,6 @@ impl MCTS {
             return 0.5;
         }
 
-        // Parallel Execution (Root Parallelization)
         let num_threads = rayon::current_num_threads();
         let chunk_size = iterations / num_threads;
         let remainder = iterations % num_threads;
@@ -76,8 +75,6 @@ impl MCTS {
                     return (0, 0.0);
                 }
 
-                // Create a local MCTS instance for this thread
-                // Note: We share the Transposition Table (tt) which is thread-safe (Arc<LockFreeTT>)
                 let mut local_mcts = MCTS::new(root_state, self.root_player, self.tt.clone());
                 local_mcts.execute_iterations(root_state, count);
 
@@ -86,7 +83,6 @@ impl MCTS {
             })
             .collect();
 
-        // Aggregation
         let (total_visits, total_score) = results
             .into_iter()
             .fold((0, 0.0), |acc, x| (acc.0 + x.0, acc.1 + x.1));
@@ -101,17 +97,14 @@ impl MCTS {
     fn execute_iterations(&mut self, root_state: &Board, iterations: usize) {
         let mut rng = rand::thread_rng();
 
-        // 1. Create one working copy for the entire loop
         let mut current_state = root_state.clone();
 
         for _ in 0..iterations {
             let mut node_idx = 0;
             let mut current_player = self.root_player;
 
-            // Stack to track moves for Unmaking: (Move, UnmakeInfo)
             let mut path_stack: Vec<(Move, UnmakeInfo)> = Vec::with_capacity(64);
 
-            // --- 1. Selection ---
             while self.nodes[node_idx].unexpanded_moves.is_empty()
                 && !self.nodes[node_idx].children.is_empty()
             {
@@ -120,24 +113,20 @@ impl MCTS {
 
                 let mv = self.nodes[node_idx].move_to_node.as_ref().unwrap();
 
-                // Apply move and store Undo Info
                 let info = current_state.apply_move(mv).unwrap();
                 path_stack.push((mv.clone(), info));
 
                 current_player = current_player.opponent();
             }
 
-            // --- 2. Expansion ---
             if !self.nodes[node_idx].unexpanded_moves.is_empty() {
                 let mv = self.nodes[node_idx].unexpanded_moves.pop().unwrap();
 
-                // Apply move and store Undo Info
                 let info = current_state.apply_move(&mv).unwrap();
                 path_stack.push((mv.clone(), info));
 
                 let next_player = current_player.opponent();
 
-                // Generate moves for the new node
                 let legal_moves = Rules::generate_legal_moves(&mut current_state, next_player);
                 let is_terminal = legal_moves.is_empty();
 
@@ -160,7 +149,6 @@ impl MCTS {
                 current_player = next_player;
             }
 
-            // --- 3. Simulation (Rollout) ---
             let result_score = if self.nodes[node_idx].is_terminal {
                 self.evaluate_terminal(&current_state, current_player)
             } else {
@@ -172,10 +160,8 @@ impl MCTS {
                 )
             };
 
-            // --- 4. Backpropagation ---
             self.backpropagate(node_idx, result_score);
 
-            // --- 5. Restore State (Unmake Everything) ---
             while let Some((mv, info)) = path_stack.pop() {
                 current_state.unmake_move(&mv, info);
             }
@@ -252,26 +238,23 @@ impl MCTS {
     fn evaluate_terminal(&self, state: &Board, player_at_leaf: Player) -> f64 {
         if let Some(king_pos) = state.get_king_coordinate(player_at_leaf) {
             if Rules::is_square_attacked(state, &king_pos, player_at_leaf.opponent()) {
-                // Checkmate
                 if let Some(tt) = &self.tt {
-                    // Store loss for the player who is checkmated (Negamax perspective)
                     tt.store(state.hash, -CHECKMATE_SCORE, 255, Flag::Exact, None);
                 }
 
                 if player_at_leaf == self.root_player {
-                    return 0.0; // Root lost (Checkmate)
+                    return 0.0;
                 } else {
-                    return 1.0; // Root won (Opponent Checkmated)
+                    return 1.0;
                 }
             }
         }
 
-        // Stalemate/Draw
         if let Some(tt) = &self.tt {
             tt.store(state.hash, 0, 255, Flag::Exact, None);
         }
 
-        0.5 // Stalemate/Draw
+        0.5
     }
 
     fn backpropagate(&mut self, mut node_idx: usize, score: f64) {
@@ -297,7 +280,7 @@ mod tests {
 
     #[test]
     fn test_mcts_smoke() {
-        let board = Board::new(2, 8); // 2D board, side 8
+        let board = Board::new(2, 8);
         let mut mcts = MCTS::new(&board, Player::White, None);
         let score = mcts.run(&board, 10);
         assert!(score >= 0.0 && score <= 1.0);
@@ -305,9 +288,9 @@ mod tests {
 
     #[test]
     fn test_mcts_parallel_execution() {
-        let board = Board::new(2, 8); // 2D board, side 8
+        let board = Board::new(2, 8);
         let mut mcts = MCTS::new(&board, Player::White, None);
-        // Run with enough iterations to likely trigger multiple threads
+
         let score = mcts.run(&board, 100);
         assert!(score >= 0.0 && score <= 1.0);
     }

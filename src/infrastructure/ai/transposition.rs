@@ -1,10 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-// Pack data into u64:
-// 32 bits score | 8 bits depth | 2 bits flag | 22 bits partial hash/verification
-// We will store the FULL key in a separate atomic for verification.
-// The packed data is primarily for the value payload.
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Flag {
     Exact,
@@ -16,7 +11,7 @@ pub enum Flag {
 pub struct PackedMove {
     pub from_idx: u16,
     pub to_idx: u16,
-    pub promotion: u8, // 0=None, 1=Q, 2=R, 3=B, 4=N...
+    pub promotion: u8,
 }
 
 impl PackedMove {
@@ -62,23 +57,12 @@ impl LockFreeTT {
             return None;
         }
 
-        let entry_hash = (entry >> 32) as u32; // Top 32 bits of hash
+        let entry_hash = (entry >> 32) as u32;
         if entry_hash != (hash >> 32) as u32 {
             return None;
         }
 
         let data = entry as u32;
-        // Unpacking:
-        // Score: 16 bits (0-15)
-        // Depth: 8 bits (16-23)
-        // Flag: 2 bits (24-25)
-        // HasMove: 1 bit (26)
-        // Move From: ? We didn't store full move in u64 with this packing scheme.
-        // The previous attempt realized we can't fit it.
-        // Let's settle for NOT storing the move if we don't have space with 64-bit entry.
-        // OR we just assume we return None for now as placeholder for the refactor.
-        // To properly support Move storage we need 128-bit atomics or a larger struct.
-        // For this task, let's keep the signature but return None for move.
 
         let score = (data & 0xFFFF) as i16 as i32;
         let depth = ((data >> 16) & 0xFF) as u8;
@@ -91,7 +75,7 @@ impl LockFreeTT {
             _ => Flag::Exact,
         };
 
-        Some((score, depth, flag, None)) // Placeholder: We are not storing moves yet due to size constraints.
+        Some((score, depth, flag, None))
     }
 
     pub fn store(
@@ -115,7 +99,6 @@ impl LockFreeTT {
         let mut data: u32 = score_part as u32;
         data |= (depth as u32) << 16;
         data |= (flag_u8 as u32) << 24;
-        // We drop best_move for now as decided.
 
         let entry = ((key_part as u64) << 32) | (data as u64);
 

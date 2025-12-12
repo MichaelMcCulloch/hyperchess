@@ -35,7 +35,6 @@ impl Rules {
         let dimension = board.dimension;
         let side = board.side;
 
-        // 1. Check Leapers (Knights, Kings)
         let knight_offsets = Self::get_knight_offsets(dimension);
         for offset in &knight_offsets {
             if let Some(target_coord) = Self::apply_offset(&square.values, offset, side) {
@@ -58,7 +57,6 @@ impl Rules {
             }
         }
 
-        // 2. Check Rays
         let rook_dirs = Self::get_rook_directions(dimension);
         for dir in &rook_dirs {
             if Self::scan_ray_for_threat(
@@ -85,7 +83,6 @@ impl Rules {
             }
         }
 
-        // 3. Check Pawns
         let pawn_attack_offsets = Self::get_pawn_capture_offsets_for_target(dimension, by_player);
         for offset in &pawn_attack_offsets {
             if let Some(target_coord) = Self::apply_offset(&square.values, offset, side) {
@@ -360,13 +357,9 @@ impl Rules {
         }
     }
 
-    // Geometry Generators
-
-    // Geometry Generators
-
     fn get_rook_directions(dimension: usize) -> Vec<Vec<isize>> {
         let mut dirs = Vec::new();
-        // Just one non-zero component, +/- 1
+
         for i in 0..dimension {
             let mut v = vec![0; dimension];
             v[i] = 1;
@@ -378,7 +371,6 @@ impl Rules {
     }
 
     fn get_bishop_directions(dimension: usize) -> Vec<Vec<isize>> {
-        // Even number of non-zero elements (user spec).
         let mut dirs = Vec::new();
         let num_dirs = 3_usize.pow(dimension as u32);
         for i in 0..num_dirs {
@@ -409,19 +401,14 @@ impl Rules {
     }
 
     fn get_knight_offsets(dimension: usize) -> Vec<Vec<isize>> {
-        // Permutations of (+/- 2, +/- 1, 0...)
-        // We need exactly one '2' and one '1', rest 0.
         let mut offsets = Vec::new();
 
-        // This is a bit tricky to generate generically for N dimensions.
-        // Iterate all pairs of axes.
         for i in 0..dimension {
             for j in 0..dimension {
                 if i == j {
                     continue;
                 }
 
-                // +/- 2 on axis i, +/- 1 on axis j
                 for s1 in [-1, 1] {
                     for s2 in [-1, 1] {
                         let mut v = vec![0; dimension];
@@ -436,7 +423,6 @@ impl Rules {
     }
 
     fn get_king_offsets(dimension: usize) -> Vec<Vec<isize>> {
-        // Chebyshev 1. All 3^N - 1 neighbors.
         let mut offsets = Vec::new();
         let num_dirs = 3_usize.pow(dimension as u32);
         for i in 0..num_dirs {
@@ -464,20 +450,13 @@ impl Rules {
     }
 
     fn get_pawn_capture_offsets_for_target(dimension: usize, attacker: Player) -> Vec<Vec<isize>> {
-        // If 'attacker' is White, they move +1 on axis 0 (forward).
-        // Captures are +1 on axis 0 AND +/- 1 on exactly ONE other axis.
-        // So we want to find where an Attacker could be relative to the Target.
-        // Target = Attacker + Move.
-        // Attacker = Target - Move.
-
         let direction = match attacker {
-            Player::White => -1, // Look back
+            Player::White => -1,
             Player::Black => 1,
         };
 
         let mut offsets = Vec::new();
-        // Axis 0 is forward.
-        // For each other dimension, allow +/- 1.
+
         for i in 1..dimension {
             for s in [-1, 1] {
                 let mut v = vec![0; dimension];
@@ -488,8 +467,6 @@ impl Rules {
         }
         offsets
     }
-
-    // Move Generation Logic implementation
 
     fn apply_offset(
         coords: &[usize],
@@ -523,7 +500,6 @@ impl Rules {
             if let Some(target_coords) = Self::apply_offset(&origin.values, offset, board.side) {
                 if let Some(target_idx) = board.coords_to_index(&target_coords) {
                     if !same_occupancy.get_bit(target_idx) {
-                        // Empty or Enemy -> Legal
                         moves.push(Move {
                             from: origin.clone(),
                             to: Coordinate::new(target_coords),
@@ -557,7 +533,7 @@ impl Rules {
                 if let Some(next) = Self::apply_offset(&current, dir, board.side) {
                     if let Some(idx) = board.coords_to_index(&next) {
                         if own_occupancy.get_bit(idx) {
-                            break; // Blocked by own piece
+                            break;
                         }
 
                         moves.push(Move {
@@ -567,7 +543,7 @@ impl Rules {
                         });
 
                         if enemy_occupancy.get_bit(idx) {
-                            break; // Capture, then stop
+                            break;
                         }
 
                         current = next;
@@ -597,11 +573,7 @@ impl Rules {
             Player::Black => &board.black_occupancy,
         };
 
-        // Super Pawn: Can move along ANY axis
         for movement_axis in 0..board.dimension {
-            // Restriction: Pawns cannot push or capture primarily along the File axis (Axis 1).
-            // In 2D: Rank (0) allowed, File (1) forbidden.
-            // In 3D: Rank (0) allowed, File (1) forbidden, Height (2) allowed.
             if movement_axis == 1 {
                 continue;
             }
@@ -611,17 +583,14 @@ impl Rules {
                 Player::Black => -1,
             };
 
-            // 1. One step forward along movement_axis
             let mut forward_step = vec![0; board.dimension];
             forward_step[movement_axis] = forward_dir;
 
             if let Some(target) = Self::apply_offset(&origin.values, &forward_step, board.side) {
                 if let Some(idx) = board.coords_to_index(&target) {
                     if !all_occupancy.get_bit(idx) {
-                        // Empty -> Legal PUSH
                         Self::add_pawn_move(origin, &target, board.side, player, moves);
 
-                        // 2. Double step?
                         let is_start_rank = match player {
                             Player::White => origin.values[movement_axis] == 1,
                             Player::Black => origin.values[movement_axis] == board.side - 2,
@@ -644,8 +613,6 @@ impl Rules {
                 }
             }
 
-            // 3. Captures (Diagonal on any other axis)
-            // Move forward on movement_axis, AND +/- 1 on capture_axis
             for capture_axis in 0..board.dimension {
                 if capture_axis == movement_axis {
                     continue;
@@ -657,14 +624,10 @@ impl Rules {
                     if let Some(target) = Self::apply_offset(&origin.values, &cap_step, board.side)
                     {
                         if let Some(idx) = board.coords_to_index(&target) {
-                            // Regular Capture
                             if enemy_occupancy.get_bit(idx) {
                                 Self::add_pawn_move(origin, &target, board.side, player, moves);
-                            }
-                            // En Passant Capture
-                            else if let Some((ep_target, _)) = board.en_passant_target {
+                            } else if let Some((ep_target, _)) = board.en_passant_target {
                                 if idx == ep_target {
-                                    // This is a valid EP capture move
                                     moves.push(Move {
                                         from: origin.clone(),
                                         to: Coordinate::new(target),
@@ -688,7 +651,7 @@ impl Rules {
     ) {
         let is_promotion = (0..to_vals.len()).all(|i| {
             if i == 1 {
-                true // File axis doesn't count for promotion depth
+                true
             } else {
                 match player {
                     Player::White => to_vals[i] == side - 1,

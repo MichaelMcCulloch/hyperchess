@@ -4,14 +4,9 @@ use hyperchess::domain::rules::Rules;
 
 #[test]
 fn test_initial_board_setup_and_pawn_move() {
-    let dim = 2; // Simple 2D chess
+    let dim = 2;
     let side = 8;
     let mut board = Board::new_empty(dim, side);
-
-    // We need to populate the board first. BitBoardState::new returns EMPTY board now (based on persistence.rs change).
-    // So we must manually setup pieces or assume GameService setup.
-    // Wait, MinimaxBot expects pieces.
-    // Let's manually place a White Pawn at index 8 (Row 1, Col 0) and check moves.
 
     use hyperchess::domain::coordinate::Coordinate;
     use hyperchess::domain::models::{Piece, PieceType};
@@ -20,12 +15,11 @@ fn test_initial_board_setup_and_pawn_move() {
         piece_type: PieceType::Pawn,
         owner: Player::White,
     };
-    let start_idx = 8; // (0, 1) in 8x8
+    let start_idx = 8;
     let start_coord = Coordinate::new(board.index_to_coords(start_idx));
 
     board.set_piece(&start_coord, pawn).unwrap();
 
-    // Add Kings (Required for move legality check)
     let w_king = Piece {
         piece_type: PieceType::King,
         owner: Player::White,
@@ -35,19 +29,16 @@ fn test_initial_board_setup_and_pawn_move() {
         owner: Player::Black,
     };
 
-    // Place Kings far away
     let w_king_coord = Coordinate::new(vec![0, 0]);
     let b_king_coord = Coordinate::new(vec![7, 7]);
 
     board.set_piece(&w_king_coord, w_king).unwrap();
     board.set_piece(&b_king_coord, b_king).unwrap();
 
-    // Generate moves for White
     let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     assert!(!moves.is_empty(), "Should generate moves");
 
-    // Find pawn move
     let pawn_move = moves
         .iter()
         .find(|m| m.from == start_coord)

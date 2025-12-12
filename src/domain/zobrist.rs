@@ -1,4 +1,4 @@
-use crate::domain::board::Board; // Will create this next
+use crate::domain::board::Board;
 use crate::domain::models::Player;
 use rand::Rng;
 
@@ -19,20 +19,11 @@ impl ZobristKeys {
             piece_keys.push(rng.r#gen());
         }
 
-        // En Passant keys: one per file?
-        // Actually, EP target is an index. But it's restricted to specific ranks.
-        // It's cleaner to have one key per FILE (column).
-        // Total files = side^(dimension-1)? Or just 'side' if we assume 2D-like columns?
-        // Actually, let's just use `total_cells` size for simplicity, or just map 'index' -> key.
-        // Let's use `total_cells` to support EP on any square (technically only rank 2/5 etc)
-        // Optimization: typical EP is only valid on specific files.
-        // We'll trust the board size isn't massive.
         let mut en_passant_keys = Vec::with_capacity(total_cells);
         for _ in 0..total_cells {
             en_passant_keys.push(rng.r#gen());
         }
 
-        // Castling rights: 16 combinations (4 bits)
         let mut castling_keys = Vec::with_capacity(16);
         for _ in 0..16 {
             castling_keys.push(rng.r#gen());

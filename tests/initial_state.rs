@@ -10,7 +10,6 @@ fn coord(x: usize, y: usize) -> Coordinate {
 fn test_standard_2d_chess_setup() {
     let board = Board::new(2, 8);
 
-    // Check Corner Rooks
     assert!(
         is_piece_at(&board, &coord(0, 0), PieceType::Rook, Player::White),
         "White Rook at (0,0)"
@@ -24,19 +23,16 @@ fn test_standard_2d_chess_setup() {
         "Black Rook at (7,0)"
     );
 
-    // Check King/Queen
-    // White King at (0, 4)
     assert!(
         is_piece_at(&board, &coord(0, 4), PieceType::King, Player::White),
         "White King at (0,4)"
     );
-    // White Queen at (0, 3)
+
     assert!(
         is_piece_at(&board, &coord(0, 3), PieceType::Queen, Player::White),
         "White Queen at (0,3)"
     );
 
-    // Check Pawns
     for i in 0..8 {
         assert!(
             is_piece_at(&board, &coord(1, i), PieceType::Pawn, Player::White),
@@ -50,25 +46,14 @@ fn test_standard_2d_chess_setup() {
         );
     }
 
-    // Check Empty Middle
     assert!(board.get_piece(&coord(3, 3)).is_none());
     assert!(board.get_piece(&coord(4, 4)).is_none());
 }
 
 #[test]
 fn test_3d_setup() {
-    // 3D 4x4x4
     let board = Board::new(3, 4);
 
-    // New Setup Logic:
-    // White: x=0 (Rank), pieces at z=0.
-    // Black: x=3 (Rank), pieces at z=3 (side-1).
-    // King position is determined by y (file) index.
-    // y = side / 2 = 2.
-    // So White King at (0, 2, 0).
-    // Black King at (3, 2, 3).
-
-    // White King
     assert!(
         is_piece_at(
             &board,
@@ -79,7 +64,6 @@ fn test_3d_setup() {
         "White King at (0, 2, 0)"
     );
 
-    // Black King
     assert!(
         is_piece_at(
             &board,
@@ -90,19 +74,10 @@ fn test_3d_setup() {
         "Black King at (3, 2, 3)"
     );
 
-    // Verify EMPTY elsewhere (e.g. z=1)
     assert!(
         board.get_piece(&Coordinate::new(vec![0, 2, 1])).is_none(),
         "Should be empty at z=1"
     );
-
-    // Count total pieces?
-    // Side=4.
-    // White: 4 Pawns + 4 Pieces = 8.
-    // Black: 4 Pawns + 4 Pieces = 8.
-    // Total 16.
-    // Implementation details: Board stores pieces in bitboards.
-    // Check occupancy count if possible, or just trust specific checks.
 }
 
 fn is_piece_at(board: &Board, c: &Coordinate, t: PieceType, p: Player) -> bool {
