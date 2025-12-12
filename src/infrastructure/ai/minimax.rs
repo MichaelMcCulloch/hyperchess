@@ -219,8 +219,6 @@ impl PlayerStrategy for MinimaxBot {
         // LAZY SMP ENTRY POINT
         // We launch N threads. They all run the search (Iterative Deepening).
         // To ensure they don't do identical work, we shuffle root moves differently for each thread.
-        println!("Starting Parallel Search with {} threads", self.num_threads);
-
         let results: Vec<(Move, i32)> = (0..self.num_threads)
             .into_par_iter()
             .map(|thread_idx| {
@@ -289,10 +287,6 @@ impl PlayerStrategy for MinimaxBot {
         // We take the max score from all threads.
         let best = results.into_iter().max_by_key(|r| r.1);
 
-        println!(
-            "Nodes searched: {}",
-            self.nodes_searched.load(Ordering::Relaxed)
-        );
         best.map(|(m, _)| m)
     }
 }
