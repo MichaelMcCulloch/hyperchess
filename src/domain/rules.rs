@@ -648,6 +648,13 @@ impl Rules {
 
         // Super Pawn: Can move along ANY axis
         for movement_axis in 0..board.dimension {
+            // Restriction: Pawns cannot push or capture primarily along the File axis (Axis 1).
+            // In 2D: Rank (0) allowed, File (1) forbidden.
+            // In 3D: Rank (0) allowed, File (1) forbidden, Height (2) allowed.
+            if movement_axis == 1 {
+                continue;
+            }
+
             let forward_dir = match player {
                 Player::White => 1,
                 Player::Black => -1,

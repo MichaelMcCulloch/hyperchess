@@ -13,9 +13,7 @@ fn test_super_pawn_z_axis_movement() {
     let dim = 3;
     let mut board = Board::new_empty(dim, side);
 
-    // Setup White Pawn at (0, 0, 1) - Rank 1 on Z-axis?
-    // Note: Standard chess setup for White is at Z=0?
-    // Let's assume an arbitrary pawn placement.
+    // Setup White Pawn at (0, 0, 1)
     let start_pos = coord_3d(0, 0, 1);
     board
         .set_piece(
@@ -29,25 +27,22 @@ fn test_super_pawn_z_axis_movement() {
 
     let moves = Rules::generate_legal_moves(&board, Player::White);
 
-    // Expect Move to (0, 0, 2) (Z-push)
-    // AND moves along other axes if "forward" is defined per axis.
-    // My implementation: `movement_axis` iterates 0..dim.
-    // For Axis 0 (X? Rank?): Forward is +1.
-    // For Axis 1 (Y? File?): Forward is +1.
-    // For Axis 2 (Z?): Forward is +1.
-
-    // So Pawn at (0,0,1) can move:
-    // Axis 0: None? (0+1=1). (1, 0, 1).
-    // Axis 1: (0, 1, 1).
-    // Axis 2: (0, 0, 2).
+    // Axis 0 (X/Rank): Allowed (+1)
+    // Axis 1 (Y/File): Forbidden (Lateral)
+    // Axis 2 (Z/Height): Allowed (+1)
 
     let move_z = moves.iter().find(|m| m.to == coord_3d(0, 0, 2));
     let move_x = moves.iter().find(|m| m.to == coord_3d(1, 0, 1));
     let move_y = moves.iter().find(|m| m.to == coord_3d(0, 1, 1));
 
     assert!(move_z.is_some(), "Should allow Z-axis push");
-    assert!(move_x.is_some(), "Should allow X-axis push (Super Pawn)");
-    assert!(move_y.is_some(), "Should allow Y-axis push (Super Pawn)");
+    assert!(move_x.is_some(), "Should allow X-axis push");
+
+    // UPDATED ASSERTION: Lateral push (Y-axis) should now be forbidden
+    assert!(
+        move_y.is_none(),
+        "Should NOT allow Y-axis push (Lateral Forbidden)"
+    );
 }
 
 #[test]
@@ -68,12 +63,9 @@ fn test_super_pawn_capture_multidimensional() {
         )
         .unwrap();
 
-    // Black Pawn at (2, 2, 1) -> Capture via Axis 0 (X) + Axis 1 (Y) diagonal?
-    // Rules: "Combine forward on movement_axis with +/- 1 on capture_axis"
-    // Valid captures from (1,1,1):
-    // Move Axis 0 (+1 -> 2,1,1). Capture Axis 1 (+/-1). Targets: (2, 2, 1) and (2, 0, 1).
-    // Move Axis 0 (+1 -> 2,1,1). Capture Axis 2 (+/-1). Targets: (2, 1, 2) and (2, 1, 0).
-    // ... plus other movement axes.
+    // Black Pawn at (2, 2, 1)
+    // Capture via: Move Axis 0 (+1) to X=2, Capture Axis 1 (+1) to Y=2.
+    // Result: (2, 2, 1). This is valid.
 
     let target = coord_3d(2, 2, 1);
     board
