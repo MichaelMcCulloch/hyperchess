@@ -1,4 +1,4 @@
-use crate::domain::board::Board;
+use crate::domain::board::{Board, UnmakeInfo};
 use crate::domain::models::{Move, Player};
 use crate::domain::rules::Rules;
 use crate::infrastructure::ai::transposition::{Flag, LockFreeTT};
@@ -101,12 +101,17 @@ impl MCTS {
     fn execute_iterations(&mut self, root_state: &Board, iterations: usize) {
         let mut rng = rand::thread_rng();
 
+        // 1. Create one working copy for the entire loop
+        let mut current_state = root_state.clone();
+
         for _ in 0..iterations {
             let mut node_idx = 0;
-            let mut current_state = root_state.clone();
             let mut current_player = self.root_player;
 
-            // 1. Selection
+            // Stack to track moves for Unmaking: (Move, UnmakeInfo)
+            let mut path_stack: Vec<(Move, UnmakeInfo)> = Vec::with_capacity(64);
+
+            // --- 1. Selection ---
             while self.nodes[node_idx].unexpanded_moves.is_empty()
                 && !self.nodes[node_idx].children.is_empty()
             {
@@ -114,19 +119,26 @@ impl MCTS {
                 node_idx = best_child;
 
                 let mv = self.nodes[node_idx].move_to_node.as_ref().unwrap();
-                current_state.apply_move(mv).unwrap();
+
+                // Apply move and store Undo Info
+                let info = current_state.apply_move(mv).unwrap();
+                path_stack.push((mv.clone(), info));
+
                 current_player = current_player.opponent();
             }
 
-            // 2. Expansion
+            // --- 2. Expansion ---
             if !self.nodes[node_idx].unexpanded_moves.is_empty() {
                 let mv = self.nodes[node_idx].unexpanded_moves.pop().unwrap();
 
-                let mut next_state = current_state.clone();
-                next_state.apply_move(&mv).unwrap();
+                // Apply move and store Undo Info
+                let info = current_state.apply_move(&mv).unwrap();
+                path_stack.push((mv.clone(), info));
+
                 let next_player = current_player.opponent();
 
-                let legal_moves = Rules::generate_legal_moves(&mut next_state, next_player);
+                // Generate moves for the new node
+                let legal_moves = Rules::generate_legal_moves(&mut current_state, next_player);
                 let is_terminal = legal_moves.is_empty();
 
                 let new_node = Node {
@@ -145,19 +157,28 @@ impl MCTS {
                 self.nodes[node_idx].children.push(new_node_idx);
 
                 node_idx = new_node_idx;
-                current_state = next_state;
                 current_player = next_player;
             }
 
-            // 3. Simulation
+            // --- 3. Simulation (Rollout) ---
             let result_score = if self.nodes[node_idx].is_terminal {
                 self.evaluate_terminal(&current_state, current_player)
             } else {
-                self.rollout(&mut current_state, current_player, &mut rng)
+                self.rollout_inplace(
+                    &mut current_state,
+                    current_player,
+                    &mut rng,
+                    &mut path_stack,
+                )
             };
 
-            // 4. Backpropagation
+            // --- 4. Backpropagation ---
             self.backpropagate(node_idx, result_score);
+
+            // --- 5. Restore State (Unmake Everything) ---
+            while let Some((mv, info)) = path_stack.pop() {
+                current_state.unmake_move(&mv, info);
+            }
         }
     }
 
@@ -191,11 +212,12 @@ impl MCTS {
         best_child
     }
 
-    fn rollout(
+    fn rollout_inplace(
         &self,
         state: &mut Board,
         mut player: Player,
         rng: &mut rand::rngs::ThreadRng,
+        stack: &mut Vec<(Move, UnmakeInfo)>,
     ) -> f64 {
         let mut depth = 0;
         const MAX_ROLLOUT_DEPTH: usize = 50;
@@ -217,7 +239,9 @@ impl MCTS {
             }
 
             let mv = moves.choose(rng).unwrap();
-            state.apply_move(mv).unwrap();
+            let info = state.apply_move(mv).unwrap();
+            stack.push((mv.clone(), info));
+
             player = player.opponent();
             depth += 1;
         }
