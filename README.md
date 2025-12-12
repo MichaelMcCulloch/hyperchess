@@ -66,7 +66,10 @@ All pieces capture by landing on a square occupied by an enemy piece, replacing 
     * $(1, 1, 2)$ is a *push* (Height +1), not a capture.
 
 #### Promotion
-* **Trigger:** Reaching the last square ($S-1$ for White, $0$ for Black) on any valid movement axis.
+* **Trigger:** Reaching the far end of the lattice.
+    * **White:** Must reach coordinate $S-1$ on **ALL axes except Axis 1 (File/Lateral)**.
+    * **Black:** Must reach coordinate $0$ on **ALL axes except Axis 1 (File/Lateral)**.
+* **Note:** Moving to the end of just one dimension (e.g., just Rank) is **not** sufficient for promotion in 3D+.
 * **Result:** Promotes to Queen, Rook, Bishop, or Knight.
 
 ### 4. Special Moves
@@ -79,7 +82,6 @@ All pieces capture by landing on a square occupied by an enemy piece, replacing 
 * **Timing:** Must be done immediately on the turn following the double push.
 
 #### Castling
-* **Constraint:** Only available on standard $8 \times 8$ boards (or $N$-dimensional boards with side length 8).
 * **Axes:** Strictly occurs along **Axis 1 (File)**.
 * **Logic:**
     * **Kingside:** King moves from File 4 to File 6. Rook moves from File 7 to File 5.
@@ -99,23 +101,37 @@ All pieces capture by landing on a square occupied by an enemy piece, replacing 
 Run the game via `cargo`:
 
 ```bash
-cargo run --release -- [dimension] [mode] [depth]
+cargo run --release -- [dimension] [player_mode] [depth]
 ```
 
-- **dimension**: Dimension of the board (e.g., `2` for standard chess, `3` for 3D chess). Default: `3`.
-- **mode**: A two-character string for player types (`h` = human, `c` = computer).
-    - `hc`: Human vs Computer
-    - `cc`: Computer vs Computer
-    - `hh`: Human vs Human
-- **depth**: Search depth for the AI (default: `4`).
+**Arguments:**
 
-**Example:**
+1.  **dimension** (Optional): The number of spatial dimensions for the board.
+    *   **Default:** `2` (Standard Chess)
+    *   **Values:** `2`, `3`, `4`, etc.
+2.  **player_mode** (Optional): Specifies the types of the two players (White and Black).
+    *   **Default:** `hc` (Human vs Computer)
+    *   **Format:** A two-character string (e.g., `cc`, `hh`).
+        *   First character: White player (`h` = Human, `c` = Computer).
+        *   Second character: Black player.
+3.  **depth** (Optional): The search depth for the Computer AI.
+    *   **Default:** `4`
+    *   **Note:** Higher depth significantly increases calculation time.
+
+**Examples:**
+
 ```bash
-# Play 2D Chess vs Bot
-cargo run --release -- 2 hc
+# Play Standard 2D Chess (Human vs Computer) - Uses defaults
+cargo run --release
 
-# Watch 3D Chess Bot vs Bot
+# Play 3D Chess (Human vs Computer)
+cargo run --release -- 3
+
+# Watch a 3D Chess match between two bots
 cargo run --release -- 3 cc
+
+# Play 2D Chess against a stronger bot (Depth 6)
+cargo run --release -- 2 hc 6
 ```
 
 ### Move Input Format (Console)

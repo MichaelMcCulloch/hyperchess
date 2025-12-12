@@ -79,6 +79,94 @@ pub enum BitBoard {
     Large { data: Vec<u64> },
 }
 
+pub struct BitIterator<'a> {
+    board: &'a BitBoard,
+    current_chunk_idx: usize,
+    current_chunk: u64,
+}
+
+impl<'a> BitIterator<'a> {
+    pub fn new(board: &'a BitBoard) -> Self {
+        let (first_chunk, start_idx) = match board {
+            BitBoard::Small(b) => (*b as u64, 0),
+            BitBoard::Medium(b) => (*b as u64, 0),
+            BitBoard::Large { data } => {
+                if data.is_empty() {
+                    (0, 0)
+                } else {
+                    (data[0], 0)
+                }
+            }
+        };
+
+        Self {
+            board,
+            current_chunk_idx: start_idx,
+            current_chunk: first_chunk,
+        }
+    }
+}
+
+impl<'a> Iterator for BitIterator<'a> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.current_chunk != 0 {
+                // Hardware intrinsic: TZCNT via trailing_zeros()
+                let trailing = self.current_chunk.trailing_zeros();
+
+                // Hardware intrinsic: BLSR (Reset lowest set bit)
+                // self.current_chunk &= self.current_chunk - 1;
+                // Note: Rust compiler optimizes the below to BLSR if BMI1 is enabled.
+                // We use the safe XOR approach or just clear the bit directly.
+                // Resetting via XOR is clean.
+                self.current_chunk &= !(1 << trailing);
+
+                // For medium board, we need to handle the upper bits if it was > 64 bits?
+                // Wait, Small(u32) is fine (fits in u64). Medium(u128) might be > 64 bits.
+                // My logic for Medium below treats it as 2 chunks.
+
+                // Correction for Medium(u128):
+                // In `new`, I took `*b as u64`. That only grabs the lower 64 bits.
+                // I need to handle the Medium case correctly in `next`.
+
+                let index = if let BitBoard::Medium(_) = self.board {
+                    self.current_chunk_idx * 64 + trailing as usize
+                } else if let BitBoard::Large { .. } = self.board {
+                    self.current_chunk_idx * 64 + trailing as usize
+                } else {
+                    // Small
+                    trailing as usize
+                };
+
+                return Some(index);
+            }
+
+            // Move to next chunk if needed
+            match self.board {
+                BitBoard::Small(_) => return None, // Small only has 1 chunk (and we just processed it)
+                BitBoard::Medium(b) => {
+                    if self.current_chunk_idx == 0 {
+                        self.current_chunk_idx = 1;
+                        self.current_chunk = (b >> 64) as u64;
+                    } else {
+                        return None;
+                    }
+                }
+                BitBoard::Large { data } => {
+                    self.current_chunk_idx += 1;
+                    if self.current_chunk_idx < data.len() {
+                        self.current_chunk = data[self.current_chunk_idx];
+                    } else {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Board {
     pub dimension: usize,
@@ -636,15 +724,27 @@ impl BitBoard {
             (BitBoard::Small(a), BitBoard::Small(b)) => BitBoard::Small(a | b),
             (BitBoard::Medium(a), BitBoard::Medium(b)) => BitBoard::Medium(a | b),
             (BitBoard::Large { mut data }, BitBoard::Large { data: other_data }) => {
-                for (i, x) in data.iter_mut().enumerate() {
-                    if i < other_data.len() {
-                        *x |= other_data[i];
-                    }
+                // Determine the common length for vectorization
+                let len = std::cmp::min(data.len(), other_data.len());
+
+                // This slice-based loop allows LLVM to generate AVX2 instructions
+                // (vpor ymm0, ymm0, ymm1)
+                for (d, o) in data[0..len].iter_mut().zip(&other_data[0..len]) {
+                    *d |= *o;
                 }
+
+                // Handle size mismatches (rare in static board dimensions)
+                if other_data.len() > data.len() {
+                    data.extend_from_slice(&other_data[len..]);
+                }
+
                 BitBoard::Large { data }
             }
             _ => panic!("Mismatched BitBoard types"),
         }
+    }
+    pub fn iter_indices(&self) -> BitIterator<'_> {
+        BitIterator::new(self)
     }
 }
 ```
@@ -1001,79 +1101,77 @@ impl Rules {
     fn generate_pseudo_legal_moves(board: &Board, player: Player) -> Vec<Move> {
         let mut moves = Vec::new();
         // Iterate all cells, find pieces owned by player
-        for i in 0..board.total_cells {
-            let occupancy = match player {
-                Player::White => &board.white_occupancy,
-                Player::Black => &board.black_occupancy,
+        let occupancy = match player {
+            Player::White => &board.white_occupancy,
+            Player::Black => &board.black_occupancy,
+        };
+
+        for i in occupancy.iter_indices() {
+            let coord_vals = board.index_to_coords(i);
+            let coord = Coordinate::new(coord_vals.clone());
+
+            // Identify piece type
+            let piece_type = if board.pawns.get_bit(i) {
+                PieceType::Pawn
+            } else if board.knights.get_bit(i) {
+                PieceType::Knight
+            } else if board.bishops.get_bit(i) {
+                PieceType::Bishop
+            } else if board.rooks.get_bit(i) {
+                PieceType::Rook
+            } else if board.queens.get_bit(i) {
+                PieceType::Queen
+            } else if board.kings.get_bit(i) {
+                PieceType::King
+            } else {
+                continue; // Error?
             };
 
-            if occupancy.get_bit(i) {
-                let coord_vals = board.index_to_coords(i);
-                let coord = Coordinate::new(coord_vals.clone());
-
-                // Identify piece type
-                let piece_type = if board.pawns.get_bit(i) {
-                    PieceType::Pawn
-                } else if board.knights.get_bit(i) {
-                    PieceType::Knight
-                } else if board.bishops.get_bit(i) {
-                    PieceType::Bishop
-                } else if board.rooks.get_bit(i) {
-                    PieceType::Rook
-                } else if board.queens.get_bit(i) {
-                    PieceType::Queen
-                } else if board.kings.get_bit(i) {
-                    PieceType::King
-                } else {
-                    continue; // Error?
-                };
-
-                match piece_type {
-                    PieceType::Pawn => Self::generate_pawn_moves(board, &coord, player, &mut moves),
-                    PieceType::Knight => Self::generate_leaper_moves(
-                        board,
-                        &coord,
-                        player,
-                        &Self::get_knight_offsets(board.dimension),
-                        &mut moves,
-                    ),
-                    PieceType::King => Self::generate_leaper_moves(
-                        board,
-                        &coord,
-                        player,
-                        &Self::get_king_offsets(board.dimension),
-                        &mut moves,
-                    ),
-                    PieceType::Rook => Self::generate_slider_moves(
+            match piece_type {
+                PieceType::Pawn => Self::generate_pawn_moves(board, &coord, player, &mut moves),
+                PieceType::Knight => Self::generate_leaper_moves(
+                    board,
+                    &coord,
+                    player,
+                    &Self::get_knight_offsets(board.dimension),
+                    &mut moves,
+                ),
+                PieceType::King => Self::generate_leaper_moves(
+                    board,
+                    &coord,
+                    player,
+                    &Self::get_king_offsets(board.dimension),
+                    &mut moves,
+                ),
+                PieceType::Rook => Self::generate_slider_moves(
+                    board,
+                    &coord,
+                    player,
+                    &Self::get_rook_directions(board.dimension),
+                    &mut moves,
+                ),
+                PieceType::Bishop => Self::generate_slider_moves(
+                    board,
+                    &coord,
+                    player,
+                    &Self::get_bishop_directions(board.dimension),
+                    &mut moves,
+                ),
+                PieceType::Queen => {
+                    Self::generate_slider_moves(
                         board,
                         &coord,
                         player,
                         &Self::get_rook_directions(board.dimension),
                         &mut moves,
-                    ),
-                    PieceType::Bishop => Self::generate_slider_moves(
+                    );
+                    Self::generate_slider_moves(
                         board,
                         &coord,
                         player,
                         &Self::get_bishop_directions(board.dimension),
                         &mut moves,
-                    ),
-                    PieceType::Queen => {
-                        Self::generate_slider_moves(
-                            board,
-                            &coord,
-                            player,
-                            &Self::get_rook_directions(board.dimension),
-                            &mut moves,
-                        );
-                        Self::generate_slider_moves(
-                            board,
-                            &coord,
-                            player,
-                            &Self::get_bishop_directions(board.dimension),
-                            &mut moves,
-                        );
-                    }
+                    );
                 }
             }
         }
@@ -1474,14 +1572,7 @@ impl Rules {
                 if let Some(idx) = board.coords_to_index(&target) {
                     if !all_occupancy.get_bit(idx) {
                         // Empty -> Legal PUSH
-                        Self::add_pawn_move(
-                            origin,
-                            &target,
-                            board.side,
-                            player,
-                            movement_axis, // Check promotion on this axis
-                            moves,
-                        );
+                        Self::add_pawn_move(origin, &target, board.side, player, moves);
 
                         // 2. Double step?
                         let is_start_rank = match player {
@@ -1496,12 +1587,7 @@ impl Rules {
                                 if let Some(idx2) = board.coords_to_index(&target2) {
                                     if !all_occupancy.get_bit(idx2) {
                                         Self::add_pawn_move(
-                                            origin,
-                                            &target2,
-                                            board.side,
-                                            player,
-                                            movement_axis,
-                                            moves,
+                                            origin, &target2, board.side, player, moves,
                                         );
                                     }
                                 }
@@ -1526,14 +1612,7 @@ impl Rules {
                         if let Some(idx) = board.coords_to_index(&target) {
                             // Regular Capture
                             if enemy_occupancy.get_bit(idx) {
-                                Self::add_pawn_move(
-                                    origin,
-                                    &target,
-                                    board.side,
-                                    player,
-                                    movement_axis,
-                                    moves,
-                                );
+                                Self::add_pawn_move(origin, &target, board.side, player, moves);
                             }
                             // En Passant Capture
                             else if let Some((ep_target, _)) = board.en_passant_target {
@@ -1558,13 +1637,18 @@ impl Rules {
         to_vals: &[usize],
         side: usize,
         player: Player,
-        movement_axis: usize,
         moves: &mut Vec<Move>,
     ) {
-        let is_promotion = match player {
-            Player::White => to_vals[movement_axis] == side - 1,
-            Player::Black => to_vals[movement_axis] == 0,
-        };
+        let is_promotion = (0..to_vals.len()).all(|i| {
+            if i == 1 {
+                true // File axis doesn't count for promotion depth
+            } else {
+                match player {
+                    Player::White => to_vals[i] == side - 1,
+                    Player::Black => to_vals[i] == 0,
+                }
+            }
+        });
 
         let to = Coordinate::new(to_vals.to_vec());
 
@@ -2082,12 +2166,11 @@ impl MinimaxBot {
         }
 
         let mut score = 0;
-        for i in 0..board.total_cells {
-            if board.white_occupancy.get_bit(i) {
-                score += self.get_piece_value(board, i);
-            } else if board.black_occupancy.get_bit(i) {
-                score -= self.get_piece_value(board, i);
-            }
+        for i in board.white_occupancy.iter_indices() {
+            score += self.get_piece_value(board, i);
+        }
+        for i in board.black_occupancy.iter_indices() {
+            score -= self.get_piece_value(board, i);
         }
         score
     }
@@ -2846,7 +2929,7 @@ use std::env;
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    let mut dimension = 3;
+    let mut dimension = 2;
     let side = 8; // Default side 8 for HyperChess
     let mut player_white_type = "h";
     let mut player_black_type = "c";
@@ -3932,6 +4015,158 @@ fn diff_coords(c1: &Coordinate, c2: &Coordinate) -> Vec<isize> {
         .zip(c2.values.iter())
         .map(|(a, b)| *a as isize - *b as isize)
         .collect()
+}
+```
+```./tests/pawn_promotion_rule.rs
+use hyperchess::domain::board::Board;
+use hyperchess::domain::coordinate::Coordinate;
+use hyperchess::domain::models::{Piece, PieceType, Player};
+use hyperchess::domain::rules::Rules;
+
+fn coord_3d(x: usize, y: usize, z: usize) -> Coordinate {
+    Coordinate::new(vec![x, y, z])
+}
+
+#[test]
+fn test_promotion_conditions_3d_white() {
+    let side = 8;
+    let dim = 3;
+    let mut board = Board::new_empty(dim, side);
+
+    // Setup White Pawn at (6, 0, 7)
+    // Moving to (7, 0, 7) should PROMOTE because:
+    // Axis 0 (Rank) -> 7 (Max)
+    // Axis 1 (File) -> 0 (Irrelevant for far-side check, but valid pos)
+    // Axis 2 (Height) -> 7 (Max)
+
+    // In the new rule: Promotion happens if ALL non-file axes are at limit.
+    // White moves +1 on Axis 0.
+    // Target is (7, 0, 7).
+    // Axis 0 is 7 (Max). Axis 1 (File) ignored. Axis 2 is 7 (Max).
+    // result: PROMOTE.
+
+    let start_pos = coord_3d(6, 0, 7);
+    board
+        .set_piece(
+            &start_pos,
+            Piece {
+                piece_type: PieceType::Pawn,
+                owner: Player::White,
+            },
+        )
+        .unwrap();
+
+    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let promo_move = moves
+        .iter()
+        .find(|m| m.to == coord_3d(7, 0, 7) && m.promotion == Some(PieceType::Queen));
+
+    assert!(promo_move.is_some(), "Should promote at (7, 0, 7)");
+}
+
+#[test]
+fn test_no_promotion_partial_far_side_white() {
+    let side = 8;
+    let dim = 3;
+    let mut board = Board::new_empty(dim, side);
+
+    // Setup White Pawn at (6, 0, 0)
+    // Moves to (7, 0, 0).
+    // Axis 0 -> 7 (Max) - Met.
+    // Axis 2 -> 0 (Min) - Not Max.
+    // Result: NO PROMOTION.
+
+    let start_pos = coord_3d(6, 0, 0);
+    board
+        .set_piece(
+            &start_pos,
+            Piece {
+                piece_type: PieceType::Pawn,
+                owner: Player::White,
+            },
+        )
+        .unwrap();
+
+    let moves = Rules::generate_legal_moves(&board, Player::White);
+
+    // Check for plain move
+    let plain_move = moves
+        .iter()
+        .find(|m| m.to == coord_3d(7, 0, 0) && m.promotion.is_none());
+    assert!(plain_move.is_some(), "Should be a normal move");
+
+    // Check for promotion move (should be absent)
+    let promo_move = moves
+        .iter()
+        .find(|m| m.to == coord_3d(7, 0, 0) && m.promotion == Some(PieceType::Queen));
+    assert!(
+        promo_move.is_none(),
+        "Should NOT promote at (7, 0, 0) if Z is not max"
+    );
+}
+
+#[test]
+fn test_promotion_conditions_3d_black() {
+    let side = 8;
+    let dim = 3;
+    let mut board = Board::new_empty(dim, side);
+
+    // Setup Black Pawn at (1, 0, 0)
+    // Moves to (0, 0, 0).
+    // Axis 0 -> 0 (Min).
+    // Axis 2 -> 0 (Min).
+    // Result: PROMOTE.
+
+    let start_pos = coord_3d(1, 0, 0);
+    board
+        .set_piece(
+            &start_pos,
+            Piece {
+                piece_type: PieceType::Pawn,
+                owner: Player::Black,
+            },
+        )
+        .unwrap();
+
+    let moves = Rules::generate_legal_moves(&board, Player::Black);
+    let promo_move = moves
+        .iter()
+        .find(|m| m.to == coord_3d(0, 0, 0) && m.promotion == Some(PieceType::Queen));
+
+    assert!(promo_move.is_some(), "Black should promote at (0, 0, 0)");
+}
+
+#[test]
+fn test_no_promotion_partial_black() {
+    let side = 8;
+    let dim = 3;
+    let mut board = Board::new_empty(dim, side);
+
+    // Black Pawn at (1, 0, 7). Moves to (0, 0, 7).
+    // Axis 0 -> 0 (Min).
+    // Axis 2 -> 7 (Max). Not 0.
+    // Result: NO PROMOTION.
+
+    let start_pos = coord_3d(1, 0, 7);
+    board
+        .set_piece(
+            &start_pos,
+            Piece {
+                piece_type: PieceType::Pawn,
+                owner: Player::Black,
+            },
+        )
+        .unwrap();
+
+    let moves = Rules::generate_legal_moves(&board, Player::Black);
+    let promo_move = moves
+        .iter()
+        .find(|m| m.to == coord_3d(0, 0, 7) && m.promotion.is_some());
+
+    assert!(
+        promo_move.is_none(),
+        "Black should NOT promote at (0, 0, 7)"
+    );
 }
 ```
 ```./tests/special_moves.rs

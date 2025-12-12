@@ -8,7 +8,7 @@ use std::env;
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    let mut dimension = 3;
+    let mut dimension = 2;
     let side = 8; // Default side 8 for HyperChess
     let mut player_white_type = "h";
     let mut player_black_type = "c";

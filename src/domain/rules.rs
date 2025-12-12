@@ -666,14 +666,7 @@ impl Rules {
                 if let Some(idx) = board.coords_to_index(&target) {
                     if !all_occupancy.get_bit(idx) {
                         // Empty -> Legal PUSH
-                        Self::add_pawn_move(
-                            origin,
-                            &target,
-                            board.side,
-                            player,
-                            movement_axis, // Check promotion on this axis
-                            moves,
-                        );
+                        Self::add_pawn_move(origin, &target, board.side, player, moves);
 
                         // 2. Double step?
                         let is_start_rank = match player {
@@ -688,12 +681,7 @@ impl Rules {
                                 if let Some(idx2) = board.coords_to_index(&target2) {
                                     if !all_occupancy.get_bit(idx2) {
                                         Self::add_pawn_move(
-                                            origin,
-                                            &target2,
-                                            board.side,
-                                            player,
-                                            movement_axis,
-                                            moves,
+                                            origin, &target2, board.side, player, moves,
                                         );
                                     }
                                 }
@@ -718,14 +706,7 @@ impl Rules {
                         if let Some(idx) = board.coords_to_index(&target) {
                             // Regular Capture
                             if enemy_occupancy.get_bit(idx) {
-                                Self::add_pawn_move(
-                                    origin,
-                                    &target,
-                                    board.side,
-                                    player,
-                                    movement_axis,
-                                    moves,
-                                );
+                                Self::add_pawn_move(origin, &target, board.side, player, moves);
                             }
                             // En Passant Capture
                             else if let Some((ep_target, _)) = board.en_passant_target {
@@ -750,13 +731,18 @@ impl Rules {
         to_vals: &[usize],
         side: usize,
         player: Player,
-        movement_axis: usize,
         moves: &mut Vec<Move>,
     ) {
-        let is_promotion = match player {
-            Player::White => to_vals[movement_axis] == side - 1,
-            Player::Black => to_vals[movement_axis] == 0,
-        };
+        let is_promotion = (0..to_vals.len()).all(|i| {
+            if i == 1 {
+                true // File axis doesn't count for promotion depth
+            } else {
+                match player {
+                    Player::White => to_vals[i] == side - 1,
+                    Player::Black => to_vals[i] == 0,
+                }
+            }
+        });
 
         let to = Coordinate::new(to_vals.to_vec());
 
