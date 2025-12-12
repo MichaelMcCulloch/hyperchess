@@ -40,14 +40,14 @@ fn main() {
 
     let player_white: Box<dyn PlayerStrategy<BitBoardState>> = match player_white_type {
         "h" => Box::new(HumanConsolePlayer::new()),
-        "c" => Box::new(MinimaxBot::new(depth, time_limit, dimension, side)),
+        "c" => Box::new(MinimaxBot::new(depth, time_limit, dimension, side).with_mcts(50)),
         _ => Box::new(HumanConsolePlayer::new()),
     };
 
     let player_black: Box<dyn PlayerStrategy<BitBoardState>> = match player_black_type {
         "h" => Box::new(HumanConsolePlayer::new()),
-        "c" => Box::new(MinimaxBot::new(depth, time_limit, dimension, side)),
-        _ => Box::new(MinimaxBot::new(depth, time_limit, dimension, side)),
+        "c" => Box::new(MinimaxBot::new(depth, time_limit, dimension, side).with_mcts(50)),
+        _ => Box::new(MinimaxBot::new(depth, time_limit, dimension, side).with_mcts(50)),
     };
 
     let board = Board::<BitBoardState>::new(dimension, side);

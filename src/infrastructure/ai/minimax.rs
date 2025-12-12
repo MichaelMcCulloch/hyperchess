@@ -1,3 +1,4 @@
+use super::mcts::MCTS;
 use crate::domain::models::{BoardState, Move, Player};
 use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::ai::transposition::{Flag, LockFreeTT};
@@ -6,8 +7,6 @@ use crate::infrastructure::persistence::BitBoardState;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-
-pub mod transposition;
 
 const CHECKMATE_SCORE: i32 = 30000;
 const TIMEOUT_CHECK_INTERVAL: usize = 2048;
@@ -27,6 +26,8 @@ pub struct MinimaxBot {
     stop_flag: Arc<AtomicBool>,
     nodes_searched: std::sync::atomic::AtomicUsize,
     _randomized: bool,
+    use_mcts: bool,
+    mcts_iterations: usize,
 }
 
 impl MinimaxBot {
@@ -38,10 +39,43 @@ impl MinimaxBot {
             stop_flag: Arc::new(AtomicBool::new(false)),
             nodes_searched: std::sync::atomic::AtomicUsize::new(0),
             _randomized: true,
+            use_mcts: false,      // Default off
+            mcts_iterations: 100, // Default 100
         }
     }
 
-    fn evaluate(&self, board: &BitBoardState) -> i32 {
+    pub fn with_mcts(mut self, iterations: usize) -> Self {
+        self.use_mcts = true;
+        self.mcts_iterations = iterations;
+        Self {
+            depth: if self.use_mcts { 2 } else { self.depth }, // Reduce depth if MCTS is on to compensate?
+            ..self
+        }
+    }
+
+    fn evaluate(&self, board: &BitBoardState, player_at_leaf: Option<Player>) -> i32 {
+        if self.use_mcts {
+            if let Some(player) = player_at_leaf {
+                // Run MCTS
+                // Note: MCTS is expensive.
+                let mut mcts = MCTS::new(board, player);
+                let win_rate = mcts.run(board, self.mcts_iterations);
+
+                // win_rate is [0, 1] for `player`.
+                // Map to score. 1.0 -> 20000, 0.0 -> -20000.
+                // value = (win_rate - 0.5) * 2 * 20000
+                let val_f = (win_rate - 0.5) * 2.0 * (VAL_KING as f64);
+                let val = val_f as i32;
+
+                // Return White-centric score
+                if player == Player::Black {
+                    return -val;
+                } else {
+                    return val;
+                }
+            }
+        }
+
         let mut score = 0;
         for i in 0..board.total_cells {
             if board.white_occupancy.get_bit(i) {
@@ -111,8 +145,8 @@ impl MinimaxBot {
 
         if depth == 0 {
             return match player {
-                Player::White => self.evaluate(board),
-                Player::Black => -self.evaluate(board),
+                Player::White => self.evaluate(board, Some(Player::White)),
+                Player::Black => -self.evaluate(board, Some(Player::Black)),
             };
         }
 
