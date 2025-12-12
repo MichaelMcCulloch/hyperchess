@@ -1,11 +1,8 @@
 use crate::domain::coordinate::Coordinate;
-use crate::domain::models::{BoardState, Player};
-#[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
+use crate::domain::models::{BoardState, Move, Piece, PieceType, Player};
 use std::fmt;
-use std::sync::Arc;
 
-// Removed Copy: Vec<u64> cannot be Copy.
+// Keep BitBoard implementation as is for storage
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BitBoard {
     Small(u32),
@@ -14,86 +11,183 @@ pub enum BitBoard {
 }
 
 #[derive(Clone, Debug)]
-pub enum WinningMasks {
-    Small {
-        masks: Vec<u32>,
-        map_flat: Vec<usize>,
-        map_offsets: Vec<(u32, u32)>, // (start, count)
-        cell_mask_lookup: Vec<Vec<u32>>,
-    },
-    Medium {
-        masks: Vec<u128>,
-        map_flat: Vec<usize>,
-        map_offsets: Vec<(u32, u32)>,
-        cell_mask_lookup: Vec<Vec<u128>>,
-    },
-    Large {
-        masks: Vec<Vec<u64>>,
-        map_flat: Vec<usize>,
-        map_offsets: Vec<(u32, u32)>,
-    },
-}
-
-#[derive(Clone, Debug)]
 pub struct BitBoardState {
     pub dimension: usize,
     pub side: usize,
     pub total_cells: usize,
-    pub p1: BitBoard,
-    pub p2: BitBoard,
-    pub winning_masks: Arc<WinningMasks>,
+
+    // Occupancy (fast collision check)
+    pub white_occupancy: BitBoard,
+    pub black_occupancy: BitBoard,
+
+    pub pawns: BitBoard,
+    pub rooks: BitBoard,
+    pub knights: BitBoard,
+    pub bishops: BitBoard,
+    pub queens: BitBoard,
+    pub kings: BitBoard,
 }
 
 impl BitBoardState {
-    pub fn get_cell_index(&self, index: usize) -> Option<Player> {
-        if self.p1.get_bit(index) {
-            Some(Player::X)
-        } else if self.p2.get_bit(index) {
-            Some(Player::O)
-        } else {
-            None
-        }
-    }
-
-    pub fn set_cell_index(&mut self, index: usize, player: Player) -> Result<(), String> {
-        if index >= self.total_cells {
-            return Err("Index out of bounds".to_string());
-        }
-        if self.p1.get_bit(index) || self.p2.get_bit(index) {
-            return Err("Cell already occupied".to_string());
-        }
-
-        match player {
-            Player::X => self.p1.set_bit(index),
-            Player::O => self.p2.set_bit(index),
-        }
-        Ok(())
-    }
-
-    pub fn clear_cell_index(&mut self, index: usize) {
-        self.p1.clear_bit(index);
-        self.p2.clear_bit(index);
-    }
-}
-
-impl BoardState for BitBoardState {
-    fn new(dimension: usize) -> Self {
-        let side: usize = 3;
+    pub fn new_empty(dimension: usize, side: usize) -> Self {
         let total_cells = side.pow(dimension as u32);
-
-        let p1 = BitBoard::new_empty(dimension, side);
-        let p2 = BitBoard::new_empty(dimension, side);
-
-        let winning_masks = Arc::new(generate_winning_masks(dimension, side));
+        let empty = BitBoard::new_empty(dimension, side);
 
         BitBoardState {
             dimension,
             side,
             total_cells,
-            p1,
-            p2,
-            winning_masks,
+            white_occupancy: empty.clone(),
+            black_occupancy: empty.clone(),
+            pawns: empty.clone(),
+            rooks: empty.clone(),
+            knights: empty.clone(),
+            bishops: empty.clone(),
+            queens: empty.clone(),
+            kings: empty.clone(),
         }
+    }
+
+    // Helper to get raw index
+    fn get_index(&self, coord: &Coordinate) -> Option<usize> {
+        crate::infrastructure::persistence::coords_to_index(&coord.values, self.side)
+    }
+
+    fn remove_piece_at_index(&mut self, index: usize) {
+        self.white_occupancy.clear_bit(index);
+        self.black_occupancy.clear_bit(index);
+        self.pawns.clear_bit(index);
+        self.rooks.clear_bit(index);
+        self.knights.clear_bit(index);
+        self.bishops.clear_bit(index);
+        self.queens.clear_bit(index);
+        self.kings.clear_bit(index);
+    }
+
+    fn place_piece_at_index(&mut self, index: usize, piece: Piece) {
+        match piece.owner {
+            Player::White => self.white_occupancy.set_bit(index),
+            Player::Black => self.black_occupancy.set_bit(index),
+        }
+
+        match piece.piece_type {
+            PieceType::Pawn => self.pawns.set_bit(index),
+            PieceType::Rook => self.rooks.set_bit(index),
+            PieceType::Knight => self.knights.set_bit(index),
+            PieceType::Bishop => self.bishops.set_bit(index),
+            PieceType::Queen => self.queens.set_bit(index),
+            PieceType::King => self.kings.set_bit(index),
+        }
+    }
+
+    pub fn setup_standard_chess(&mut self) {
+        // Only populate one "slice" of pieces per side in N-dims.
+        // Iterate only over the "file" dimension (dimension 1, typically 'y').
+        // All other dimensions > 1 are fixed to 0 for White and side-1 for Black.
+
+        for file_y in 0..self.side {
+            // --- White Pieces (z=0, w=0, ...) ---
+            let mut white_coords = vec![0; self.dimension];
+            white_coords[1] = file_y;
+
+            // Place Pawn at Rank 1
+            white_coords[0] = 1;
+            if let Some(idx) = self.get_index(&Coordinate::new(white_coords.clone())) {
+                self.place_piece_at_index(
+                    idx,
+                    Piece {
+                        piece_type: PieceType::Pawn,
+                        owner: Player::White,
+                    },
+                );
+            }
+
+            // Place Backrank at Rank 0
+            white_coords[0] = 0;
+            if let Some(idx) = self.get_index(&Coordinate::new(white_coords.clone())) {
+                let piece_type = self.determine_backrank_piece(file_y, self.side);
+                self.place_piece_at_index(
+                    idx,
+                    Piece {
+                        piece_type,
+                        owner: Player::White,
+                    },
+                );
+            }
+
+            // --- Black Pieces (z=side-1, w=side-1, ...) ---
+            // Initialize all coords to side-1 (for z, w, ...)
+            let mut black_coords = vec![self.side - 1; self.dimension];
+            // But 'y' varies
+            black_coords[1] = file_y;
+
+            // Place Pawn at Rank side-2
+            if self.side > 3 {
+                black_coords[0] = self.side - 2;
+                if let Some(idx) = self.get_index(&Coordinate::new(black_coords.clone())) {
+                    self.place_piece_at_index(
+                        idx,
+                        Piece {
+                            piece_type: PieceType::Pawn,
+                            owner: Player::Black,
+                        },
+                    );
+                }
+            }
+
+            // Place Backrank at Rank side-1
+            black_coords[0] = self.side - 1;
+            if let Some(idx) = self.get_index(&Coordinate::new(black_coords.clone())) {
+                let piece_type = self.determine_backrank_piece(file_y, self.side);
+                self.place_piece_at_index(
+                    idx,
+                    Piece {
+                        piece_type,
+                        owner: Player::Black,
+                    },
+                );
+            }
+        }
+    }
+
+    fn determine_backrank_piece(&self, file_idx: usize, total_files: usize) -> PieceType {
+        // Special case for 2D 8x8 standard chess
+        if self.dimension == 2 && self.side == 8 {
+            return match file_idx {
+                0 | 7 => PieceType::Rook,
+                1 | 6 => PieceType::Knight,
+                2 | 5 => PieceType::Bishop,
+                3 => PieceType::Queen,
+                4 => PieceType::King,
+                _ => PieceType::Pawn,
+            };
+        }
+
+        // Generic N-D heuristic
+        let king_pos = total_files / 2;
+        if file_idx == king_pos {
+            return PieceType::King;
+        }
+        if file_idx + 1 == king_pos {
+            return PieceType::Queen;
+        }
+
+        if file_idx == 0 || file_idx == total_files - 1 {
+            return PieceType::Rook;
+        }
+        if file_idx == 1 || file_idx == total_files - 2 {
+            return PieceType::Knight;
+        }
+
+        PieceType::Bishop
+    }
+}
+
+impl BoardState for BitBoardState {
+    fn new(dimension: usize, side: usize) -> Self {
+        let mut board = Self::new_empty(dimension, side);
+        board.setup_standard_chess(); // Call the helper method
+        board
     }
 
     fn dimension(&self) -> usize {
@@ -108,39 +202,96 @@ impl BoardState for BitBoardState {
         self.total_cells
     }
 
-    fn get_cell(&self, coord: &Coordinate) -> Option<Player> {
-        let index = coords_to_index(&coord.values, self.side)?;
-        self.get_cell_index(index)
+    fn get_piece(&self, coord: &Coordinate) -> Option<Piece> {
+        let index = self.get_index(coord)?;
+
+        let owner = if self.white_occupancy.get_bit(index) {
+            Some(Player::White)
+        } else if self.black_occupancy.get_bit(index) {
+            Some(Player::Black)
+        } else {
+            None
+        }?;
+
+        let piece_type = if self.pawns.get_bit(index) {
+            PieceType::Pawn
+        } else if self.rooks.get_bit(index) {
+            PieceType::Rook
+        } else if self.knights.get_bit(index) {
+            PieceType::Knight
+        } else if self.bishops.get_bit(index) {
+            PieceType::Bishop
+        } else if self.queens.get_bit(index) {
+            PieceType::Queen
+        } else if self.kings.get_bit(index) {
+            PieceType::King
+        } else {
+            return None;
+        };
+
+        Some(Piece { piece_type, owner })
     }
 
-    fn set_cell(&mut self, coord: &Coordinate, player: Player) -> Result<(), String> {
-        let index = coords_to_index(&coord.values, self.side)
-            .ok_or_else(|| "Invalid coordinate".to_string())?;
-        self.set_cell_index(index, player)
+    fn apply_move(&mut self, mv: &Move) -> Result<(), String> {
+        let from_idx = self.get_index(&mv.from).ok_or("Invalid From coord")?;
+        let to_idx = self.get_index(&mv.to).ok_or("Invalid To coord")?;
+
+        let moving_piece = self.get_piece(&mv.from).ok_or("No piece at origin")?;
+
+        // 1. Remove piece from 'from'
+        self.remove_piece_at_index(from_idx);
+
+        // 2. Remove any piece at 'to' (Capture)
+        self.remove_piece_at_index(to_idx);
+
+        // 3. Place piece at 'to'
+        let piece_to_place = if let Some(promo_type) = mv.promotion {
+            Piece {
+                piece_type: promo_type,
+                owner: moving_piece.owner,
+            }
+        } else {
+            moving_piece
+        };
+
+        self.place_piece_at_index(to_idx, piece_to_place);
+
+        Ok(())
     }
 
-    fn clear_cell(&mut self, coord: &Coordinate) {
-        if let Some(index) = coords_to_index(&coord.values, self.side) {
-            self.clear_cell_index(index);
-        }
-    }
+    fn get_king_coordinate(&self, player: Player) -> Option<Coordinate> {
+        let occupancy = match player {
+            Player::White => &self.white_occupancy,
+            Player::Black => &self.black_occupancy,
+        };
 
-    fn check_win(&self) -> Option<Player> {
-        if self.p1.check_win(&self.winning_masks) {
-            return Some(Player::X);
-        }
-        if self.p2.check_win(&self.winning_masks) {
-            return Some(Player::O);
+        for i in 0..self.total_cells {
+            if occupancy.get_bit(i) && self.kings.get_bit(i) {
+                return Some(Coordinate::new(index_to_coords(
+                    i,
+                    self.dimension,
+                    self.side,
+                )));
+            }
         }
         None
     }
 
-    fn is_full(&self) -> bool {
-        // Since BitBoard is no longer Copy, we must use reference or clone appropriately.
-        // or_with now takes &self and other by value or ref?
-        // Let's refactor or_with to take reference to avoid clone.
-        let combined = self.p1.or_with(&self.p2);
-        combined.is_full(self.total_cells)
+    fn set_piece(&mut self, coord: &Coordinate, piece: Piece) -> Result<(), String> {
+        let index = self.get_index(coord).ok_or("Invalid coord")?;
+        self.remove_piece_at_index(index);
+        self.place_piece_at_index(index, piece);
+        Ok(())
+    }
+
+    fn clear_cell(&mut self, coord: &Coordinate) {
+        if let Some(index) = self.get_index(coord) {
+            self.remove_piece_at_index(index);
+        }
+    }
+
+    fn check_status(&self, _player_to_move: Player) -> crate::domain::models::GameResult {
+        crate::domain::models::GameResult::InProgress
     }
 }
 
@@ -149,8 +300,6 @@ impl fmt::Display for BitBoardState {
         write!(f, "{}", crate::infrastructure::display::render_board(self))
     }
 }
-
-// --- BitBoard Implementation ---
 
 impl BitBoard {
     pub fn new_empty(dimension: usize, side: usize) -> Self {
@@ -161,7 +310,6 @@ impl BitBoard {
             BitBoard::Medium(0)
         } else {
             let len = (total_cells + 63) / 64;
-            // Removed panic, allocated vector based on required length
             BitBoard::Large { data: vec![0; len] }
         }
     }
@@ -215,295 +363,21 @@ impl BitBoard {
         }
     }
 
-    pub fn or_with(&self, other: &BitBoard) -> BitBoard {
+    pub fn or_with(self, other: &Self) -> Self {
         match (self, other) {
             (BitBoard::Small(a), BitBoard::Small(b)) => BitBoard::Small(a | b),
             (BitBoard::Medium(a), BitBoard::Medium(b)) => BitBoard::Medium(a | b),
-            (BitBoard::Large { data: a }, BitBoard::Large { data: b }) => {
-                let len = a.len().max(b.len());
-                let mut new_data = vec![0; len];
-                for i in 0..len {
-                    let v1 = if i < a.len() { a[i] } else { 0 };
-                    let v2 = if i < b.len() { b[i] } else { 0 };
-                    new_data[i] = v1 | v2;
-                }
-                BitBoard::Large { data: new_data }
-            }
-            // Fallback for mismatched types (should not happen in valid state)
-            _ => self.clone(),
-        }
-    }
-
-    pub fn is_full(&self, total_cells: usize) -> bool {
-        self.count_ones() as usize >= total_cells
-    }
-
-    pub fn check_win(&self, winning_masks: &WinningMasks) -> bool {
-        match (self, winning_masks) {
-            (BitBoard::Small(board), WinningMasks::Small { masks, .. }) => unsafe {
-                check_win_u32_opt(*board, masks)
-            },
-            (BitBoard::Medium(board), WinningMasks::Medium { masks, .. }) => unsafe {
-                check_win_u128_opt(*board, masks)
-            },
-            (BitBoard::Large { data: board }, WinningMasks::Large { masks, .. }) => {
-                masks.iter().any(|mask_chunks| {
-                    if board.len() < mask_chunks.len() {
-                        return false;
-                    }
-                    // Zip iteration is safer and cleaner
-                    mask_chunks
-                        .iter()
-                        .zip(board.iter())
-                        .all(|(m, b)| (b & m) == *m)
-                })
-            }
-            _ => false,
-        }
-    }
-
-    // Unused in current AI but kept for API consistency
-    pub fn check_win_at(&self, winning_masks: &WinningMasks, index: usize) -> bool {
-        match (self, winning_masks) {
-            (
-                BitBoard::Small(board),
-                WinningMasks::Small {
-                    cell_mask_lookup, ..
-                },
-            ) => {
-                if let Some(masks_for_cell) = cell_mask_lookup.get(index) {
-                    for &m in masks_for_cell {
-                        if (board & m) == m {
-                            return true;
-                        }
+            (BitBoard::Large { mut data }, BitBoard::Large { data: other_data }) => {
+                for (i, x) in data.iter_mut().enumerate() {
+                    if i < other_data.len() {
+                        *x |= other_data[i];
                     }
                 }
-                false
+                BitBoard::Large { data }
             }
-            (
-                BitBoard::Medium(board),
-                WinningMasks::Medium {
-                    cell_mask_lookup, ..
-                },
-            ) => {
-                if let Some(masks_for_cell) = cell_mask_lookup.get(index) {
-                    for &m in masks_for_cell {
-                        if (board & m) == m {
-                            return true;
-                        }
-                    }
-                }
-                false
-            }
-            (
-                BitBoard::Large { data: board },
-                WinningMasks::Large {
-                    masks,
-                    map_flat,
-                    map_offsets,
-                },
-            ) => {
-                if index < map_offsets.len() {
-                    let (start, count) = map_offsets[index];
-                    let range = start as usize..(start + count) as usize;
-                    for &i in &map_flat[range] {
-                        let mask_chunks = &masks[i];
-                        let mut match_all = true;
-                        for (k, m) in mask_chunks.iter().enumerate() {
-                            if let Some(b) = board.get(k) {
-                                if (b & *m) != *m {
-                                    match_all = false;
-                                    break;
-                                }
-                            } else {
-                                // Board smaller than mask (shouldn't happen)
-                                match_all = false;
-                                break;
-                            }
-                        }
-                        if match_all {
-                            return true;
-                        }
-                    }
-                }
-                false
-            }
-            _ => false,
+            _ => panic!("Mismatched BitBoard types"),
         }
     }
-}
-
-// --- Mask Generation Logic ---
-
-fn generate_winning_masks(dimension: usize, side: usize) -> WinningMasks {
-    let lines_indices = generate_winning_lines_indices(dimension, side);
-    let total_cells = side.pow(dimension as u32);
-
-    let mut map_flat = Vec::new();
-    let mut map_offsets = Vec::with_capacity(total_cells);
-
-    // Build temporary map to group lines by cell
-    let mut temp_map: Vec<Vec<usize>> = vec![vec![]; total_cells];
-    for (line_idx, line) in lines_indices.iter().enumerate() {
-        for &cell_idx in line {
-            temp_map[cell_idx].push(line_idx);
-        }
-    }
-
-    // Flatten
-    for indices in temp_map {
-        let start = map_flat.len() as u32;
-        let count = indices.len() as u32;
-        map_flat.extend(indices);
-        map_offsets.push((start, count));
-    }
-
-    if total_cells <= 32 {
-        let mut masks = Vec::new();
-        let mut cell_mask_lookup = vec![Vec::new(); total_cells];
-        for line in lines_indices {
-            let mut mask: u32 = 0;
-            for &idx in &line {
-                mask |= 1 << idx;
-            }
-            masks.push(mask);
-            for idx in line {
-                cell_mask_lookup[idx].push(mask);
-            }
-        }
-        WinningMasks::Small {
-            masks,
-            map_flat,
-            map_offsets,
-            cell_mask_lookup,
-        }
-    } else if total_cells <= 128 {
-        let mut masks = Vec::new();
-        let mut cell_mask_lookup = vec![Vec::new(); total_cells];
-        for line in lines_indices {
-            let mut mask: u128 = 0;
-            for &idx in &line {
-                mask |= 1 << idx;
-            }
-            masks.push(mask);
-            for idx in line {
-                cell_mask_lookup[idx].push(mask);
-            }
-        }
-        WinningMasks::Medium {
-            masks,
-            map_flat,
-            map_offsets,
-            cell_mask_lookup,
-        }
-    } else {
-        let mut masks = Vec::new();
-        let num_u64s = (total_cells + 63) / 64;
-        for line in lines_indices {
-            let mut mask_chunks = vec![0u64; num_u64s];
-            for idx in line {
-                let vec_idx = idx / 64;
-                mask_chunks[vec_idx] |= 1 << (idx % 64);
-            }
-            masks.push(mask_chunks);
-        }
-        WinningMasks::Large {
-            masks,
-            map_flat,
-            map_offsets,
-        }
-    }
-}
-
-// ... [Existing helper functions: generate_winning_lines_indices, get_canonical_directions, etc.] ...
-fn generate_winning_lines_indices(dimension: usize, side: usize) -> Vec<Vec<usize>> {
-    let mut lines = Vec::new();
-    let all_directions = get_canonical_directions(dimension);
-
-    for dir in all_directions {
-        let valid_starts = get_valid_starts(dimension, side, &dir);
-        for start in valid_starts {
-            let mut line = Vec::new();
-            let mut current = start.clone();
-            let mut valid = true;
-
-            for _ in 0..side {
-                if let Some(idx) = coords_to_index(&current, side) {
-                    line.push(idx);
-
-                    for (i, d) in dir.iter().enumerate() {
-                        let next_val = current[i] as isize + d;
-                        current[i] = next_val as usize;
-                    }
-                } else {
-                    valid = false;
-                    break;
-                }
-            }
-
-            if valid && line.len() == side {
-                lines.push(line);
-            }
-        }
-    }
-    lines
-}
-
-fn get_canonical_directions(dimension: usize) -> Vec<Vec<isize>> {
-    let mut dirs = Vec::new();
-    let num_dirs = 3_usize.pow(dimension as u32);
-    for i in 0..num_dirs {
-        let mut dir = Vec::new();
-        let mut temp = i;
-        let mut has_nonzero = false;
-        let mut first_nonzero_is_positive = false;
-        for _ in 0..dimension {
-            let digit = temp % 3;
-            temp /= 3;
-            let val = match digit {
-                0 => 0,
-                1 => 1,
-                2 => -1,
-                _ => unreachable!(),
-            };
-            dir.push(val);
-        }
-        for &val in &dir {
-            if val != 0 {
-                has_nonzero = true;
-                if val > 0 {
-                    first_nonzero_is_positive = true;
-                }
-                break;
-            }
-        }
-        if has_nonzero && first_nonzero_is_positive {
-            dirs.push(dir);
-        }
-    }
-    dirs
-}
-
-fn get_valid_starts(dimension: usize, side: usize, dir: &[isize]) -> Vec<Vec<usize>> {
-    let num_cells = side.pow(dimension as u32);
-    let mut starts = Vec::new();
-    for i in 0..num_cells {
-        let coords = index_to_coords(i, dimension, side);
-        let end_coords = coords.clone();
-        let mut possible = true;
-        for (c_idx, &d) in dir.iter().enumerate() {
-            let start_val = end_coords[c_idx] as isize;
-            let end_val = start_val + d * (side as isize - 1);
-            if end_val < 0 || end_val >= side as isize {
-                possible = false;
-                break;
-            }
-        }
-        if possible {
-            starts.push(coords);
-        }
-    }
-    starts
 }
 
 pub fn index_to_coords(index: usize, dimension: usize, side: usize) -> Vec<usize> {
@@ -527,79 +401,4 @@ pub fn coords_to_index(coords: &[usize], side: usize) -> Option<usize> {
         multiplier *= side;
     }
     Some(index)
-}
-
-// ... [Include existing intrinsic optimized check_win implementations here] ...
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[inline]
-unsafe fn check_win_u32_opt(board: u32, masks: &[u32]) -> bool {
-    let board_vec = unsafe { _mm256_set1_epi32(board as i32) };
-    let chunks = masks.chunks_exact(8);
-    let remainder = chunks.remainder();
-    for chunk in chunks {
-        unsafe {
-            let mask_vec = _mm256_loadu_si256(chunk.as_ptr() as *const __m256i);
-            let and_res = _mm256_and_si256(board_vec, mask_vec);
-            let cmp = _mm256_cmpeq_epi32(and_res, mask_vec);
-            if _mm256_movemask_epi8(cmp) != 0 {
-                return true;
-            }
-        }
-    }
-    for &m in remainder {
-        if (board & m) == m {
-            return true;
-        }
-    }
-    false
-}
-
-// Fallbacks for non-AVX... (omitted for brevity, keep existing implementations)
-#[cfg(not(target_feature = "avx2"))]
-#[inline]
-unsafe fn check_win_u32_opt(board: u32, masks: &[u32]) -> bool {
-    masks.iter().any(|&m| (board & m) == m)
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[inline]
-unsafe fn check_win_u128_opt(board: u128, masks: &[u128]) -> bool {
-    let board_low = board as u64;
-    let board_high = (board >> 64) as u64;
-    let board_vec = unsafe {
-        _mm256_set_epi64x(
-            board_high as i64,
-            board_low as i64,
-            board_high as i64,
-            board_low as i64,
-        )
-    };
-    let chunks = masks.chunks_exact(2);
-    let remainder = chunks.remainder();
-    for chunk in chunks {
-        unsafe {
-            let mask_vec = _mm256_loadu_si256(chunk.as_ptr() as *const __m256i);
-            let and_res = _mm256_and_si256(board_vec, mask_vec);
-            let cmp = _mm256_cmpeq_epi64(and_res, mask_vec);
-            let mask_bits = _mm256_movemask_epi8(cmp);
-            if (mask_bits & 0xFFFF) == 0xFFFF {
-                return true;
-            }
-            if (mask_bits as u32 & 0xFFFF0000) == 0xFFFF0000 {
-                return true;
-            }
-        }
-    }
-    for &m in remainder {
-        if (board & m) == m {
-            return true;
-        }
-    }
-    false
-}
-
-#[cfg(not(target_feature = "avx2"))]
-#[inline]
-unsafe fn check_win_u128_opt(board: u128, masks: &[u128]) -> bool {
-    masks.iter().any(|&m| (board & m) == m)
 }

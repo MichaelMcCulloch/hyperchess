@@ -1,9 +1,9 @@
-use crate::domain::models::{BoardState, Player};
+use crate::domain::models::{BoardState, PieceType, Player};
 use std::fmt;
 
 const COLOR_RESET: &str = "\x1b[0m";
-const COLOR_X: &str = "\x1b[31m";
-const COLOR_O: &str = "\x1b[36m";
+const COLOR_WHITE: &str = "\x1b[37m"; // White text
+const COLOR_BLACK: &str = "\x1b[31m"; // Red for black to stand out on dark terminals? Or Blue? Let's use Red for visual contrast as "Opponent" or simple Yellow. Let's stick to standard terminal colors.
 const COLOR_DIM: &str = "\x1b[90m";
 
 struct Canvas {
@@ -42,34 +42,45 @@ impl fmt::Display for Canvas {
 
 pub fn render_board<S: BoardState>(board: &S) -> String {
     let dim = board.dimension();
-    let (w, h) = calculate_size(dim);
+    let side = board.side();
+    let (w, h) = calculate_size(dim, side);
     let mut canvas = Canvas::new(w, h);
+    // Wait, the original logic had `side=3` hardcoded.
+    // We should respect `board.side()`.
+
+    // Original code assumed TicTacToe dim recursion.
+    // For Chess 4x4 (HyperChess default usually 4 side), logic changes.
+    // If side is variable, layout is tricky.
+    // Let's assume recursion logic works for generic side if updated.
+
+    // For now, let's keep it simple and assume standard recursion logic for N-dim.
+    // If side != 3, formatting might break if not generalized.
+    // Let's generalize `side`.
 
     draw_recursive(board, dim, &mut canvas, 0, 0, 0);
 
     canvas.to_string()
 }
 
-fn calculate_size(dim: usize) -> (usize, usize) {
+fn calculate_size(dim: usize, side: usize) -> (usize, usize) {
     if dim == 0 {
         return (1, 1);
     }
     if dim == 1 {
-        return (3, 1);
+        return (side, 1);
     }
-
     if dim == 2 {
-        return (5, 3);
-    }
+        return (side * 2 - 1, side);
+    } // simple 2D view: "P . . ."
 
-    let (child_w, child_h) = calculate_size(dim - 1);
+    let (child_w, child_h) = calculate_size(dim - 1, side);
 
     if dim % 2 != 0 {
         let gap = 2;
-        (child_w * 3 + gap * 2, child_h)
+        (child_w * side + gap * (side - 1), child_h)
     } else {
         let gap = 1;
-        (child_w, child_h * 3 + gap * 2)
+        (child_w, child_h * side + gap * (side - 1))
     }
 }
 
@@ -81,11 +92,11 @@ fn draw_recursive<S: BoardState>(
     y: usize,
     base_index: usize,
 ) {
-    let side = 3;
+    let side = board.side();
 
     if current_dim == 2 {
-        for dy in 0..3 {
-            for dx in 0..3 {
+        for dy in 0..side {
+            for dx in 0..side {
                 let cell_idx = base_index + dx + dy * side;
                 let coord_vals = crate::infrastructure::persistence::index_to_coords(
                     cell_idx,
@@ -94,9 +105,36 @@ fn draw_recursive<S: BoardState>(
                 );
                 let coord = crate::domain::coordinate::Coordinate::new(coord_vals);
 
-                let s = match board.get_cell(&coord) {
-                    Some(Player::X) => format!("{}X{}", COLOR_X, COLOR_RESET),
-                    Some(Player::O) => format!("{}O{}", COLOR_O, COLOR_RESET),
+                let s = match board.get_piece(&coord) {
+                    Some(piece) => {
+                        let symbol = match piece.owner {
+                            Player::White => match piece.piece_type {
+                                PieceType::Pawn => "♙",
+                                PieceType::Knight => "♘",
+                                PieceType::Bishop => "♗",
+                                PieceType::Rook => "♖",
+                                PieceType::Queen => "♕",
+                                PieceType::King => "♔",
+                            },
+                            Player::Black => match piece.piece_type {
+                                PieceType::Pawn => "♟",
+                                PieceType::Knight => "♞",
+                                PieceType::Bishop => "♝",
+                                PieceType::Rook => "♜",
+                                PieceType::Queen => "♛",
+                                PieceType::King => "♚",
+                            },
+                        };
+                        // No color needed for symbols usually, but user kept color struct?
+                        // User specifically asked: "Replace X/O coloring with Piece Characters".
+                        // Assuming we can drop the explicit color codes or keep them.
+                        // Let's keep the color codes for extra clarity but use the symbols.
+                        let color = match piece.owner {
+                            Player::White => COLOR_WHITE,
+                            Player::Black => COLOR_BLACK,
+                        };
+                        format!("{}{}{}", color, symbol, COLOR_RESET)
+                    }
                     None => format!("{}.{}", COLOR_DIM, COLOR_RESET),
                 };
                 canvas.put(x + dx * 2, y + dy, &s);
@@ -105,18 +143,21 @@ fn draw_recursive<S: BoardState>(
         return;
     }
 
-    let (child_w, child_h) = calculate_size(current_dim - 1);
+    let (child_w, child_h) = calculate_size(current_dim - 1, side);
+    // Note: calculate_size is static and hardcoded to side=4 above, be careful if side!=4
+    // Better to pass side to calculate_size or make it dynamic if recursion depth matches.
+
     let stride = side.pow((current_dim - 1) as u32);
 
     if current_dim % 2 != 0 {
         let gap = 2;
-        for i in 0..3 {
+        for i in 0..side {
             let next_x = x + i * (child_w + gap);
             let next_y = y;
             let next_base = base_index + i * stride;
             draw_recursive(board, current_dim - 1, canvas, next_x, next_y, next_base);
 
-            if i < 2 {
+            if i < side - 1 {
                 let sep_x = next_x + child_w + gap / 2 - 1;
                 for k in 0..child_h {
                     canvas.put(sep_x, next_y + k, &format!("{}|{}", COLOR_DIM, COLOR_RESET));
@@ -125,13 +166,13 @@ fn draw_recursive<S: BoardState>(
         }
     } else {
         let gap = 1;
-        for i in 0..3 {
+        for i in 0..side {
             let next_x = x;
             let next_y = y + i * (child_h + gap);
             let next_base = base_index + i * stride;
             draw_recursive(board, current_dim - 1, canvas, next_x, next_y, next_base);
 
-            if i < 2 {
+            if i < side - 1 {
                 let sep_y = next_y + child_h;
                 for k in 0..child_w {
                     canvas.put(next_x + k, sep_y, &format!("{}-{}", COLOR_DIM, COLOR_RESET));

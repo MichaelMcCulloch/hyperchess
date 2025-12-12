@@ -15,8 +15,9 @@ impl ConsoleInterface {
         loop {
             if let Some(result) = game_service.is_game_over() {
                 match result {
-                    GameResult::Win(p) => println!("Player {:?} Wins!", p),
-                    GameResult::Draw => println!("It's a Draw!"),
+                    GameResult::Checkmate(p) => println!("Checkmate! Player {:?} Wins!", p),
+                    GameResult::Stalemate => println!("Stalemate! It's a Draw!"),
+                    GameResult::Draw => println!("Draw!"),
                     _ => {}
                 }
                 break;
@@ -30,10 +31,9 @@ impl ConsoleInterface {
                 }
                 Err(e) => {
                     println!("Error: {}", e);
-                    // In a real game we might want to retry immediately if it was input error,
-                    // but here the strategy (HumanConsolePlayer) loops internally for valid input.
-                    // If we get an error here it's likely "No move available" or "Game Over".
                     if e == "No move available" {
+                        // Should be caught by is_game_over if checks are correct,
+                        // but if perform_next_move fails explicitly:
                         break;
                     }
                 }

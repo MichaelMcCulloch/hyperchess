@@ -10,9 +10,11 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     let mut dimension = 3;
-    let mut player_x_type = "h";
-    let mut player_o_type = "c";
-    let mut depth = usize::MAX;
+    let side = 8; // Default side 8 for HyperChess
+    let mut player_white_type = "h";
+    let mut player_black_type = "c";
+    let mut depth = 4;
+    let time_limit = 1000; // ms
 
     if args.len() > 1 {
         if let Ok(d) = args[1].parse::<usize>() {
@@ -22,8 +24,8 @@ fn main() {
     if args.len() > 2 {
         let mode = args[2].as_str();
         if mode.len() >= 2 {
-            player_x_type = &mode[0..1];
-            player_o_type = &mode[1..2];
+            player_white_type = &mode[0..1];
+            player_black_type = &mode[1..2];
         }
     }
     if args.len() > 3 {
@@ -32,24 +34,24 @@ fn main() {
         }
     }
 
-    let _board_state = BitBoardState::new(dimension);
+    // Support custom side via args? For now default 4.
 
-    let player_x: Box<dyn PlayerStrategy<BitBoardState>> = match player_x_type {
+    let _board_state = BitBoardState::new(dimension, side);
+
+    let player_white: Box<dyn PlayerStrategy<BitBoardState>> = match player_white_type {
         "h" => Box::new(HumanConsolePlayer::new()),
-        "c" => Box::new(MinimaxBot::new(depth)),
+        "c" => Box::new(MinimaxBot::new(depth, time_limit, dimension, side)),
         _ => Box::new(HumanConsolePlayer::new()),
     };
 
-    let player_o: Box<dyn PlayerStrategy<BitBoardState>> = match player_o_type {
+    let player_black: Box<dyn PlayerStrategy<BitBoardState>> = match player_black_type {
         "h" => Box::new(HumanConsolePlayer::new()),
-        "c" => Box::new(MinimaxBot::new(depth)),
-        _ => Box::new(MinimaxBot::new(depth)),
+        "c" => Box::new(MinimaxBot::new(depth, time_limit, dimension, side)),
+        _ => Box::new(MinimaxBot::new(depth, time_limit, dimension, side)),
     };
 
-    // Board generic param inference?
-    // We need to explicitly type the Board or let it infer from GameService.
-    let board = Board::<BitBoardState>::new(dimension);
+    let board = Board::<BitBoardState>::new(dimension, side);
 
-    let game = GameService::new(board, player_x, player_o);
+    let game = GameService::new(board, player_white, player_black);
     hyperchess::interface::console::ConsoleInterface::run(game);
 }

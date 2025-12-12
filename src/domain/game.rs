@@ -1,5 +1,4 @@
-use crate::domain::coordinate::Coordinate;
-use crate::domain::models::{Board, BoardState, GameResult, Player};
+use crate::domain::models::{Board, BoardState, GameResult, Move, Player};
 
 #[derive(Debug)]
 pub enum GameError {
@@ -12,37 +11,36 @@ pub struct Game<S: BoardState> {
     board: Board<S>,
     turn: Player,
     status: GameResult,
-    move_history: Vec<(Player, Coordinate)>,
+    move_history: Vec<(Player, Move)>,
 }
 
 impl<S: BoardState> Game<S> {
     pub fn new(board: Board<S>) -> Self {
         Self {
             board,
-            turn: Player::X,
+            turn: Player::White,
             status: GameResult::InProgress,
             move_history: Vec::new(),
         }
     }
 
     pub fn start(&mut self) {
-        // Any initialization logic can go here
         self.status = GameResult::InProgress;
-        self.turn = Player::X;
+        self.turn = Player::White;
     }
 
-    pub fn play_turn(&mut self, coord: Coordinate) -> Result<GameResult, GameError> {
+    pub fn play_turn(&mut self, mv: Move) -> Result<GameResult, GameError> {
         if self.status != GameResult::InProgress {
             return Err(GameError::InvalidMove("Game is already over".to_string()));
         }
 
         self.board
-            .make_move(coord.clone(), self.turn)
+            .apply_move(&mv) // Updated for Board::apply_move taking &Move
             .map_err(GameError::InvalidMove)?;
 
-        self.move_history.push((self.turn, coord));
+        self.move_history.push((self.turn, mv));
 
-        let result = self.board.check_status();
+        let result = self.board.check_status(self.turn); // Pass turn
         self.status = result;
 
         if result == GameResult::InProgress {
@@ -64,7 +62,6 @@ impl<S: BoardState> Game<S> {
         &self.board
     }
 
-    // Expose inner state for read-only if needed, or projection
     pub fn state(&self) -> &S {
         self.board.state()
     }

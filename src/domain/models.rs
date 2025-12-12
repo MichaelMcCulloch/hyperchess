@@ -1,57 +1,87 @@
+use crate::domain::coordinate::Coordinate;
 use std::fmt::Debug;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Player {
-    X,
-    O,
+    White,
+    Black,
 }
 
 impl Player {
     pub fn opponent(&self) -> Self {
         match self {
-            Player::X => Player::O,
-            Player::O => Player::X,
+            Player::White => Player::Black,
+            Player::Black => Player::White,
         }
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PieceType {
+    Pawn,
+    Rook,
+    Knight,
+    Bishop,
+    Queen,
+    King,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Piece {
+    pub piece_type: PieceType,
+    pub owner: Player,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Move {
+    pub from: Coordinate,
+    pub to: Coordinate,
+    pub promotion: Option<PieceType>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GameResult {
-    Win(Player),
+    Checkmate(Player),
+    Stalemate,
     Draw,
     InProgress,
 }
 
-use crate::domain::coordinate::Coordinate;
-
 /// Trait defining the storage and core mechanics of the board backend.
-/// This allows us to strictly separate the "BitBoard" optimization (Infrastructure)
-/// from the "Board" concept (Domain).
 pub trait BoardState: Debug + Clone {
-    fn new(dimension: usize) -> Self
+    fn new(dimension: usize, side: usize) -> Self
     where
         Self: Sized;
     fn dimension(&self) -> usize;
     fn side(&self) -> usize;
     fn total_cells(&self) -> usize;
-    fn get_cell(&self, coord: &Coordinate) -> Option<Player>;
-    fn set_cell(&mut self, coord: &Coordinate, player: Player) -> Result<(), String>;
+
+    // Core Piece Access
+    fn get_piece(&self, coord: &Coordinate) -> Option<Piece>;
+
+    // Core Movement Logic
+    fn apply_move(&mut self, mv: &Move) -> Result<(), String>;
+
+    // State Queries
+    fn get_king_coordinate(&self, player: Player) -> Option<Coordinate>;
+
+    fn set_piece(&mut self, coord: &Coordinate, piece: Piece) -> Result<(), String>;
     fn clear_cell(&mut self, coord: &Coordinate);
-    fn check_win(&self) -> Option<Player>;
-    fn is_full(&self) -> bool;
+
+    // Game Status
+    fn check_status(&self, player_to_move: Player) -> GameResult;
 }
 
 /// The Domain Entity representing the Game Board.
-/// It wraps a BoardState implementation.
 #[derive(Clone, Debug)]
 pub struct Board<S: BoardState> {
     state: S,
 }
 
 impl<S: BoardState> Board<S> {
-    pub fn new(dimension: usize) -> Self {
+    pub fn new(dimension: usize, side: usize) -> Self {
         Self {
-            state: S::new(dimension),
+            state: S::new(dimension, side),
         }
     }
 
@@ -59,25 +89,31 @@ impl<S: BoardState> Board<S> {
         self.state.dimension()
     }
 
-    pub fn make_move(&mut self, coord: Coordinate, player: Player) -> Result<(), String> {
-        self.state.set_cell(&coord, player)
+    pub fn side(&self) -> usize {
+        self.state.side()
     }
 
-    pub fn get_cell(&self, coord: &Coordinate) -> Option<Player> {
-        self.state.get_cell(coord)
+    pub fn total_cells(&self) -> usize {
+        self.state.total_cells()
     }
 
-    pub fn check_status(&self) -> GameResult {
-        if let Some(winner) = self.state.check_win() {
-            return GameResult::Win(winner);
-        }
-        if self.state.is_full() {
-            return GameResult::Draw;
-        }
-        GameResult::InProgress
+    pub fn apply_move(&mut self, mv: &Move) -> Result<(), String> {
+        self.state.apply_move(mv)
+    }
+
+    pub fn get_piece(&self, coord: &Coordinate) -> Option<Piece> {
+        self.state.get_piece(coord)
     }
 
     pub fn state(&self) -> &S {
         &self.state
+    }
+
+    pub fn get_king_coordinate(&self, player: Player) -> Option<Coordinate> {
+        self.state.get_king_coordinate(player)
+    }
+
+    pub fn check_status(&self, player: Player) -> GameResult {
+        self.state.check_status(player)
     }
 }
