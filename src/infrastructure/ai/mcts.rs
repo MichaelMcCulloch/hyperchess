@@ -60,10 +60,26 @@ impl MCTS {
         }
 
         let num_threads = rayon::current_num_threads();
-        let chunk_size = iterations / num_threads;
-        let remainder = iterations % num_threads;
+        // User requested strategy: "chunk work, maybe 5 iterations a thread".
+        // We ensure at least 5 iterations per task to amortize the setup cost (Board clone).
+        const MIN_ITERATIONS_PER_TASK: usize = 5;
 
-        let results: Vec<(u32, f64)> = (0..num_threads)
+        let num_tasks = (iterations / MIN_ITERATIONS_PER_TASK).clamp(1, num_threads);
+
+        if num_tasks <= 1 {
+            self.execute_iterations(root_state, iterations);
+            let root = &self.nodes[0];
+            return if root.visits == 0 {
+                0.5
+            } else {
+                root.score / root.visits as f64
+            };
+        }
+
+        let chunk_size = iterations / num_tasks;
+        let remainder = iterations % num_tasks;
+
+        let results: Vec<(u32, f64)> = (0..num_tasks)
             .into_par_iter()
             .map(|i| {
                 let count = if i < remainder {
