@@ -1,6 +1,6 @@
 use crate::domain::board::{Board, UnmakeInfo};
 use crate::domain::models::{Move, Player};
-use crate::domain::rules::Rules;
+use crate::domain::rules::{MoveList, Rules};
 use crate::infrastructure::ai::transposition::{Flag, LockFreeTT};
 use rand::seq::SliceRandom;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ struct Node {
     children: Vec<usize>,
     visits: u32,
     score: f64,
-    unexpanded_moves: Vec<Move>,
+    unexpanded_moves: MoveList,
     is_terminal: bool,
     move_to_node: Option<Move>,
     player_to_move: Player,

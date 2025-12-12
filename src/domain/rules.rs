@@ -3,11 +3,13 @@ use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{Move, PieceType, Player};
 use smallvec::SmallVec;
 
+pub type MoveList = SmallVec<[Move; 64]>;
+
 pub struct Rules;
 
 impl Rules {
-    pub fn generate_legal_moves(board: &mut Board, player: Player) -> Vec<Move> {
-        let mut moves = Vec::new();
+    pub fn generate_legal_moves(board: &mut Board, player: Player) -> MoveList {
+        let mut moves = MoveList::new();
         let pseudo_legal = Self::generate_pseudo_legal_moves(board, player);
 
         for mv in pseudo_legal {
@@ -146,8 +148,8 @@ impl Rules {
         false
     }
 
-    fn generate_pseudo_legal_moves(board: &Board, player: Player) -> Vec<Move> {
-        let mut moves = Vec::new();
+    fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
+        let mut moves = MoveList::new();
         let occupancy = match player {
             Player::White => &board.white_occupancy,
             Player::Black => &board.black_occupancy,
@@ -240,7 +242,7 @@ impl Rules {
         in_check
     }
 
-    fn generate_castling_moves(board: &Board, player: Player, moves: &mut Vec<Move>) {
+    fn generate_castling_moves(board: &Board, player: Player, moves: &mut MoveList) {
         if board.side != 8 {
             return;
         }
@@ -489,7 +491,7 @@ impl Rules {
         origin: &Coordinate,
         player: Player,
         offsets: &[Vec<isize>],
-        moves: &mut Vec<Move>,
+        moves: &mut MoveList,
     ) {
         let same_occupancy = match player {
             Player::White => &board.white_occupancy,
@@ -516,7 +518,7 @@ impl Rules {
         origin: &Coordinate,
         player: Player,
         directions: &[Vec<isize>],
-        moves: &mut Vec<Move>,
+        moves: &mut MoveList,
     ) {
         let own_occupancy = match player {
             Player::White => &board.white_occupancy,
@@ -561,7 +563,7 @@ impl Rules {
         board: &Board,
         origin: &Coordinate,
         player: Player,
-        moves: &mut Vec<Move>,
+        moves: &mut MoveList,
     ) {
         let all_occupancy = board
             .white_occupancy
@@ -647,7 +649,7 @@ impl Rules {
         to_vals: &[usize],
         side: usize,
         player: Player,
-        moves: &mut Vec<Move>,
+        moves: &mut MoveList,
     ) {
         let is_promotion = (0..to_vals.len()).all(|i| {
             if i == 1 {
