@@ -33,7 +33,7 @@ pub struct Board {
     pub zobrist: Arc<ZobristKeys>,
     pub hash: u64,
     pub history: Vec<u64>,
-    pub en_passant_target: Option<usize>,
+    pub en_passant_target: Option<(usize, usize)>, // (target_index, victim_index)
     pub castling_rights: u8,
 }
 
@@ -279,49 +279,23 @@ impl Board {
     pub fn apply_move(&mut self, mv: &Move) -> Result<(), String> {
         let from_idx = self
             .coords_to_index(&mv.from.values)
-            .ok_or("Invalid From coord")?;
+            .ok_or("Invalid from".to_string())?;
         let to_idx = self
             .coords_to_index(&mv.to.values)
-            .ok_or("Invalid To coord")?;
+            .ok_or("Invalid to".to_string())?;
 
-        let moving_piece = self.get_piece(&mv.from).ok_or("No piece at origin")?;
+        let moving_piece = self
+            .get_piece(&mv.from)
+            .ok_or("No piece at from".to_string())?;
 
         self.history.push(self.hash);
 
-        // --- En Passant Logic ---
         // 1. Check if this is an EP capture
         if moving_piece.piece_type == PieceType::Pawn {
-            // If moving to EP target ..
-            if let Some(ep_idx) = self.en_passant_target {
-                if to_idx == ep_idx {
-                    // Capture the pawn "behind" the target.
-                    // The target is "behind" the pawn relative to its movement?
-                    // No, "En Passant Target" is the square skipped over by the enemy pawn.
-                    // The enemy pawn is actually at `to - forward`.
-                    // Wait, standard convention: EP target is the square BEHIND the pawn that just moved.
-                    // So if White Pawn moves A2 -> A4, EP target is A3.
-                    // Black Pawn captures on A3. Black Pawn ends up on A3.
-                    // The captured pawn is on A4.
-                    // Relation: Captured Pawn is at `to - forward_step_of_capturer`?
-                    // No. `to` is A3. Capturer (Black) moves B4 -> A3 (Forward is -1).
-                    // Captured White Pawn is at A4. A4 = A3 - (-1) = A3 + 1.
-                    // Correct. Captured Pawn is at `to - (forward_dir)` of the moving pawn.
-
-                    let capture_dir = match moving_piece.owner {
-                        Player::White => 1,
-                        Player::Black => -1,
-                    };
-                    // We need to calculate the index of the captured pawn.
-                    // `to` coords - (dir in dim 0).
-                    let mut captured_coords = mv.to.values.clone();
-                    // Note: stored dim is variable but standard chess is dim 0 for ranks.
-                    let rank = captured_coords[0] as isize - capture_dir;
-                    if rank >= 0 && rank < self.side as isize {
-                        captured_coords[0] = rank as usize;
-                        if let Some(cap_idx) = self.coords_to_index(&captured_coords) {
-                            self.remove_piece_at_index(cap_idx);
-                        }
-                    }
+            if let Some((target, victim)) = self.en_passant_target {
+                if to_idx == target {
+                    // EP Capture: Remove the victim pawn
+                    self.remove_piece_at_index(victim);
                 }
             }
         }
@@ -330,88 +304,130 @@ impl Board {
         self.en_passant_target = None;
 
         // 3. Set EP target if double push
+        // Note: We need to detect "Double Push" on ANY axis for Phase 2.
+        // For now, assuming standard rank-based double push, but keeping generic distance check.
         if moving_piece.piece_type == PieceType::Pawn {
-            let dist = (mv.from.values[0] as isize - mv.to.values[0] as isize).abs();
-            if dist == 2 {
-                // Set target to the square skipped.
-                let dir = if mv.to.values[0] > mv.from.values[0] {
-                    1
-                } else {
-                    -1
-                };
-                let mut target_vals = mv.from.values.clone();
-                target_vals[0] = (target_vals[0] as isize + dir) as usize;
-                self.en_passant_target = self.coords_to_index(&target_vals);
+            // Check distance on all axes. If exactly ONE axis has distance 2, and others 0.
+            let mut diffs = Vec::new();
+            for i in 0..self.dimension {
+                let d = (mv.from.values[i] as isize - mv.to.values[i] as isize).abs();
+                diffs.push(d);
+            }
+
+            // A double push must be distance 2 on movement axis and 0 on others?
+            // Yes, strict double push.
+            // Identify the movement axis.
+            let double_step_axis = diffs.iter().position(|&d| d == 2);
+            let any_other_movement = diffs
+                .iter()
+                .enumerate()
+                .any(|(i, &d)| i != double_step_axis.unwrap_or(999) && d != 0);
+
+            if let Some(axis) = double_step_axis {
+                if !any_other_movement {
+                    // It is a double push!
+                    // Target is the skipped square.
+                    // Victim is `to_idx` (the pawn that moved).
+                    let dir = if mv.to.values[axis] > mv.from.values[axis] {
+                        1
+                    } else {
+                        -1
+                    };
+                    let mut target_vals = mv.from.values.clone();
+                    target_vals[axis] = (target_vals[axis] as isize + dir) as usize;
+                    if let Some(target_idx) = self.coords_to_index(&target_vals) {
+                        self.en_passant_target = Some((target_idx, to_idx));
+                    }
+                }
             }
         }
 
         // --- Castling Logic ---
         let mut castling_rook_move = None;
 
-        // Update Rights
-        // If King moves, lose all rights for that player
+        // Update Rights if King Moves
         if moving_piece.piece_type == PieceType::King {
             match moving_piece.owner {
-                Player::White => self.castling_rights &= !0x3, // Clear 0, 1 (White Kingside/Queenside)
-                Player::Black => self.castling_rights &= !0xC, // Clear 2, 3 (Black Kingside/Queenside)
+                Player::White => self.castling_rights &= !0x3,
+                Player::Black => self.castling_rights &= !0xC,
             }
         }
 
-        // If Rook moves or is captured, logic is trickier without tracking which rook is which.
-        // Simplified: Check typical rook starting squares.
-        // White KS Rook: (0, 7) -> 0x1
-        // White QS Rook: (0, 0) -> 0x2
-        // Black KS Rook: (7, 7) -> 0x4
-        // Black QS Rook: (7, 0) -> 0x8
-        // Note: Assuming standard board setup
-        if self.dimension == 2 && self.side == 8 {
-            // Check From (Rook move) and To (Rook capture)
+        // Update Rights if Rook Moves/Captured (Side=8 enforced)
+        if self.side == 8 {
+            // White Rooks: A1 (0,0), H1 (0,7). Indices depend on dimension.
+            // We need to construct coords to check indices.
+            // But we can check "corner" properties if standard setup.
+            // Let's safely calculate rook indices.
+
+            // Base coords: Rank=0 (White) or 7 (Black).
+            // File=0 or 7.
+            // Other Axes: 0 (White) or 7 (Black).
+            let w_rank = 0;
+            let b_rank = 7;
+
+            let mut w_qs_c = vec![w_rank; self.dimension];
+            w_qs_c[1] = 0;
+            let mut w_ks_c = vec![w_rank; self.dimension];
+            w_ks_c[1] = 7;
+
+            let mut b_qs_c = vec![b_rank; self.dimension];
+            b_qs_c[1] = 0;
+            let mut b_ks_c = vec![b_rank; self.dimension];
+            b_ks_c[1] = 7;
+
+            let w_qs = self.coords_to_index(&w_qs_c);
+            let w_ks = self.coords_to_index(&w_ks_c);
+            let b_qs = self.coords_to_index(&b_qs_c);
+            let b_ks = self.coords_to_index(&b_ks_c);
+
             for idx in [from_idx, to_idx] {
-                match idx {
-                    7 => self.castling_rights &= !0x1,  // White KS Rook (H1)
-                    0 => self.castling_rights &= !0x2,  // White QS Rook (A1)
-                    63 => self.castling_rights &= !0x4, // Black KS Rook (H8)
-                    56 => self.castling_rights &= !0x8, // Black QS Rook (A8) - Wait, A8 is sq 56?
-                    // 0-7 is rank 0. 56-63 is rank 7.
-                    // A1=0, H1=7. A8=56, H8=63. Correct.
-                    _ => {}
+                if Some(idx) == w_qs {
+                    self.castling_rights &= !0x2;
+                } else if Some(idx) == w_ks {
+                    self.castling_rights &= !0x1;
+                } else if Some(idx) == b_qs {
+                    self.castling_rights &= !0x8;
+                } else if Some(idx) == b_ks {
+                    self.castling_rights &= !0x4;
                 }
             }
         }
 
-        // Check if this IS a castling move (King moves 2 squares)
+        // Check Execution (King moves 2 sq on Axis 1)
         if moving_piece.piece_type == PieceType::King {
-            let dist = (mv.from.values[1] as isize - mv.to.values[1] as isize).abs();
-            if dist == 2 {
-                // Identify Rook and Move it.
-                // Kingside: y increases. Queenside: y decreases.
+            let dist_file = (mv.from.values[1] as isize - mv.to.values[1] as isize).abs();
+
+            let mut other_axes_moved = false;
+            for i in 0..self.dimension {
+                if i != 1 && mv.from.values[i] != mv.to.values[i] {
+                    other_axes_moved = true;
+                    break;
+                }
+            }
+
+            if dist_file == 2 && !other_axes_moved {
+                // Must be castling.
+                // Kingside: 4 -> 6. Queenside: 4 -> 2.
                 let is_kingside = mv.to.values[1] > mv.from.values[1];
-                let _rank = mv.from.values[0]; // 0 or 7
-                let (rook_from_y, rook_to_y) = if is_kingside {
-                    (self.side - 1, mv.to.values[1] - 1) // H -> F
-                } else {
-                    (0, mv.to.values[1] + 1) // A -> D
-                };
+                let rook_file_from = if is_kingside { 7 } else { 0 };
+                let rook_file_to = if is_kingside { 5 } else { 3 };
 
                 let mut rook_from_coords = mv.from.values.clone();
-                rook_from_coords[1] = rook_from_y;
-                let rook_from_idx = self
-                    .coords_to_index(&rook_from_coords)
-                    .ok_or("Invalid rook from")?;
+                rook_from_coords[1] = rook_file_from;
 
                 let mut rook_to_coords = mv.from.values.clone();
-                rook_to_coords[1] = rook_to_y;
-                let rook_to_idx = self
-                    .coords_to_index(&rook_to_coords)
-                    .ok_or("Invalid rook to")?;
+                rook_to_coords[1] = rook_file_to;
 
-                // Remove Rook from old pos, Place in new.
-                // Need to know WHO owns it (same as king)
-                let rook_piece = Piece {
-                    piece_type: PieceType::Rook,
-                    owner: moving_piece.owner,
-                };
-                castling_rook_move = Some((rook_from_idx, rook_to_idx, rook_piece));
+                let r_from_idx = self.coords_to_index(&rook_from_coords);
+                let r_to_idx = self.coords_to_index(&rook_to_coords);
+                if let (Some(r_from), Some(r_to)) = (r_from_idx, r_to_idx) {
+                    let rook_piece = Piece {
+                        piece_type: PieceType::Rook,
+                        owner: moving_piece.owner,
+                    };
+                    castling_rook_move = Some((r_from, r_to, rook_piece));
+                }
             }
         }
 

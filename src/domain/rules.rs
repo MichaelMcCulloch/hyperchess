@@ -291,8 +291,8 @@ impl Rules {
     }
 
     fn generate_castling_moves(board: &Board, player: Player, moves: &mut Vec<Move>) {
-        if board.dimension != 2 || board.side != 8 {
-            return;
+        if board.side != 8 {
+            return; // Standard castling requires 8x8 geometry (File 0..7)
         }
 
         let (rights_mask, rank) = match player {
@@ -305,80 +305,109 @@ impl Rules {
             return;
         }
 
-        if Self::is_square_attacked(board, &Coordinate::new(vec![rank, 4]), player.opponent()) {
+        // Determine King Position (Fixed at File 4)
+        let king_file = 4;
+        let mut king_coords = vec![rank; board.dimension];
+        king_coords[1] = king_file;
+        let king_coord = Coordinate::new(king_coords.clone());
+
+        if Self::is_square_attacked(board, &king_coord, player.opponent()) {
             return; // King in check
         }
 
-        // Kingside
+        let all_occupancy = board
+            .white_occupancy
+            .clone()
+            .or_with(&board.black_occupancy);
+
+        // Kingside (File 5, 6 empty; To=6; Rook from 7 to 5)
         let ks_mask = match player {
             Player::White => 0x1,
             Player::Black => 0x4,
         };
         if (my_rights & ks_mask) != 0 {
-            let f_sq = vec![rank, 5];
-            let g_sq = vec![rank, 6];
-            let f_idx = board.coords_to_index(&f_sq).unwrap();
-            let g_idx = board.coords_to_index(&g_sq).unwrap();
+            let f_file = 5;
+            let g_file = 6;
 
-            let all_occupancy = board
-                .white_occupancy
-                .clone()
-                .or_with(&board.black_occupancy);
-            let f_occ = all_occupancy.get_bit(f_idx);
-            let g_occ = all_occupancy.get_bit(g_idx);
+            // Check Empty Path (5, 6)
+            let mut f_coords = king_coords.clone();
+            f_coords[1] = f_file;
+            let mut g_coords = king_coords.clone();
+            g_coords[1] = g_file;
 
-            if !f_occ && !g_occ {
-                if !Self::is_square_attacked(
-                    board,
-                    &Coordinate::new(f_sq.clone()),
-                    player.opponent(),
-                ) && !Self::is_square_attacked(
-                    board,
-                    &Coordinate::new(g_sq.clone()),
-                    player.opponent(),
-                ) {
+            let f_idx = board.coords_to_index(&f_coords);
+            let g_idx = board.coords_to_index(&g_coords);
+
+            let mut blocked = true;
+            if let (Some(fi), Some(gi)) = (f_idx, g_idx) {
+                if !all_occupancy.get_bit(fi) && !all_occupancy.get_bit(gi) {
+                    blocked = false;
+                }
+            }
+
+            if !blocked {
+                // Check Safe Passage (5, 6)
+                if !Self::is_square_attacked(board, &Coordinate::new(f_coords), player.opponent())
+                    && !Self::is_square_attacked(
+                        board,
+                        &Coordinate::new(g_coords.clone()),
+                        player.opponent(),
+                    )
+                {
                     moves.push(Move {
-                        from: Coordinate::new(vec![rank, 4]),
-                        to: Coordinate::new(g_sq),
+                        from: king_coord.clone(),
+                        to: Coordinate::new(g_coords),
                         promotion: None,
                     });
                 }
             }
         }
 
-        // Queenside
+        // Queenside (File 1, 2, 3 empty; To=2; Rook from 0 to 3)
         let qs_mask = match player {
             Player::White => 0x2,
             Player::Black => 0x8,
         };
         if (my_rights & qs_mask) != 0 {
-            let b_sq = vec![rank, 1];
-            let c_sq = vec![rank, 2];
-            let d_sq = vec![rank, 3];
-            let b_idx = board.coords_to_index(&b_sq).unwrap();
-            let c_idx = board.coords_to_index(&c_sq).unwrap();
-            let d_idx = board.coords_to_index(&d_sq).unwrap();
+            let b_file = 1;
+            let c_file = 2;
+            let d_file = 3;
 
-            let all_occupancy = board
-                .white_occupancy
-                .clone()
-                .or_with(&board.black_occupancy);
-            if !all_occupancy.get_bit(b_idx)
-                && !all_occupancy.get_bit(c_idx)
-                && !all_occupancy.get_bit(d_idx)
-            {
-                if !Self::is_square_attacked(
-                    board,
-                    &Coordinate::new(d_sq.clone()),
-                    player.opponent(),
-                ) && !Self::is_square_attacked(
-                    board,
-                    &Coordinate::new(c_sq.clone()),
-                    player.opponent(),
-                ) {
+            let mut b_coords = king_coords.clone();
+            b_coords[1] = b_file;
+            let mut c_coords = king_coords.clone();
+            c_coords[1] = c_file;
+            let mut d_coords = king_coords.clone();
+            d_coords[1] = d_file;
+
+            let b_idx = board.coords_to_index(&b_coords);
+            let c_idx = board.coords_to_index(&c_coords);
+            let d_idx = board.coords_to_index(&d_coords);
+
+            let mut blocked = true;
+            if let (Some(bi), Some(ci), Some(di)) = (b_idx, c_idx, d_idx) {
+                if !all_occupancy.get_bit(bi)
+                    && !all_occupancy.get_bit(ci)
+                    && !all_occupancy.get_bit(di)
+                {
+                    blocked = false;
+                }
+            }
+
+            if !blocked {
+                // Check Safe Passage (3 (through) and 2 (dest)). Note: B(1) not traversed by King.
+                // King moves 4->3->2.
+                // Square 3 (D) must be safe. Square 2 (C) must be safe.
+                if !Self::is_square_attacked(board, &Coordinate::new(d_coords), player.opponent())
+                    && !Self::is_square_attacked(
+                        board,
+                        &Coordinate::new(c_coords.clone()),
+                        player.opponent(),
+                    )
+                {
                     moves.push(Move {
-                        from: Coordinate::new(vec![rank, 4]),
-                        to: Coordinate::new(c_sq),
+                        from: king_coord.clone(),
+                        to: Coordinate::new(c_coords),
                         promotion: None,
                     });
                 }
@@ -607,113 +636,103 @@ impl Rules {
         player: Player,
         moves: &mut Vec<Move>,
     ) {
-        let forward_dir = match player {
-            Player::White => 1,
-            Player::Black => -1,
-        };
-
-        let enemy_occupancy = match player.opponent() {
-            Player::White => &board.white_occupancy,
-            Player::Black => &board.black_occupancy,
-        };
-        // Just checking occupancy generically
         let all_occupancy = board
             .white_occupancy
             .clone()
             .or_with(&board.black_occupancy);
 
-        // 1. One step forward
-        let mut forward_step = vec![0; board.dimension];
-        forward_step[0] = forward_dir;
+        let enemy_occupancy = match player.opponent() {
+            Player::White => &board.white_occupancy,
+            Player::Black => &board.black_occupancy,
+        };
 
-        if let Some(target) = Self::apply_offset(&origin.values, &forward_step, board.side) {
-            if let Some(idx) = board.coords_to_index(&target) {
-                if !all_occupancy.get_bit(idx) {
-                    // Must be empty
-                    Self::add_pawn_move(
-                        origin,
-                        &target,
-                        board.dimension,
-                        board.side,
-                        player,
-                        moves,
-                    );
+        // Super Pawn: Can move along ANY axis
+        for movement_axis in 0..board.dimension {
+            let forward_dir = match player {
+                Player::White => 1,
+                Player::Black => -1,
+            };
 
-                    // 2. Double step?
-                    let is_start_rank = match player {
-                        Player::White => origin.values[0] == 1,
-                        Player::Black => origin.values[0] == board.side - 2,
-                    };
+            // 1. One step forward along movement_axis
+            let mut forward_step = vec![0; board.dimension];
+            forward_step[movement_axis] = forward_dir;
 
-                    if is_start_rank {
-                        if let Some(target2) =
-                            Self::apply_offset(&target, &forward_step, board.side)
-                        {
-                            if let Some(idx2) = board.coords_to_index(&target2) {
-                                if !all_occupancy.get_bit(idx2) {
-                                    Self::add_pawn_move(
-                                        origin,
-                                        &target2,
-                                        board.dimension,
-                                        board.side,
-                                        player,
-                                        moves,
-                                    );
+            if let Some(target) = Self::apply_offset(&origin.values, &forward_step, board.side) {
+                if let Some(idx) = board.coords_to_index(&target) {
+                    if !all_occupancy.get_bit(idx) {
+                        // Empty -> Legal PUSH
+                        Self::add_pawn_move(
+                            origin,
+                            &target,
+                            board.side,
+                            player,
+                            movement_axis, // Check promotion on this axis
+                            moves,
+                        );
+
+                        // 2. Double step?
+                        let is_start_rank = match player {
+                            Player::White => origin.values[movement_axis] == 1,
+                            Player::Black => origin.values[movement_axis] == board.side - 2,
+                        };
+
+                        if is_start_rank {
+                            if let Some(target2) =
+                                Self::apply_offset(&target, &forward_step, board.side)
+                            {
+                                if let Some(idx2) = board.coords_to_index(&target2) {
+                                    if !all_occupancy.get_bit(idx2) {
+                                        Self::add_pawn_move(
+                                            origin,
+                                            &target2,
+                                            board.side,
+                                            player,
+                                            movement_axis,
+                                            moves,
+                                        );
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
 
-        // 3. Captures
-        // +/- 1 on any other axis combined with forward step
-        for i in 1..board.dimension {
-            for s in [-1, 1] {
-                let mut cap_step = forward_step.clone();
-                cap_step[i] = s;
-                if let Some(target) = Self::apply_offset(&origin.values, &cap_step, board.side) {
-                    if let Some(idx) = board.coords_to_index(&target) {
-                        if enemy_occupancy.get_bit(idx) {
-                            Self::add_pawn_move(
-                                origin,
-                                &target,
-                                board.dimension,
-                                board.side,
-                                player,
-                                moves,
-                            );
-                        }
-                    }
+            // 3. Captures (Diagonal on any other axis)
+            // Move forward on movement_axis, AND +/- 1 on capture_axis
+            for capture_axis in 0..board.dimension {
+                if capture_axis == movement_axis {
+                    continue;
                 }
-            }
-        }
+                for s in [-1, 1] {
+                    let mut cap_step = forward_step.clone();
+                    cap_step[capture_axis] = s;
 
-        // 4. En Passant
-        if let Some(ep_idx) = board.en_passant_target {
-            let ep_coords = board.index_to_coords(ep_idx);
-            let diff_rank = ep_coords[0] as isize - origin.values[0] as isize;
-
-            // Should be exactly forward_dir
-            if diff_rank == forward_dir {
-                // Check if adjacent file (dist 1 in other dimensions)
-                for i in 1..board.dimension {
-                    let abs_diff = (ep_coords[i] as isize - origin.values[i] as isize).abs();
-                    if abs_diff == 1 {
-                        let mut is_valid_relation = true;
-                        for j in 1..board.dimension {
-                            if i != j && origin.values[j] != ep_coords[j] {
-                                is_valid_relation = false;
+                    if let Some(target) = Self::apply_offset(&origin.values, &cap_step, board.side)
+                    {
+                        if let Some(idx) = board.coords_to_index(&target) {
+                            // Regular Capture
+                            if enemy_occupancy.get_bit(idx) {
+                                Self::add_pawn_move(
+                                    origin,
+                                    &target,
+                                    board.side,
+                                    player,
+                                    movement_axis,
+                                    moves,
+                                );
                             }
-                        }
-
-                        if is_valid_relation {
-                            moves.push(Move {
-                                from: origin.clone(),
-                                to: Coordinate::new(ep_coords.clone()),
-                                promotion: None,
-                            });
+                            // En Passant Capture
+                            else if let Some((ep_target, _)) = board.en_passant_target {
+                                if idx == ep_target {
+                                    // This is a valid EP capture move
+                                    moves.push(Move {
+                                        from: origin.clone(),
+                                        to: Coordinate::new(target),
+                                        promotion: None,
+                                    });
+                                }
+                            }
                         }
                     }
                 }
@@ -724,14 +743,14 @@ impl Rules {
     fn add_pawn_move(
         from: &Coordinate,
         to_vals: &[usize],
-        _dimension: usize,
         side: usize,
         player: Player,
+        movement_axis: usize,
         moves: &mut Vec<Move>,
     ) {
         let is_promotion = match player {
-            Player::White => to_vals[0] == side - 1,
-            Player::Black => to_vals[0] == 0,
+            Player::White => to_vals[movement_axis] == side - 1,
+            Player::Black => to_vals[movement_axis] == 0,
         };
 
         let to = Coordinate::new(to_vals.to_vec());

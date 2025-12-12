@@ -50,12 +50,14 @@ fn test_en_passant() {
     board.apply_move(&move_black).unwrap();
 
     // 3. Verify En Passant Target
-    // Rank 5, File 5 -> (5, 5)
+    // Rank 5, File 5 -> (5, 5) (Target)
+    // Rank 4, File 5 -> (4, 5) (Victim)
     let ep_target_idx = board.coords_to_index(&[5, 5]).unwrap();
+    let ep_victim_idx = board.coords_to_index(&[4, 5]).unwrap();
     assert_eq!(
         board.en_passant_target,
-        Some(ep_target_idx),
-        "EP Target should be set"
+        Some((ep_target_idx, ep_victim_idx)),
+        "EP Target/Victim tuple should be set"
     );
 
     // 4. Generate White Moves
