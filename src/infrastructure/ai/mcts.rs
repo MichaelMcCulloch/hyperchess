@@ -26,6 +26,8 @@ pub struct MCTS {
     tt: Option<Arc<LockFreeTT>>,
 }
 
+use rayon::prelude::*;
+
 impl MCTS {
     pub fn new(root_state: &Board, root_player: Player, tt: Option<Arc<LockFreeTT>>) -> Self {
         let mut moves = Rules::generate_legal_moves(root_state, root_player);
@@ -51,6 +53,50 @@ impl MCTS {
     }
 
     pub fn run(&mut self, root_state: &Board, iterations: usize) -> f64 {
+        if iterations == 0 {
+            return 0.5;
+        }
+
+        // Parallel Execution (Root Parallelization)
+        let num_threads = rayon::current_num_threads();
+        let chunk_size = iterations / num_threads;
+        let remainder = iterations % num_threads;
+
+        let results: Vec<(u32, f64)> = (0..num_threads)
+            .into_par_iter()
+            .map(|i| {
+                let count = if i < remainder {
+                    chunk_size + 1
+                } else {
+                    chunk_size
+                };
+                if count == 0 {
+                    return (0, 0.0);
+                }
+
+                // Create a local MCTS instance for this thread
+                // Note: We share the Transposition Table (tt) which is thread-safe (Arc<LockFreeTT>)
+                let mut local_mcts = MCTS::new(root_state, self.root_player, self.tt.clone());
+                local_mcts.execute_iterations(root_state, count);
+
+                let root = &local_mcts.nodes[0];
+                (root.visits, root.score)
+            })
+            .collect();
+
+        // Aggregation
+        let (total_visits, total_score) = results
+            .into_iter()
+            .fold((0, 0.0), |acc, x| (acc.0 + x.0, acc.1 + x.1));
+
+        if total_visits == 0 {
+            0.5
+        } else {
+            total_score / total_visits as f64
+        }
+    }
+
+    fn execute_iterations(&mut self, root_state: &Board, iterations: usize) {
         let mut rng = rand::thread_rng();
 
         for _ in 0..iterations {
@@ -110,13 +156,6 @@ impl MCTS {
 
             // 4. Backpropagation
             self.backpropagate(node_idx, result_score);
-        }
-
-        let root = &self.nodes[0];
-        if root.visits == 0 {
-            0.0
-        } else {
-            root.score / root.visits as f64
         }
     }
 
@@ -210,5 +249,28 @@ impl MCTS {
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::board::Board;
+
+    #[test]
+    fn test_mcts_smoke() {
+        let board = Board::new(2, 8); // 2D board, side 8
+        let mut mcts = MCTS::new(&board, Player::White, None);
+        let score = mcts.run(&board, 10);
+        assert!(score >= 0.0 && score <= 1.0);
+    }
+
+    #[test]
+    fn test_mcts_parallel_execution() {
+        let board = Board::new(2, 8); // 2D board, side 8
+        let mut mcts = MCTS::new(&board, Player::White, None);
+        // Run with enough iterations to likely trigger multiple threads
+        let score = mcts.run(&board, 100);
+        assert!(score >= 0.0 && score <= 1.0);
     }
 }
