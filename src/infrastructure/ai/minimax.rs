@@ -4,8 +4,9 @@ use crate::domain::models::{Move, Player};
 use crate::domain::rules::Rules;
 use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::ai::transposition::{Flag, LockFreeTT};
-use std::sync::atomic::{AtomicBool, Ordering};
+use rayon::prelude::*;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 const CHECKMATE_SCORE: i32 = 30000;
@@ -24,48 +25,49 @@ pub struct MinimaxBot {
     tt: Arc<LockFreeTT>,
     stop_flag: Arc<AtomicBool>,
     nodes_searched: std::sync::atomic::AtomicUsize,
-    _randomized: bool,
     use_mcts: bool,
     mcts_iterations: usize,
+    num_threads: usize,
 }
 
 impl MinimaxBot {
     pub fn new(depth: usize, time_limit_ms: u64, _dimension: usize, _side: usize) -> Self {
+        let num_threads = std::thread::available_parallelism()
+            .map(|n| n.get().saturating_sub(2).max(1))
+            .unwrap_or(1);
+
         Self {
             depth,
             time_limit: Duration::from_millis(time_limit_ms),
-            tt: Arc::new(LockFreeTT::new(64)),
+            tt: Arc::new(LockFreeTT::new(256)), // Increased TT size for parallel access
             stop_flag: Arc::new(AtomicBool::new(false)),
             nodes_searched: std::sync::atomic::AtomicUsize::new(0),
-            _randomized: true,
             use_mcts: false,
             mcts_iterations: 100,
+            num_threads,
         }
     }
 
     pub fn with_mcts(mut self, iterations: usize) -> Self {
         self.use_mcts = true;
         self.mcts_iterations = iterations;
-        Self {
-            depth: if self.use_mcts { 2 } else { self.depth },
-            ..self
-        }
+        // Adjust depth for hybrid approach
+        self.depth = if self.use_mcts { 3 } else { self.depth };
+        self
     }
 
     fn evaluate(&self, board: &Board, player_at_leaf: Option<Player>) -> i32 {
         if self.use_mcts {
             if let Some(player) = player_at_leaf {
-                let mut mcts = MCTS::new(board, player, Some(self.tt.clone()));
+                // Critical: Run MCTS serially here!
+                // We are already inside a parallel Minimax thread.
+                let mut mcts = MCTS::new(board, player, None).with_serial();
                 let win_rate = mcts.run(board, self.mcts_iterations);
 
                 let val_f = (win_rate - 0.5) * 2.0 * (VAL_KING as f64);
                 let val = val_f as i32;
 
-                if player == Player::Black {
-                    return -val;
-                } else {
-                    return val;
-                }
+                return if player == Player::Black { -val } else { val };
             }
         }
 
@@ -116,11 +118,9 @@ impl MinimaxBot {
             return 0;
         }
 
-        if board.is_repetition() {
-            return 0;
-        }
-
         let hash = board.hash;
+
+        // LAZY SMP: Check TT for cutoffs from OTHER threads
         if let Some((tt_score, tt_depth, tt_flag, _)) = self.tt.get(hash) {
             if tt_depth as usize >= depth {
                 match tt_flag {
@@ -142,7 +142,6 @@ impl MinimaxBot {
         }
 
         let moves = Rules::generate_legal_moves(board, player);
-
         if moves.is_empty() {
             if let Some(king_pos) = board.get_king_coordinate(player) {
                 if Rules::is_square_attacked(board, &king_pos, player.opponent()) {
@@ -152,6 +151,11 @@ impl MinimaxBot {
             return 0;
         }
 
+        // MOVE ORDERING (Basic for now)
+        // Ideally we would prioritize captures, etc.
+        // For now, relies on TT updates from other threads to narrow the window.
+
+        // Local variable for Best Score
         let mut best_score = -i32::MAX;
         let original_alpha = alpha;
 
@@ -181,10 +185,11 @@ impl MinimaxBot {
             }
             alpha = alpha.max(score);
             if alpha >= beta {
-                break;
+                break; // Beta Cutoff
             }
         }
 
+        // Store result in shared TT
         let flag = if best_score <= original_alpha {
             Flag::UpperBound
         } else if best_score >= beta {
@@ -192,7 +197,6 @@ impl MinimaxBot {
         } else {
             Flag::Exact
         };
-
         self.tt.store(hash, best_score, depth as u8, flag, None);
 
         best_score
@@ -205,50 +209,90 @@ impl PlayerStrategy for MinimaxBot {
         self.stop_flag.store(false, Ordering::Relaxed);
 
         let start_time = Instant::now();
-        let mut best_score = -i32::MAX;
-        let mut best_moves = Vec::new();
 
-        let mut root_board = board.clone();
-
-        let moves = Rules::generate_legal_moves(&mut root_board, player);
-        if moves.is_empty() {
+        // Generate Root Moves
+        let root_moves = Rules::generate_legal_moves(&mut board.clone(), player);
+        if root_moves.is_empty() {
             return None;
         }
 
-        for mv in moves {
-            let info = match root_board.apply_move(&mv) {
-                Ok(i) => i,
-                Err(_) => continue,
-            };
+        // LAZY SMP ENTRY POINT
+        // We launch N threads. They all run the search (Iterative Deepening).
+        // To ensure they don't do identical work, we shuffle root moves differently for each thread.
+        println!("Starting Parallel Search with {} threads", self.num_threads);
 
-            if root_board.is_repetition() {}
+        let results: Vec<(Move, i32)> = (0..self.num_threads)
+            .into_par_iter()
+            .map(|thread_idx| {
+                let mut local_board = board.clone();
+                let mut local_best_move = None;
+                let mut local_best_score = -i32::MAX;
 
-            let score = -self.minimax(
-                &mut root_board,
-                self.depth - 1,
-                -i32::MAX,
-                i32::MAX,
-                player.opponent(),
-                start_time,
-            );
+                // Optional: Shuffle root moves differently per thread to encourage
+                // different traversal orders (Lazy SMP diversity)
+                let mut my_moves = root_moves.clone();
+                if thread_idx > 0 {
+                    use rand::seq::SliceRandom;
+                    let mut rng = rand::thread_rng();
+                    my_moves.shuffle(&mut rng);
+                }
 
-            root_board.unmake_move(&mv, info);
+                // Iterative Deepening
+                for d in 1..=self.depth {
+                    let mut alpha = -i32::MAX;
+                    let beta = i32::MAX;
+                    let mut best_score_this_depth = -i32::MAX;
+                    let mut best_move_this_depth = None;
 
-            if score > best_score {
-                best_score = score;
-                best_moves.clear();
-                best_moves.push(mv);
-            } else if score == best_score {
-                best_moves.push(mv);
-            }
-        }
+                    for mv in &my_moves {
+                        let info = local_board.apply_move(mv).unwrap();
 
-        if !best_moves.is_empty() {
-            let mut rng = rand::thread_rng();
-            use rand::seq::SliceRandom;
-            best_moves.choose(&mut rng).cloned()
-        } else {
-            None
-        }
+                        let score = -self.minimax(
+                            &mut local_board,
+                            d - 1,
+                            -beta,
+                            -alpha,
+                            player.opponent(),
+                            start_time,
+                        );
+
+                        local_board.unmake_move(mv, info);
+
+                        if self.stop_flag.load(Ordering::Relaxed) {
+                            break;
+                        }
+
+                        if score > best_score_this_depth {
+                            best_score_this_depth = score;
+                            best_move_this_depth = Some(mv.clone());
+                        }
+                        alpha = alpha.max(score);
+                    }
+
+                    if !self.stop_flag.load(Ordering::Relaxed) {
+                        local_best_score = best_score_this_depth;
+                        local_best_move = best_move_this_depth;
+                    } else {
+                        break;
+                    }
+                }
+
+                (
+                    local_best_move.unwrap_or(my_moves[0].clone()),
+                    local_best_score,
+                )
+            })
+            .collect();
+
+        // Aggregate results: Pick the move with the highest score found by ANY thread.
+        // Lazy SMP works because threads share the TT. If one finds a good move, others see it.
+        // We take the max score from all threads.
+        let best = results.into_iter().max_by_key(|r| r.1);
+
+        println!(
+            "Nodes searched: {}",
+            self.nodes_searched.load(Ordering::Relaxed)
+        );
+        best.map(|(m, _)| m)
     }
 }

@@ -25,6 +25,7 @@ pub struct MCTS {
     nodes: Vec<Node>,
     root_player: Player,
     tt: Option<Arc<LockFreeTT>>,
+    serial: bool,
 }
 
 use rayon::prelude::*;
@@ -51,7 +52,13 @@ impl MCTS {
             nodes: vec![root],
             root_player,
             tt,
+            serial: false,
         }
+    }
+
+    pub fn with_serial(mut self) -> Self {
+        self.serial = true;
+        self
     }
 
     pub fn run(&mut self, root_state: &Board, iterations: usize) -> f64 {
@@ -64,7 +71,11 @@ impl MCTS {
         // We ensure at least 5 iterations per task to amortize the setup cost (Board clone).
         const MIN_ITERATIONS_PER_TASK: usize = 5;
 
-        let num_tasks = (iterations / MIN_ITERATIONS_PER_TASK).clamp(1, num_threads);
+        let num_tasks = if self.serial {
+            1
+        } else {
+            (iterations / MIN_ITERATIONS_PER_TASK).clamp(1, num_threads)
+        };
 
         if num_tasks <= 1 {
             self.execute_iterations(root_state, iterations);
