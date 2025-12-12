@@ -58,7 +58,7 @@ impl MinimaxBot {
             if let Some(player) = player_at_leaf {
                 // Run MCTS
                 // Note: MCTS is expensive.
-                let mut mcts = MCTS::new(board, player);
+                let mut mcts = MCTS::new(board, player, Some(self.tt.clone()));
                 let win_rate = mcts.run(board, self.mcts_iterations);
 
                 // win_rate is [0, 1] for `player`.

@@ -1,7 +1,10 @@
 use crate::domain::models::{BoardState, Move, Player};
+use crate::infrastructure::ai::transposition::{Flag, LockFreeTT};
 use crate::infrastructure::mechanics::MoveGenerator;
 use crate::infrastructure::persistence::BitBoardState;
 use rand::seq::SliceRandom;
+use std::sync::Arc;
+
 use std::f64;
 
 const UCT_C: f64 = 1.4142; // Sqrt(2)
@@ -28,10 +31,15 @@ struct Node {
 pub struct MCTS {
     nodes: Vec<Node>,
     root_player: Player,
+    tt: Option<Arc<LockFreeTT>>,
 }
 
 impl MCTS {
-    pub fn new(root_state: &BitBoardState, root_player: Player) -> Self {
+    pub fn new(
+        root_state: &BitBoardState,
+        root_player: Player,
+        tt: Option<Arc<LockFreeTT>>,
+    ) -> Self {
         let mut moves = MoveGenerator::generate_legal_moves(root_state, root_player);
         // Shuffle for randomness in expansion
         let mut rng = rand::thread_rng();
@@ -51,6 +59,7 @@ impl MCTS {
         Self {
             nodes: vec![root],
             root_player,
+            tt,
         }
     }
 
@@ -149,10 +158,11 @@ impl MCTS {
             };
 
             // Perspective correction:
-            // Score is "Wins for Root". Range [-1, 1].
-            // If Maximize (Root's turn): We want high score.
-            // If Minimize (Opponent's turn): We want LOW score (which means High -score).
-            let exploitation = if maximize { win_rate } else { -win_rate };
+            // Score is "Wins for Root". Range [0, 1].
+            // If Maximize (Root's turn): We want high score (1.0).
+            // If Minimize (Opponent's turn): We want to minimize Root score (make it 0.0), which means maximizing (1.0 - score).
+
+            let exploitation = if maximize { win_rate } else { 1.0 - win_rate };
 
             let exploration = UCT_C * (log_n / (child.visits as f64 + 1e-6)).sqrt(); // Avoid div by zero
             let uct_value = exploitation + exploration;
@@ -173,8 +183,20 @@ impl MCTS {
     ) -> f64 {
         let mut depth = 0;
         const MAX_ROLLOUT_DEPTH: usize = 50;
+        const VAL_KING_F: f64 = 20000.0;
 
         while depth < MAX_ROLLOUT_DEPTH {
+            // Check TT logic
+            if let Some(tt) = &self.tt {
+                if let Some((score, _, flag, _)) = tt.get(state.hash) {
+                    if flag == Flag::Exact {
+                        let normalized = (score as f64 / VAL_KING_F) / 2.0 + 0.5;
+                        // Clamp [0, 1]
+                        return normalized.max(0.0).min(1.0);
+                    }
+                }
+            }
+
             let moves = MoveGenerator::generate_legal_moves(state, player);
             if moves.is_empty() {
                 return self.evaluate_terminal(state, player);
@@ -187,22 +209,21 @@ impl MCTS {
             depth += 1;
         }
 
-        // If not terminal, return heuristic eval (normalized -1 to 1) or 0.0 (draw)
-        // Simple material count?
-        0.0 // Drawish / unknown
+        // If not terminal, return heuristic eval (normalized 0 to 1) or 0.5 (draw)
+        0.5 // Drawish / unknown
     }
 
     fn evaluate_terminal(&self, state: &BitBoardState, player_at_leaf: Player) -> f64 {
         if let Some(king_pos) = state.get_king_coordinate(player_at_leaf) {
             if MoveGenerator::is_square_attacked(state, &king_pos, player_at_leaf.opponent()) {
                 if player_at_leaf == self.root_player {
-                    return -1.0; // Root lost
+                    return 0.0; // Root lost (Checkmate)
                 } else {
-                    return 1.0; // Root won
+                    return 1.0; // Root won (Opponent Checkmated)
                 }
             }
         }
-        0.0 // Draw/Stalemate
+        0.5 // Stalemate/Draw
     }
 
     fn backpropagate(&mut self, mut node_idx: usize, score: f64) {
