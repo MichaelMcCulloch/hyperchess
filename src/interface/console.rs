@@ -9,12 +9,7 @@ impl ConsoleInterface {
         println!("Starting Game...");
         println!("{}", render_board(game_service.board()));
 
-        let mut move_count = 0;
         loop {
-            if move_count >= 2 {
-                println!("Terminating game after 10 moves (temporary limit).");
-                break;
-            }
             if let Some(result) = game_service.is_game_over() {
                 match result {
                     GameResult::Checkmate(p) => println!("Checkmate! Player {:?} Wins!", p),
@@ -30,7 +25,6 @@ impl ConsoleInterface {
             match game_service.perform_next_move() {
                 Ok(_) => {
                     println!("{}", render_board(game_service.board()));
-                    move_count += 1;
                 }
                 Err(e) => {
                     println!("Error: {}", e);
