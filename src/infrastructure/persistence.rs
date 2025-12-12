@@ -1,6 +1,8 @@
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{BoardState, Move, Piece, PieceType, Player};
+use crate::infrastructure::zobrist::ZobristKeys;
 use std::fmt;
+use std::sync::Arc;
 
 // Keep BitBoard implementation as is for storage
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -26,12 +28,24 @@ pub struct BitBoardState {
     pub bishops: BitBoard,
     pub queens: BitBoard,
     pub kings: BitBoard,
+
+    // Hashing and History
+    pub zobrist: Arc<ZobristKeys>,
+    pub hash: u64,
+    pub history: Vec<u64>,
 }
 
 impl BitBoardState {
     pub fn new_empty(dimension: usize, side: usize) -> Self {
         let total_cells = side.pow(dimension as u32);
         let empty = BitBoard::new_empty(dimension, side);
+
+        // Intentionally create a new ZobristKeys for each "Game" (or ideally shared, but this is safe)
+        // For distinct games to have distinct hashes, we might want a shared seed?
+        // But for per-game consistency, a new random set is fine as long as it persists for the game.
+        // Actually, to make tests deterministic or to share across clones, this is fine.
+        let zobrist = Arc::new(ZobristKeys::new(total_cells));
+        let hash = 0; // Will be calculated after setup
 
         BitBoardState {
             dimension,
@@ -45,6 +59,9 @@ impl BitBoardState {
             bishops: empty.clone(),
             queens: empty.clone(),
             kings: empty.clone(),
+            zobrist,
+            hash,
+            history: Vec::new(),
         }
     }
 
@@ -148,6 +165,22 @@ impl BitBoardState {
                 );
             }
         }
+
+        // Initial hash calculation
+        self.hash = self.zobrist.get_hash(self, Player::White); // Assume White starts? BoardState doesn't track current player yet...
+        // Wait, BoardState is just state. It doesn't know whose turn it is implicitly unless we store it.
+        // Zobrist hash usually includes "side to move".
+        // For Minimax, we pass `player` in.
+        // But `apply_move` doesn't take `player` (it's implicit in the move or the flow).
+        // Let's assume standard chess setup implies White to move, but correct hashing depends on `player`.
+        // I will calculate a "Board Config" hash here, avoiding the "side to move" part if I don't know it,
+        // OR I will assume White to move for the initial setup.
+        // However, `ZobristKey::get_hash` takes `current_player`.
+        // Let's assume White for setup.
+        // When `apply_move` happens, we need to know who moved to flip the hash.
+        // `Move` struct doesn't have `player`? No, it's just from/to.
+        // But `BitBoardState::get_piece` gives owner.
+        // I can deduce the player from the moving piece!
     }
 
     fn determine_backrank_piece(&self, file_idx: usize, total_files: usize) -> PieceType {
@@ -180,6 +213,31 @@ impl BitBoardState {
         }
 
         PieceType::Bishop
+    }
+
+    pub fn is_repetition(&self) -> bool {
+        // 3-fold repetition: simple count check
+        // We only check for 2 previous occurrences + current = 3
+        let count = self.history.iter().filter(|&&h| h == self.hash).count();
+        // If it's in history 2 times already, current state makes it 3.
+        // Wait, history stores *previous* states.
+        // So checking if `self.hash` exists 2 times in history is 3-fold.
+        // Even 1 recurrence is enough to trigger a draw claim in some rules?
+        // Standard chess is 3-fold.
+        // The user complained about "looping". Even 2-fold (revisiting once) is the start of a loop.
+        // If I return true on ANY repetition, it forces strict progress.
+        // Let's stick to strict repetition avoidance for now (1 previous occurrence) to kill the loop aggressively?
+        // No, standard is 3-fold. But Minimax looks ahead.
+        // If Minimax sees "I go A -> B -> A", it sees A in history ONCE.
+        // If that is penalized, it won't do it.
+        // So `count >= 1` is enough to penalize immediate "undo" moves or simple loops if we want to avoid them.
+        // Let's try `count >= 1` (2-fold) first. It prevents "dancing".
+        count >= 1
+    }
+
+    /// Recalculates hash fully. used for testing or re-sync.
+    pub fn update_hash(&mut self, player_to_move: Player) {
+        self.hash = self.zobrist.get_hash(self, player_to_move);
     }
 }
 
@@ -238,6 +296,9 @@ impl BoardState for BitBoardState {
 
         let moving_piece = self.get_piece(&mv.from).ok_or("No piece at origin")?;
 
+        // Push current hash to history BEFORE modifying state
+        self.history.push(self.hash);
+
         // 1. Remove piece from 'from'
         self.remove_piece_at_index(from_idx);
 
@@ -255,6 +316,13 @@ impl BoardState for BitBoardState {
         };
 
         self.place_piece_at_index(to_idx, piece_to_place);
+
+        // Update Hash
+        // We know the player who moved is `moving_piece.owner`.
+        // The NEXT player is `moving_piece.owner.opponent()`.
+        // Zobrist hash depends on "side to move".
+        // Use the opponent as the side to move for the NEW state.
+        self.hash = self.zobrist.get_hash(self, moving_piece.owner.opponent());
 
         Ok(())
     }
@@ -281,12 +349,18 @@ impl BoardState for BitBoardState {
         let index = self.get_index(coord).ok_or("Invalid coord")?;
         self.remove_piece_at_index(index);
         self.place_piece_at_index(index, piece);
+        // Note: set_piece is usually for setup. We should probably invalidate history or just update hash.
+        // For debugging/setup, let's just update hash assuming White to move default?
+        // Or leave it stale. safer to update if possible.
+        // Let's assume White to move for arbitrary set_piece calls unless specified.
+        self.hash = self.zobrist.get_hash(self, Player::White);
         Ok(())
     }
 
     fn clear_cell(&mut self, coord: &Coordinate) {
         if let Some(index) = self.get_index(coord) {
             self.remove_piece_at_index(index);
+            self.hash = self.zobrist.get_hash(self, Player::White);
         }
     }
 

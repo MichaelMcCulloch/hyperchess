@@ -3,7 +3,6 @@ use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::ai::transposition::{Flag, LockFreeTT};
 use crate::infrastructure::mechanics::MoveGenerator;
 use crate::infrastructure::persistence::BitBoardState;
-use rand::Rng; // Needed for Rng trait methods like gen/random
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -21,91 +20,21 @@ const VAL_ROOK: i32 = 500;
 const VAL_QUEEN: i32 = 900;
 const VAL_KING: i32 = 20000;
 
-struct ZobristKeys {
-    piece_keys: Vec<u64>,
-    black_to_move: u64,
-}
-
-impl ZobristKeys {
-    fn new(total_cells: usize) -> Self {
-        let mut rng = rand::thread_rng();
-        let size = 12 * total_cells;
-        let mut piece_keys = Vec::with_capacity(size);
-        for _ in 0..size {
-            // Using r#gen because 'gen' is a reserved keyword in Rust 2024
-            piece_keys.push(rng.r#gen());
-        }
-        Self {
-            piece_keys,
-            black_to_move: rng.r#gen(),
-        }
-    }
-
-    fn get_hash(&self, board: &BitBoardState, current_player: Player) -> u64 {
-        let mut hash = 0;
-        if current_player == Player::Black {
-            hash ^= self.black_to_move;
-        }
-
-        for i in 0..board.total_cells {
-            if board.white_occupancy.get_bit(i) {
-                let offset = if board.pawns.get_bit(i) {
-                    0
-                } else if board.knights.get_bit(i) {
-                    1
-                } else if board.bishops.get_bit(i) {
-                    2
-                } else if board.rooks.get_bit(i) {
-                    3
-                } else if board.queens.get_bit(i) {
-                    4
-                } else if board.kings.get_bit(i) {
-                    5
-                } else {
-                    continue;
-                };
-                hash ^= self.piece_keys[offset * board.total_cells + i];
-            } else if board.black_occupancy.get_bit(i) {
-                let offset = if board.pawns.get_bit(i) {
-                    6
-                } else if board.knights.get_bit(i) {
-                    7
-                } else if board.bishops.get_bit(i) {
-                    8
-                } else if board.rooks.get_bit(i) {
-                    9
-                } else if board.queens.get_bit(i) {
-                    10
-                } else if board.kings.get_bit(i) {
-                    11
-                } else {
-                    continue;
-                };
-                hash ^= self.piece_keys[offset * board.total_cells + i];
-            }
-        }
-        hash
-    }
-}
-
 pub struct MinimaxBot {
     depth: usize,
     time_limit: Duration,
     tt: Arc<LockFreeTT>,
-    zobrist: Arc<ZobristKeys>,
     stop_flag: Arc<AtomicBool>,
     nodes_searched: std::sync::atomic::AtomicUsize,
     _randomized: bool,
 }
 
 impl MinimaxBot {
-    pub fn new(depth: usize, time_limit_ms: u64, dimension: usize, side: usize) -> Self {
-        let total_cells = side.pow(dimension as u32);
+    pub fn new(depth: usize, time_limit_ms: u64, _dimension: usize, _side: usize) -> Self {
         Self {
             depth,
             time_limit: Duration::from_millis(time_limit_ms),
             tt: Arc::new(LockFreeTT::new(64)),
-            zobrist: Arc::new(ZobristKeys::new(total_cells)),
             stop_flag: Arc::new(AtomicBool::new(false)),
             nodes_searched: std::sync::atomic::AtomicUsize::new(0),
             _randomized: true,
@@ -161,7 +90,12 @@ impl MinimaxBot {
             return 0;
         }
 
-        let hash = self.zobrist.get_hash(board, player);
+        // Check for repetition
+        if board.is_repetition() {
+            return 0; // Draw
+        }
+
+        let hash = board.hash;
         if let Some((tt_score, tt_depth, tt_flag, _)) = self.tt.get(hash) {
             if tt_depth as usize >= depth {
                 match tt_flag {
@@ -242,8 +176,8 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
         self.stop_flag.store(false, Ordering::Relaxed);
 
         let start_time = Instant::now();
-        let mut best_move = None;
         let mut best_score = -i32::MAX;
+        let mut best_moves = Vec::new(); // Collect all best moves
 
         // Root Search
         let moves = MoveGenerator::generate_legal_moves(board, player);
@@ -254,6 +188,10 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
         for mv in moves {
             let mut next_board = board.clone();
             if next_board.apply_move(&mv).is_ok() {
+                if next_board.is_repetition() {
+                    // Repetition handling logic (implicit via minimax returning 0 for it usually)
+                }
+
                 let score = -self.minimax(
                     &mut next_board,
                     self.depth - 1,
@@ -265,11 +203,21 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
 
                 if score > best_score {
                     best_score = score;
-                    best_move = Some(mv);
+                    best_moves.clear();
+                    best_moves.push(mv);
+                } else if score == best_score {
+                    best_moves.push(mv);
                 }
             }
         }
 
-        best_move
+        // Pick random best move
+        if !best_moves.is_empty() {
+            let mut rng = rand::thread_rng();
+            use rand::seq::SliceRandom;
+            best_moves.choose(&mut rng).cloned()
+        } else {
+            None
+        }
     }
 }
