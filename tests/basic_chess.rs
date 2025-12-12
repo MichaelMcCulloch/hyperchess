@@ -1,6 +1,6 @@
 use hyperchess::domain::models::{BoardState, Player};
 use hyperchess::infrastructure::mechanics::MoveGenerator;
-use hyperchess::infrastructure::persistence::{BitBoardState, index_to_coords};
+use hyperchess::infrastructure::persistence::{index_to_coords, BitBoardState};
 
 #[test]
 fn test_initial_board_setup_and_pawn_move() {

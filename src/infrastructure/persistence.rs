@@ -168,19 +168,19 @@ impl BitBoardState {
 
         // Initial hash calculation
         self.hash = self.zobrist.get_hash(self, Player::White); // Assume White starts? BoardState doesn't track current player yet...
-        // Wait, BoardState is just state. It doesn't know whose turn it is implicitly unless we store it.
-        // Zobrist hash usually includes "side to move".
-        // For Minimax, we pass `player` in.
-        // But `apply_move` doesn't take `player` (it's implicit in the move or the flow).
-        // Let's assume standard chess setup implies White to move, but correct hashing depends on `player`.
-        // I will calculate a "Board Config" hash here, avoiding the "side to move" part if I don't know it,
-        // OR I will assume White to move for the initial setup.
-        // However, `ZobristKey::get_hash` takes `current_player`.
-        // Let's assume White for setup.
-        // When `apply_move` happens, we need to know who moved to flip the hash.
-        // `Move` struct doesn't have `player`? No, it's just from/to.
-        // But `BitBoardState::get_piece` gives owner.
-        // I can deduce the player from the moving piece!
+                                                                // Wait, BoardState is just state. It doesn't know whose turn it is implicitly unless we store it.
+                                                                // Zobrist hash usually includes "side to move".
+                                                                // For Minimax, we pass `player` in.
+                                                                // But `apply_move` doesn't take `player` (it's implicit in the move or the flow).
+                                                                // Let's assume standard chess setup implies White to move, but correct hashing depends on `player`.
+                                                                // I will calculate a "Board Config" hash here, avoiding the "side to move" part if I don't know it,
+                                                                // OR I will assume White to move for the initial setup.
+                                                                // However, `ZobristKey::get_hash` takes `current_player`.
+                                                                // Let's assume White for setup.
+                                                                // When `apply_move` happens, we need to know who moved to flip the hash.
+                                                                // `Move` struct doesn't have `player`? No, it's just from/to.
+                                                                // But `BitBoardState::get_piece` gives owner.
+                                                                // I can deduce the player from the moving piece!
     }
 
     fn determine_backrank_piece(&self, file_idx: usize, total_files: usize) -> PieceType {

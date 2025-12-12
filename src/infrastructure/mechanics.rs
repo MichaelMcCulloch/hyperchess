@@ -1,6 +1,6 @@
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{BoardState, Move, PieceType, Player};
-use crate::infrastructure::persistence::{BitBoardState, coords_to_index, index_to_coords};
+use crate::infrastructure::persistence::{coords_to_index, index_to_coords, BitBoardState};
 
 pub struct MoveGenerator;
 

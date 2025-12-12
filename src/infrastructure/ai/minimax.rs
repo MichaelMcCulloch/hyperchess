@@ -4,8 +4,8 @@ use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::ai::transposition::{Flag, LockFreeTT};
 use crate::infrastructure::mechanics::MoveGenerator;
 use crate::infrastructure::persistence::BitBoardState;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const CHECKMATE_SCORE: i32 = 30000;
