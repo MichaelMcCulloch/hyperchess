@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::f64;
 
 const UCT_C: f64 = 1.4142; // Sqrt(2)
+const CHECKMATE_SCORE: i32 = 30000;
 
 struct Node {
     parent: Option<usize>,
@@ -226,6 +227,12 @@ impl MCTS {
     fn evaluate_terminal(&self, state: &Board, player_at_leaf: Player) -> f64 {
         if let Some(king_pos) = state.get_king_coordinate(player_at_leaf) {
             if Rules::is_square_attacked(state, &king_pos, player_at_leaf.opponent()) {
+                // Checkmate
+                if let Some(tt) = &self.tt {
+                    // Store loss for the player who is checkmated (Negamax perspective)
+                    tt.store(state.hash, -CHECKMATE_SCORE, 255, Flag::Exact, None);
+                }
+
                 if player_at_leaf == self.root_player {
                     return 0.0; // Root lost (Checkmate)
                 } else {
@@ -233,6 +240,12 @@ impl MCTS {
                 }
             }
         }
+
+        // Stalemate/Draw
+        if let Some(tt) = &self.tt {
+            tt.store(state.hash, 0, 255, Flag::Exact, None);
+        }
+
         0.5 // Stalemate/Draw
     }
 
