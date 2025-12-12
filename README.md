@@ -1,10 +1,10 @@
-# HyperTicTacToe
+# hyperchess
 
 Experimenting with higher-dimensional Tic-Tac-Toe using Rust, optimized bitboards, and Domain-Driven Design.
 
 ## Overview
 
-HyperTicTacToe is a high-performance implementation of Tic-Tac-Toe that scales to N-dimensions (2D, 3D, 4D, etc.).
+hyperchess is a high-performance implementation of Tic-Tac-Toe that scales to N-dimensions (2D, 3D, 4D, etc.).
 
 ### Classic
 ```

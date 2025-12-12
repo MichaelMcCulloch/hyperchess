@@ -1,7 +1,7 @@
-use hypertictactoe::domain::models::{BoardState, Player};
-use hypertictactoe::domain::services::PlayerStrategy;
-use hypertictactoe::infrastructure::ai::MinimaxBot;
-use hypertictactoe::infrastructure::persistence::{coords_to_index, BitBoardState};
+use hyperchess::domain::models::{BoardState, Player};
+use hyperchess::domain::services::PlayerStrategy;
+use hyperchess::infrastructure::ai::MinimaxBot;
+use hyperchess::infrastructure::persistence::{BitBoardState, coords_to_index};
 
 fn create_board(dimension: usize, moves: &[(usize, Player)]) -> BitBoardState {
     let mut board = BitBoardState::new(dimension);
@@ -14,7 +14,7 @@ fn create_board(dimension: usize, moves: &[(usize, Player)]) -> BitBoardState {
 }
 
 fn assert_best_move(
-    best_move: Option<hypertictactoe::domain::coordinate::Coordinate>,
+    best_move: Option<hyperchess::domain::coordinate::Coordinate>,
     expected_index: usize,
     side: usize,
     msg: &str,

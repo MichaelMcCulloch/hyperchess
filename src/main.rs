@@ -1,9 +1,9 @@
-use hypertictactoe::application::game_service::GameService;
-use hypertictactoe::domain::models::{Board, BoardState};
-use hypertictactoe::domain::services::PlayerStrategy;
-use hypertictactoe::infrastructure::ai::MinimaxBot;
-use hypertictactoe::infrastructure::console::HumanConsolePlayer;
-use hypertictactoe::infrastructure::persistence::BitBoardState;
+use hyperchess::application::game_service::GameService;
+use hyperchess::domain::models::{Board, BoardState};
+use hyperchess::domain::services::PlayerStrategy;
+use hyperchess::infrastructure::ai::MinimaxBot;
+use hyperchess::infrastructure::console::HumanConsolePlayer;
+use hyperchess::infrastructure::persistence::BitBoardState;
 use std::env;
 
 fn main() {
@@ -51,5 +51,5 @@ fn main() {
     let board = Board::<BitBoardState>::new(dimension);
 
     let game = GameService::new(board, player_x, player_o);
-    hypertictactoe::interface::console::ConsoleInterface::run(game);
+    hyperchess::interface::console::ConsoleInterface::run(game);
 }
