@@ -1,13 +1,16 @@
+use smallvec::SmallVec;
 use std::fmt;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Coordinate {
-    pub values: Vec<usize>,
+    pub values: SmallVec<[usize; 4]>,
 }
 
 impl Coordinate {
-    pub fn new(values: Vec<usize>) -> Self {
-        Self { values }
+    pub fn new<I: Into<SmallVec<[usize; 4]>>>(values: I) -> Self {
+        Self {
+            values: values.into(),
+        }
     }
 
     pub fn dim(&self) -> usize {

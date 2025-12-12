@@ -213,7 +213,7 @@ fn test_verify_mate_validity() {
         .unwrap();
 
     // 1. Verify Q->(0,1) is legal
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let mate_move = moves.iter().find(|m| m.to == coord(0, 1));
     assert!(mate_move.is_some(), "Move to (0,1) should be legal");
 
@@ -221,7 +221,7 @@ fn test_verify_mate_validity() {
     board.apply_move(mate_move.unwrap()).unwrap();
 
     // 3. Verify Black has no moves
-    let black_moves = Rules::generate_legal_moves(&board, Player::Black);
+    let black_moves = Rules::generate_legal_moves(&mut board, Player::Black);
     assert!(
         black_moves.is_empty(),
         "Black should have no moves after Checkmate"

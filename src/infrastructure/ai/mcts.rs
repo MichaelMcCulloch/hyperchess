@@ -31,7 +31,8 @@ use rayon::prelude::*;
 
 impl MCTS {
     pub fn new(root_state: &Board, root_player: Player, tt: Option<Arc<LockFreeTT>>) -> Self {
-        let mut moves = Rules::generate_legal_moves(root_state, root_player);
+        let mut root_clone = root_state.clone();
+        let mut moves = Rules::generate_legal_moves(&mut root_clone, root_player);
         let mut rng = rand::thread_rng();
         moves.shuffle(&mut rng);
 
@@ -125,7 +126,7 @@ impl MCTS {
                 next_state.apply_move(&mv).unwrap();
                 let next_player = current_player.opponent();
 
-                let legal_moves = Rules::generate_legal_moves(&next_state, next_player);
+                let legal_moves = Rules::generate_legal_moves(&mut next_state, next_player);
                 let is_terminal = legal_moves.is_empty();
 
                 let new_node = Node {

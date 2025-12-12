@@ -43,7 +43,7 @@ fn test_castling_standard_8x8() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     // Castling Kingside moves King + 2 -> (0, 6)
     let castling_target = coord_2d(0, 6);
@@ -110,7 +110,7 @@ fn test_castling_3d_blocked() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     // Target is (0, 6, 0)
     // Target is (0, 6, 0)

@@ -1,6 +1,7 @@
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{GameResult, Move, Piece, PieceType, Player};
 use crate::domain::zobrist::ZobristKeys;
+use smallvec::{SmallVec, smallvec};
 use std::fmt;
 use std::sync::Arc;
 
@@ -10,6 +11,13 @@ pub enum BitBoard {
     Small(u32),
     Medium(u128),
     Large { data: Vec<u64> },
+}
+
+#[derive(Clone, Debug)]
+pub struct UnmakeInfo {
+    pub captured: Option<(usize, Piece)>,
+    pub en_passant_target: Option<(usize, usize)>,
+    pub castling_rights: u8,
 }
 
 pub struct BitIterator<'a> {
@@ -178,8 +186,12 @@ impl Board {
         Some(index)
     }
 
-    pub fn index_to_coords(&self, index: usize) -> Vec<usize> {
-        let mut coords = vec![0; self.dimension];
+    pub fn index_to_coords(&self, index: usize) -> SmallVec<[usize; 4]> {
+        let mut coords = SmallVec::with_capacity(self.dimension);
+        // Fill with zeros first then overwrite? Or verify strict logic.
+        // Logic: coords[i] = temp % side...
+        // We know dimension.
+        coords.resize(self.dimension, 0);
         let mut temp = index;
         for i in 0..self.dimension {
             coords[i] = temp % self.side;
@@ -364,17 +376,53 @@ impl Board {
         Some(Piece { piece_type, owner })
     }
 
-    pub fn apply_move(&mut self, mv: &Move) -> Result<(), String> {
+    pub fn get_piece_at_index(&self, index: usize) -> Option<Piece> {
+        let owner = if self.white_occupancy.get_bit(index) {
+            Some(Player::White)
+        } else if self.black_occupancy.get_bit(index) {
+            Some(Player::Black)
+        } else {
+            None
+        }?;
+
+        let piece_type = if self.pawns.get_bit(index) {
+            PieceType::Pawn
+        } else if self.rooks.get_bit(index) {
+            PieceType::Rook
+        } else if self.knights.get_bit(index) {
+            PieceType::Knight
+        } else if self.bishops.get_bit(index) {
+            PieceType::Bishop
+        } else if self.queens.get_bit(index) {
+            PieceType::Queen
+        } else if self.kings.get_bit(index) {
+            PieceType::King
+        } else {
+            return None;
+        };
+
+        Some(Piece { piece_type, owner })
+    }
+
+    pub fn apply_move(&mut self, mv: &Move) -> Result<UnmakeInfo, String> {
         let from_idx = self
             .coords_to_index(&mv.from.values)
-            .ok_or("Invalid from".to_string())?;
-        let to_idx = self
-            .coords_to_index(&mv.to.values)
-            .ok_or("Invalid to".to_string())?;
+            .ok_or("Invalid from")?;
+        let to_idx = self.coords_to_index(&mv.to.values).ok_or("Invalid to")?;
 
         let moving_piece = self
-            .get_piece(&mv.from)
-            .ok_or("No piece at from".to_string())?;
+            .get_piece_at_index(from_idx)
+            .ok_or("No piece at from")?;
+
+        // 0. Prepare Unmake Info
+        let saved_ep = self.en_passant_target;
+        let saved_castling = self.castling_rights;
+        let mut captured = None;
+
+        // Check if there is a piece at destination (Standard Capture)
+        if let Some(target_p) = self.get_piece_at_index(to_idx) {
+            captured = Some((to_idx, target_p));
+        }
 
         self.history.push(self.hash);
 
@@ -383,6 +431,10 @@ impl Board {
             if let Some((target, victim)) = self.en_passant_target {
                 if to_idx == target {
                     // EP Capture: Remove the victim pawn
+                    // Capture info needs to be updated to the victim
+                    if let Some(victim_p) = self.get_piece_at_index(victim) {
+                        captured = Some((victim, victim_p));
+                    }
                     self.remove_piece_at_index(victim);
                 }
             }
@@ -392,19 +444,13 @@ impl Board {
         self.en_passant_target = None;
 
         // 3. Set EP target if double push
-        // Note: We need to detect "Double Push" on ANY axis for Phase 2.
-        // For now, assuming standard rank-based double push, but keeping generic distance check.
         if moving_piece.piece_type == PieceType::Pawn {
-            // Check distance on all axes. If exactly ONE axis has distance 2, and others 0.
-            let mut diffs = Vec::new();
+            let mut diffs = SmallVec::<[usize; 4]>::new();
             for i in 0..self.dimension {
                 let d = (mv.from.values[i] as isize - mv.to.values[i] as isize).abs();
-                diffs.push(d);
+                diffs.push(d as usize);
             }
 
-            // A double push must be distance 2 on movement axis and 0 on others?
-            // Yes, strict double push.
-            // Identify the movement axis.
             let double_step_axis = diffs.iter().position(|&d| d == 2);
             let any_other_movement = diffs
                 .iter()
@@ -413,9 +459,6 @@ impl Board {
 
             if let Some(axis) = double_step_axis {
                 if !any_other_movement {
-                    // It is a double push!
-                    // Target is the skipped square.
-                    // Victim is `to_idx` (the pawn that moved).
                     let dir = if mv.to.values[axis] > mv.from.values[axis] {
                         1
                     } else {
@@ -431,7 +474,7 @@ impl Board {
         }
 
         // --- Castling Logic ---
-        let mut castling_rook_move = None;
+        let mut castling_rook_move: Option<(usize, usize, Piece)> = None;
 
         // Update Rights if King Moves
         if moving_piece.piece_type == PieceType::King {
@@ -443,25 +486,16 @@ impl Board {
 
         // Update Rights if Rook Moves/Captured (Side=8 enforced)
         if self.side == 8 {
-            // White Rooks: A1 (0,0), H1 (0,7). Indices depend on dimension.
-            // We need to construct coords to check indices.
-            // But we can check "corner" properties if standard setup.
-            // Let's safely calculate rook indices.
-
-            // Base coords: Rank=0 (White) or 7 (Black).
-            // File=0 or 7.
-            // Other Axes: 0 (White) or 7 (Black).
             let w_rank = 0;
             let b_rank = 7;
-
-            let mut w_qs_c = vec![w_rank; self.dimension];
+            let mut w_qs_c: SmallVec<[usize; 4]> = smallvec![w_rank; self.dimension];
             w_qs_c[1] = 0;
-            let mut w_ks_c = vec![w_rank; self.dimension];
+            let mut w_ks_c: SmallVec<[usize; 4]> = smallvec![w_rank; self.dimension];
             w_ks_c[1] = 7;
 
-            let mut b_qs_c = vec![b_rank; self.dimension];
+            let mut b_qs_c: SmallVec<[usize; 4]> = smallvec![b_rank; self.dimension];
             b_qs_c[1] = 0;
-            let mut b_ks_c = vec![b_rank; self.dimension];
+            let mut b_ks_c: SmallVec<[usize; 4]> = smallvec![b_rank; self.dimension];
             b_ks_c[1] = 7;
 
             let w_qs = self.coords_to_index(&w_qs_c);
@@ -469,6 +503,8 @@ impl Board {
             let b_qs = self.coords_to_index(&b_qs_c);
             let b_ks = self.coords_to_index(&b_ks_c);
 
+            // Important: Logic check for rook capture or move.
+            // If captured (to_idx), rights lost. If moved (from_idx), rights lost.
             for idx in [from_idx, to_idx] {
                 if Some(idx) == w_qs {
                     self.castling_rights &= !0x2;
@@ -521,6 +557,12 @@ impl Board {
 
         // --- Apply Main Move ---
         self.remove_piece_at_index(from_idx);
+        // If standard capture, remove piece at to_idx.
+        // If EP, we already removed victim.
+        // If no capture, to_idx is empty.
+        // NOTE: if captured is set, we need to ensure the piece is gone.
+        // remove_piece_at_index(to_idx) is safe even if empty?
+        // Yes, clears bits.
         self.remove_piece_at_index(to_idx);
 
         let piece_to_place = if let Some(promo_type) = mv.promotion {
@@ -542,7 +584,89 @@ impl Board {
 
         self.hash = self.zobrist.get_hash(self, moving_piece.owner.opponent());
 
-        Ok(())
+        Ok(UnmakeInfo {
+            captured,
+            en_passant_target: saved_ep,
+            castling_rights: saved_castling,
+        })
+    }
+
+    pub fn unmake_move(&mut self, mv: &Move, info: UnmakeInfo) {
+        // Restore hash
+        if let Some(h) = self.history.pop() {
+            self.hash = h;
+        }
+
+        // Restore State
+        self.en_passant_target = info.en_passant_target;
+        self.castling_rights = info.castling_rights;
+
+        let from_idx = self.coords_to_index(&mv.from.values).unwrap(); // Should exist
+        let to_idx = self.coords_to_index(&mv.to.values).unwrap();
+
+        // 1. In reverse: Handle Castling first? Or just move pieces back.
+        // If it was Castling, move Rook back.
+        // Same logic to detect castling from move.
+        // Moving piece was likely King if castling. Checks...
+        // We need 'moving_piece' type. usage of get_piece_at_index(to_idx)
+        // after move applied gives us the piece. (Or promoted piece).
+
+        // Actually, we can just check if Dist=2 for King logic.
+        // But what if we don't know it was a King?
+        // We can inspect the piece at `to_idx` before we move it back.
+        let moved_piece = self
+            .get_piece_at_index(to_idx)
+            .expect("Piece missing in unmake");
+
+        if moved_piece.piece_type == PieceType::King {
+            let dist_file = (mv.from.values[1] as isize - mv.to.values[1] as isize).abs();
+            let mut other_axes_moved = false;
+            for i in 0..self.dimension {
+                if i != 1 && mv.from.values[i] != mv.to.values[i] {
+                    other_axes_moved = true;
+                    break;
+                }
+            }
+            if dist_file == 2 && !other_axes_moved {
+                // Castling! Move rook back.
+                // Inverse: Rook went from r_from -> r_to. We move r_to -> r_from.
+                let is_kingside = mv.to.values[1] > mv.from.values[1];
+                let rook_file_from = if is_kingside { 7 } else { 0 };
+                let rook_file_to = if is_kingside { 5 } else { 3 };
+
+                let mut rook_from_coords = mv.from.values.clone();
+                rook_from_coords[1] = rook_file_from;
+                let mut rook_to_coords = mv.from.values.clone();
+                rook_to_coords[1] = rook_file_to;
+
+                let r_from_idx = self.coords_to_index(&rook_from_coords).unwrap();
+                let r_to_idx = self.coords_to_index(&rook_to_coords).unwrap();
+
+                let rook_piece = self
+                    .get_piece_at_index(r_to_idx)
+                    .expect("Rook missing unmake");
+                self.remove_piece_at_index(r_to_idx);
+                self.place_piece_at_index(r_from_idx, rook_piece);
+            }
+        }
+
+        // 2. Move Piece back (to -> from)
+        self.remove_piece_at_index(to_idx);
+
+        let original_piece = if mv.promotion.is_some() {
+            Piece {
+                piece_type: PieceType::Pawn,
+                owner: moved_piece.owner,
+            }
+        } else {
+            moved_piece
+        };
+        self.place_piece_at_index(from_idx, original_piece);
+
+        // 3. Restore Captured
+        if let Some((idx, piece)) = info.captured {
+            self.place_piece_at_index(idx, piece);
+        }
     }
 
     pub fn get_king_coordinate(&self, player: Player) -> Option<Coordinate> {

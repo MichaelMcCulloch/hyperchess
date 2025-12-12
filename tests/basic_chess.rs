@@ -43,7 +43,7 @@ fn test_initial_board_setup_and_pawn_move() {
     board.set_piece(&b_king_coord, b_king).unwrap();
 
     // Generate moves for White
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     assert!(!moves.is_empty(), "Should generate moves");
 

@@ -25,7 +25,7 @@ fn test_super_pawn_z_axis_movement() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     // Axis 0 (X/Rank): Allowed (+1)
     // Axis 1 (Y/File): Forbidden (Lateral)
@@ -78,7 +78,7 @@ fn test_super_pawn_capture_multidimensional() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let capture = moves.iter().find(|m| m.to == target);
 
     assert!(

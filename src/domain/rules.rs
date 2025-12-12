@@ -1,11 +1,12 @@
 use crate::domain::board::Board;
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{Move, PieceType, Player};
+use smallvec::SmallVec;
 
 pub struct Rules;
 
 impl Rules {
-    pub fn generate_legal_moves(board: &Board, player: Player) -> Vec<Move> {
+    pub fn generate_legal_moves(board: &mut Board, player: Player) -> Vec<Move> {
         let mut moves = Vec::new();
         let pseudo_legal = Self::generate_pseudo_legal_moves(board, player);
 
@@ -15,22 +16,11 @@ impl Rules {
             }
         }
 
-        // Castling moves
         Self::generate_castling_moves(board, player, &mut moves);
-
         moves
     }
 
     pub fn is_square_attacked(board: &Board, square: &Coordinate, by_player: Player) -> bool {
-        // To check if a square is attacked by `by_player`, we can pretend there is a piece on `square`
-        // and see if it can "capture" a piece of `by_player` using the movement rules of that piece.
-        // E.g. if a Knight on `square` can jump to a square occupied by an enemy Knight, then `square` is attacked by that enemy Knight.
-        // NOTE: We rely on board.get_index / coords_to_index which are now internal or public?
-        // We made `coords_to_index` public in Board.
-
-        let dimension = board.dimension;
-        let side = board.side;
-        // Accessing helper on board instance
         let _index = if let Some(idx) = board.coords_to_index(&square.values) {
             idx
         } else {
@@ -42,8 +32,10 @@ impl Rules {
             Player::Black => &board.black_occupancy,
         };
 
+        let dimension = board.dimension;
+        let side = board.side;
+
         // 1. Check Leapers (Knights, Kings)
-        // Check Knight attacks
         let knight_offsets = Self::get_knight_offsets(dimension);
         for offset in &knight_offsets {
             if let Some(target_coord) = Self::apply_offset(&square.values, offset, side) {
@@ -55,7 +47,6 @@ impl Rules {
             }
         }
 
-        // Check King attacks (useful for validation, though kings can't really attack to checkmate)
         let king_offsets = Self::get_king_offsets(dimension);
         for offset in &king_offsets {
             if let Some(target_coord) = Self::apply_offset(&square.values, offset, side) {
@@ -67,10 +58,7 @@ impl Rules {
             }
         }
 
-        // 2. Check Rays (Rook, Bishop, Queen)
-        // Reverse raycast: Look outwards from `square`. If first piece hit is enemy slider of relevant type, then attacked.
-
-        // Rook vectors
+        // 2. Check Rays
         let rook_dirs = Self::get_rook_directions(dimension);
         for dir in &rook_dirs {
             if Self::scan_ray_for_threat(
@@ -84,7 +72,6 @@ impl Rules {
             }
         }
 
-        // Bishop vectors
         let bishop_dirs = Self::get_bishop_directions(dimension);
         for dir in &bishop_dirs {
             if Self::scan_ray_for_threat(
@@ -99,11 +86,6 @@ impl Rules {
         }
 
         // 3. Check Pawns
-        // Pawns attack "Forward" + "Sideways".
-        // Inverse: Check if there is an enemy pawn that can capture `square`.
-        // Enemy pawn moves "Forward" (relative to enemy).
-        // So we look "Backward" relative to enemy from `square`.
-
         let pawn_attack_offsets = Self::get_pawn_capture_offsets_for_target(dimension, by_player);
         for offset in &pawn_attack_offsets {
             if let Some(target_coord) = Self::apply_offset(&square.values, offset, side) {
@@ -125,24 +107,11 @@ impl Rules {
         attacker: Player,
         threat_types: &[PieceType],
     ) -> bool {
-        // We are at `origin_vals` (which is empty or the target square).
-        // We look OUTWARD in `direction`.
-        // If we hit an enemy piece of `threat_types`, return true.
-        // If we hit any other piece (own or enemy non-threat), return false (blocked).
-
-        let mut current = origin_vals.to_vec();
+        let mut current: SmallVec<[usize; 4]> = SmallVec::from_slice(origin_vals);
         let enemy_occupancy = match attacker {
             Player::White => &board.white_occupancy,
             Player::Black => &board.black_occupancy,
         };
-        // Own occupancy relative to the square being attacked?
-        // No, 'own' relative to the attacker is 'enemy' relative to the square?
-        // Wait. `by_player` is the ATTACKER.
-        // So `enemy_occupancy` is the ATTACKER's pieces.
-        // `own_occupancy` is the DEFENDER's pieces (or Empty).
-        // Any piece blocks the ray.
-
-        // Actually simpler: Just check ALL occupancy.
         let all_occupancy = board
             .white_occupancy
             .clone()
@@ -152,14 +121,7 @@ impl Rules {
             if let Some(next) = Self::apply_offset(&current, direction, board.side) {
                 if let Some(idx) = board.coords_to_index(&next) {
                     if all_occupancy.get_bit(idx) {
-                        // Hit a piece. Is it an enemy threat?
                         if enemy_occupancy.get_bit(idx) {
-                            // It is an enemy piece. Check type.
-                            // We need to check if it is one of the threat_types.
-
-                            // Optimization: The caller passes specific threat types (e.g. Rook+Queen).
-                            // But board bitboards are separated.
-                            // Let's iterate threat types passed.
                             for &t in threat_types {
                                 let match_found = match t {
                                     PieceType::Rook => board.rooks.get_bit(idx),
@@ -171,11 +133,8 @@ impl Rules {
                                     return true;
                                 }
                             }
-                            // If we hit an enemy piece but it's not in the threat list (e.g. a pawn blocking a rook),
-                            // then it blocks the view.
                             return false;
                         } else {
-                            // Hit own piece (Defender's piece), blocks view.
                             return false;
                         }
                     }
@@ -190,11 +149,8 @@ impl Rules {
         false
     }
 
-    // --- Internal Helpers ---
-
     fn generate_pseudo_legal_moves(board: &Board, player: Player) -> Vec<Move> {
         let mut moves = Vec::new();
-        // Iterate all cells, find pieces owned by player
         let occupancy = match player {
             Player::White => &board.white_occupancy,
             Player::Black => &board.black_occupancy,
@@ -204,7 +160,6 @@ impl Rules {
             let coord_vals = board.index_to_coords(i);
             let coord = Coordinate::new(coord_vals.clone());
 
-            // Identify piece type
             let piece_type = if board.pawns.get_bit(i) {
                 PieceType::Pawn
             } else if board.knights.get_bit(i) {
@@ -218,7 +173,7 @@ impl Rules {
             } else if board.kings.get_bit(i) {
                 PieceType::King
             } else {
-                continue; // Error?
+                continue;
             };
 
             match piece_type {
@@ -272,30 +227,30 @@ impl Rules {
         moves
     }
 
-    fn leaves_king_in_check(board: &Board, player: Player, mv: &Move) -> bool {
-        // Clone board, apply move, check if king is attacked
-        // This is expensive. Future optimization: Incremental update or specialized check.
-        let mut temp_board = board.clone();
-        if let Err(_) = temp_board.apply_move(mv) {
-            return true; // Illegal move invocation
-        }
+    fn leaves_king_in_check(board: &mut Board, player: Player, mv: &Move) -> bool {
+        let info = match board.apply_move(mv) {
+            Ok(i) => i,
+            Err(_) => return true,
+        };
 
-        if let Some(king_pos) = temp_board.get_king_coordinate(player) {
-            Self::is_square_attacked(&temp_board, &king_pos, player.opponent())
+        let in_check = if let Some(king_pos) = board.get_king_coordinate(player) {
+            Self::is_square_attacked(board, &king_pos, player.opponent())
         } else {
-            // No king? For testing (sandbox), assume safe.
             false
-        }
+        };
+
+        board.unmake_move(mv, info);
+        in_check
     }
 
     fn generate_castling_moves(board: &Board, player: Player, moves: &mut Vec<Move>) {
         if board.side != 8 {
-            return; // Standard castling requires 8x8 geometry (File 0..7)
+            return;
         }
 
         let (rights_mask, rank) = match player {
-            Player::White => (0x3, 0),              // Rights 1 & 2 (KS, QS)
-            Player::Black => (0xC, board.side - 1), // Rights 4 & 8 (KS, QS)
+            Player::White => (0x3, 0),
+            Player::Black => (0xC, board.side - 1),
         };
 
         let my_rights = board.castling_rights & rights_mask;
@@ -303,14 +258,13 @@ impl Rules {
             return;
         }
 
-        // Determine King Position (Fixed at File 4)
         let king_file = 4;
         let mut king_coords = vec![rank; board.dimension];
         king_coords[1] = king_file;
         let king_coord = Coordinate::new(king_coords.clone());
 
         if Self::is_square_attacked(board, &king_coord, player.opponent()) {
-            return; // King in check
+            return;
         }
 
         let all_occupancy = board
@@ -318,7 +272,6 @@ impl Rules {
             .clone()
             .or_with(&board.black_occupancy);
 
-        // Kingside (File 5, 6 empty; To=6; Rook from 7 to 5)
         let ks_mask = match player {
             Player::White => 0x1,
             Player::Black => 0x4,
@@ -327,7 +280,6 @@ impl Rules {
             let f_file = 5;
             let g_file = 6;
 
-            // Check Empty Path (5, 6)
             let mut f_coords = king_coords.clone();
             f_coords[1] = f_file;
             let mut g_coords = king_coords.clone();
@@ -344,7 +296,6 @@ impl Rules {
             }
 
             if !blocked {
-                // Check Safe Passage (5, 6)
                 if !Self::is_square_attacked(board, &Coordinate::new(f_coords), player.opponent())
                     && !Self::is_square_attacked(
                         board,
@@ -361,7 +312,6 @@ impl Rules {
             }
         }
 
-        // Queenside (File 1, 2, 3 empty; To=2; Rook from 0 to 3)
         let qs_mask = match player {
             Player::White => 0x2,
             Player::Black => 0x8,
@@ -393,9 +343,6 @@ impl Rules {
             }
 
             if !blocked {
-                // Check Safe Passage (3 (through) and 2 (dest)). Note: B(1) not traversed by King.
-                // King moves 4->3->2.
-                // Square 3 (D) must be safe. Square 2 (C) must be safe.
                 if !Self::is_square_attacked(board, &Coordinate::new(d_coords), player.opponent())
                     && !Self::is_square_attacked(
                         board,
@@ -412,6 +359,8 @@ impl Rules {
             }
         }
     }
+
+    // Geometry Generators
 
     // Geometry Generators
 
@@ -542,8 +491,12 @@ impl Rules {
 
     // Move Generation Logic implementation
 
-    fn apply_offset(coords: &[usize], offset: &[isize], side: usize) -> Option<Vec<usize>> {
-        let mut new_coords = Vec::with_capacity(coords.len());
+    fn apply_offset(
+        coords: &[usize],
+        offset: &[isize],
+        side: usize,
+    ) -> Option<SmallVec<[usize; 4]>> {
+        let mut new_coords = SmallVec::with_capacity(coords.len());
         for (c, &o) in coords.iter().zip(offset.iter()) {
             let val = *c as isize + o;
             if val < 0 || val >= side as isize {

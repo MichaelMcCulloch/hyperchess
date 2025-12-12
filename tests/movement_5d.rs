@@ -23,7 +23,7 @@ fn test_5d_bishop_movement() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     // Valid moves must have EVEN number of unit steps.
     for m in moves {
@@ -57,7 +57,7 @@ fn test_5d_rook_movement() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     // Valid moves must have EXACTLY ONE unit step.
     for m in moves {
@@ -87,7 +87,7 @@ fn test_5d_knight_movement() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     for m in moves {
         let diff = diff_coords(&center, &m.to);

@@ -4,8 +4,8 @@ use crate::domain::models::{Move, Player};
 use crate::domain::rules::Rules;
 use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::ai::transposition::{Flag, LockFreeTT};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 const CHECKMATE_SCORE: i32 = 30000;
@@ -164,28 +164,32 @@ impl MinimaxBot {
         let original_alpha = alpha;
 
         for mv in moves {
-            let mut next_board = board.clone();
-            if next_board.apply_move(&mv).is_ok() {
-                let score = -self.minimax(
-                    &mut next_board,
-                    depth - 1,
-                    -beta,
-                    -alpha,
-                    player.opponent(),
-                    start_time,
-                );
+            let info = match board.apply_move(&mv) {
+                Ok(i) => i,
+                Err(_) => continue,
+            };
 
-                if self.stop_flag.load(Ordering::Relaxed) {
-                    return 0;
-                }
+            let score = -self.minimax(
+                board,
+                depth - 1,
+                -beta,
+                -alpha,
+                player.opponent(),
+                start_time,
+            );
 
-                if score > best_score {
-                    best_score = score;
-                }
-                alpha = alpha.max(score);
-                if alpha >= beta {
-                    break;
-                }
+            board.unmake_move(&mv, info);
+
+            if self.stop_flag.load(Ordering::Relaxed) {
+                return 0;
+            }
+
+            if score > best_score {
+                best_score = score;
+            }
+            alpha = alpha.max(score);
+            if alpha >= beta {
+                break;
             }
         }
 
@@ -213,34 +217,41 @@ impl PlayerStrategy for MinimaxBot {
         let mut best_moves = Vec::new(); // Collect all best moves
 
         // Root Search
-        let moves = Rules::generate_legal_moves(board, player);
+        // Clone board once to create mutable working copy
+        let mut root_board = board.clone();
+
+        let moves = Rules::generate_legal_moves(&mut root_board, player);
         if moves.is_empty() {
             return None;
         }
 
         for mv in moves {
-            let mut next_board = board.clone();
-            if next_board.apply_move(&mv).is_ok() {
-                if next_board.is_repetition() {
-                    // Repetition handling logic (implicit via minimax returning 0 for it usually)
-                }
+            let info = match root_board.apply_move(&mv) {
+                Ok(i) => i,
+                Err(_) => continue,
+            };
 
-                let score = -self.minimax(
-                    &mut next_board,
-                    self.depth - 1,
-                    -i32::MAX,
-                    i32::MAX,
-                    player.opponent(),
-                    start_time,
-                );
+            if root_board.is_repetition() {
+                // Repetition handling logic (implicit via minimax returning 0 for it usually)
+            }
 
-                if score > best_score {
-                    best_score = score;
-                    best_moves.clear();
-                    best_moves.push(mv);
-                } else if score == best_score {
-                    best_moves.push(mv);
-                }
+            let score = -self.minimax(
+                &mut root_board,
+                self.depth - 1,
+                -i32::MAX,
+                i32::MAX,
+                player.opponent(),
+                start_time,
+            );
+
+            root_board.unmake_move(&mv, info);
+
+            if score > best_score {
+                best_score = score;
+                best_moves.clear();
+                best_moves.push(mv);
+            } else if score == best_score {
+                best_moves.push(mv);
             }
         }
 

@@ -20,7 +20,7 @@ fn test_pawn_moves_white_start() {
     };
     board.set_piece(&pawn_pos, p).unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let dests: HashSet<Coordinate> = moves.iter().map(|m| m.to.clone()).collect();
 
     // Expect:
@@ -67,7 +67,7 @@ fn test_pawn_blocked() {
         )
         .unwrap(); // Enemy blocks
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     // Pawn cannot move forward on Axis 0 (blocked).
     // Axis 1 (File) is forbidden for pushes.
@@ -105,7 +105,7 @@ fn test_pawn_capture() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let dests: HashSet<Coordinate> = moves.iter().map(|m| m.to.clone()).collect();
 
     // Moves:
@@ -134,7 +134,7 @@ fn test_knight_moves_center() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     // 8 possible moves in 2D
     assert_eq!(moves.len(), 8);
@@ -176,7 +176,7 @@ fn test_rook_moves() {
         )
         .unwrap(); // Clean block
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let rook_moves: Vec<_> = moves.into_iter().filter(|m| m.from == pos).collect();
     let dests: HashSet<Coordinate> = rook_moves.iter().map(|m| m.to.clone()).collect();
 
@@ -203,7 +203,7 @@ fn test_bishop_moves() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     // Main diagonal only: (1,1) .. (7,7) -> 7 moves
     assert_eq!(moves.len(), 7);
 }
@@ -222,7 +222,7 @@ fn test_king_moves() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     // 8 neighbors
     assert_eq!(moves.len(), 8);
 }

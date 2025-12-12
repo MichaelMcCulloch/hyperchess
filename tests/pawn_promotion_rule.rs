@@ -36,7 +36,7 @@ fn test_promotion_conditions_3d_white() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let promo_move = moves
         .iter()
         .find(|m| m.to == coord_3d(7, 0, 7) && m.promotion == Some(PieceType::Queen));
@@ -67,7 +67,7 @@ fn test_no_promotion_partial_far_side_white() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     // Check for plain move
     let plain_move = moves
@@ -108,7 +108,7 @@ fn test_promotion_conditions_3d_black() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::Black);
+    let moves = Rules::generate_legal_moves(&mut board, Player::Black);
     let promo_move = moves
         .iter()
         .find(|m| m.to == coord_3d(0, 0, 0) && m.promotion == Some(PieceType::Queen));
@@ -138,7 +138,7 @@ fn test_no_promotion_partial_black() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::Black);
+    let moves = Rules::generate_legal_moves(&mut board, Player::Black);
     let promo_move = moves
         .iter()
         .find(|m| m.to == coord_3d(0, 0, 7) && m.promotion.is_some());

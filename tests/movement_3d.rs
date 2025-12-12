@@ -23,7 +23,7 @@ fn test_bishop_moves_3d() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     // Bishops in 3D: even number of non-zero displacements.
     // Dirs:
     // 1. (±1, ±1, 0)
@@ -63,7 +63,7 @@ fn test_rook_moves_3d() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     // Rooks: 1 non-zero displacement.
     // directions: (±1, 0, 0), (0, ±1, 0), (0, 0, ±1) -> 6 dirs.
 
@@ -90,7 +90,7 @@ fn test_knight_moves_3d() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let dests: HashSet<Coordinate> = moves.iter().map(|m| m.to.clone()).collect();
 
     // Knights: One axis ±2, one axis ±1.

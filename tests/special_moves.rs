@@ -61,7 +61,7 @@ fn test_en_passant() {
     );
 
     // 4. Generate White Moves
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let ep_move = moves.iter().find(|m| m.to == coord(5, 5));
 
     assert!(
@@ -113,7 +113,7 @@ fn test_castling_kingside_white() {
         .unwrap();
 
     // Generate moves
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     // Expect Castling move to G1 (0, 6) from King (0, 4)
     let castle_move = moves
@@ -175,7 +175,7 @@ fn test_castling_blocked() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let castle_move = moves
         .iter()
         .find(|m| m.from == coord(0, 4) && m.to == coord(0, 6));
@@ -218,7 +218,7 @@ fn test_castling_through_check() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let castle_move = moves
         .iter()
         .find(|m| m.from == coord(0, 4) && m.to == coord(0, 6));
