@@ -1,10 +1,10 @@
 use crate::domain::coordinate::Coordinate;
-use crate::domain::models::{BoardState, Move, Piece, PieceType, Player};
-use crate::infrastructure::zobrist::ZobristKeys;
+use crate::domain::models::{GameResult, Move, Piece, PieceType, Player};
+use crate::domain::zobrist::ZobristKeys;
 use std::fmt;
 use std::sync::Arc;
 
-// Keep BitBoard implementation as is for storage
+// BitBoard implementation as Domain Primitive for Board Representation
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BitBoard {
     Small(u32),
@@ -13,7 +13,7 @@ pub enum BitBoard {
 }
 
 #[derive(Clone, Debug)]
-pub struct BitBoardState {
+pub struct Board {
     pub dimension: usize,
     pub side: usize,
     pub total_cells: usize,
@@ -35,19 +35,15 @@ pub struct BitBoardState {
     pub history: Vec<u64>,
 }
 
-impl BitBoardState {
+impl Board {
     pub fn new_empty(dimension: usize, side: usize) -> Self {
         let total_cells = side.pow(dimension as u32);
         let empty = BitBoard::new_empty(dimension, side);
 
-        // Intentionally create a new ZobristKeys for each "Game" (or ideally shared, but this is safe)
-        // For distinct games to have distinct hashes, we might want a shared seed?
-        // But for per-game consistency, a new random set is fine as long as it persists for the game.
-        // Actually, to make tests deterministic or to share across clones, this is fine.
         let zobrist = Arc::new(ZobristKeys::new(total_cells));
-        let hash = 0; // Will be calculated after setup
+        let hash = 0;
 
-        BitBoardState {
+        Board {
             dimension,
             side,
             total_cells,
@@ -65,9 +61,38 @@ impl BitBoardState {
         }
     }
 
-    // Helper to get raw index
-    fn get_index(&self, coord: &Coordinate) -> Option<usize> {
-        crate::infrastructure::persistence::coords_to_index(&coord.values, self.side)
+    pub fn new(dimension: usize, side: usize) -> Self {
+        let mut board = Self::new_empty(dimension, side);
+        board.setup_standard_chess();
+        board
+    }
+
+    // NOTE: Temporarily duplicating helper for now to avoid circular dep if needed,
+    // but ideally we move coords_to_index utility to domain too?
+    // Actually, persistence.rs will be DELETED, so we need to move the utility functions!
+    // I will add them to this file at the bottom or as methods.
+
+    pub fn coords_to_index(&self, coords: &[usize]) -> Option<usize> {
+        let mut index = 0;
+        let mut multiplier = 1;
+        for &c in coords {
+            if c >= self.side {
+                return None;
+            }
+            index += c * multiplier;
+            multiplier *= self.side;
+        }
+        Some(index)
+    }
+
+    pub fn index_to_coords(&self, index: usize) -> Vec<usize> {
+        let mut coords = vec![0; self.dimension];
+        let mut temp = index;
+        for i in 0..self.dimension {
+            coords[i] = temp % self.side;
+            temp /= self.side;
+        }
+        coords
     }
 
     fn remove_piece_at_index(&mut self, index: usize) {
@@ -98,10 +123,6 @@ impl BitBoardState {
     }
 
     pub fn setup_standard_chess(&mut self) {
-        // Only populate one "slice" of pieces per side in N-dims.
-        // Iterate only over the "file" dimension (dimension 1, typically 'y').
-        // All other dimensions > 1 are fixed to 0 for White and side-1 for Black.
-
         for file_y in 0..self.side {
             // --- White Pieces (z=0, w=0, ...) ---
             let mut white_coords = vec![0; self.dimension];
@@ -109,7 +130,7 @@ impl BitBoardState {
 
             // Place Pawn at Rank 1
             white_coords[0] = 1;
-            if let Some(idx) = self.get_index(&Coordinate::new(white_coords.clone())) {
+            if let Some(idx) = self.coords_to_index(&white_coords) {
                 self.place_piece_at_index(
                     idx,
                     Piece {
@@ -121,7 +142,7 @@ impl BitBoardState {
 
             // Place Backrank at Rank 0
             white_coords[0] = 0;
-            if let Some(idx) = self.get_index(&Coordinate::new(white_coords.clone())) {
+            if let Some(idx) = self.coords_to_index(&white_coords) {
                 let piece_type = self.determine_backrank_piece(file_y, self.side);
                 self.place_piece_at_index(
                     idx,
@@ -141,7 +162,7 @@ impl BitBoardState {
             // Place Pawn at Rank side-2
             if self.side > 3 {
                 black_coords[0] = self.side - 2;
-                if let Some(idx) = self.get_index(&Coordinate::new(black_coords.clone())) {
+                if let Some(idx) = self.coords_to_index(&black_coords) {
                     self.place_piece_at_index(
                         idx,
                         Piece {
@@ -154,7 +175,7 @@ impl BitBoardState {
 
             // Place Backrank at Rank side-1
             black_coords[0] = self.side - 1;
-            if let Some(idx) = self.get_index(&Coordinate::new(black_coords.clone())) {
+            if let Some(idx) = self.coords_to_index(&black_coords) {
                 let piece_type = self.determine_backrank_piece(file_y, self.side);
                 self.place_piece_at_index(
                     idx,
@@ -165,22 +186,7 @@ impl BitBoardState {
                 );
             }
         }
-
-        // Initial hash calculation
-        self.hash = self.zobrist.get_hash(self, Player::White); // Assume White starts? BoardState doesn't track current player yet...
-                                                                // Wait, BoardState is just state. It doesn't know whose turn it is implicitly unless we store it.
-                                                                // Zobrist hash usually includes "side to move".
-                                                                // For Minimax, we pass `player` in.
-                                                                // But `apply_move` doesn't take `player` (it's implicit in the move or the flow).
-                                                                // Let's assume standard chess setup implies White to move, but correct hashing depends on `player`.
-                                                                // I will calculate a "Board Config" hash here, avoiding the "side to move" part if I don't know it,
-                                                                // OR I will assume White to move for the initial setup.
-                                                                // However, `ZobristKey::get_hash` takes `current_player`.
-                                                                // Let's assume White for setup.
-                                                                // When `apply_move` happens, we need to know who moved to flip the hash.
-                                                                // `Move` struct doesn't have `player`? No, it's just from/to.
-                                                                // But `BitBoardState::get_piece` gives owner.
-                                                                // I can deduce the player from the moving piece!
+        self.hash = self.zobrist.get_hash(self, Player::White);
     }
 
     fn determine_backrank_piece(&self, file_idx: usize, total_files: usize) -> PieceType {
@@ -196,7 +202,6 @@ impl BitBoardState {
             };
         }
 
-        // Generic N-D heuristic
         let king_pos = total_files / 2;
         if file_idx == king_pos {
             return PieceType::King;
@@ -216,52 +221,28 @@ impl BitBoardState {
     }
 
     pub fn is_repetition(&self) -> bool {
-        // 3-fold repetition: simple count check
-        // We only check for 2 previous occurrences + current = 3
         let count = self.history.iter().filter(|&&h| h == self.hash).count();
-        // If it's in history 2 times already, current state makes it 3.
-        // Wait, history stores *previous* states.
-        // So checking if `self.hash` exists 2 times in history is 3-fold.
-        // Even 1 recurrence is enough to trigger a draw claim in some rules?
-        // Standard chess is 3-fold.
-        // The user complained about "looping". Even 2-fold (revisiting once) is the start of a loop.
-        // If I return true on ANY repetition, it forces strict progress.
-        // Let's stick to strict repetition avoidance for now (1 previous occurrence) to kill the loop aggressively?
-        // No, standard is 3-fold. But Minimax looks ahead.
-        // If Minimax sees "I go A -> B -> A", it sees A in history ONCE.
-        // If that is penalized, it won't do it.
-        // So `count >= 1` is enough to penalize immediate "undo" moves or simple loops if we want to avoid them.
-        // Let's try `count >= 1` (2-fold) first. It prevents "dancing".
         count >= 1
     }
 
-    /// Recalculates hash fully. used for testing or re-sync.
     pub fn update_hash(&mut self, player_to_move: Player) {
         self.hash = self.zobrist.get_hash(self, player_to_move);
     }
-}
 
-impl BoardState for BitBoardState {
-    fn new(dimension: usize, side: usize) -> Self {
-        let mut board = Self::new_empty(dimension, side);
-        board.setup_standard_chess(); // Call the helper method
-        board
-    }
-
-    fn dimension(&self) -> usize {
+    pub fn dimension(&self) -> usize {
         self.dimension
     }
 
-    fn side(&self) -> usize {
+    pub fn side(&self) -> usize {
         self.side
     }
 
-    fn total_cells(&self) -> usize {
+    pub fn total_cells(&self) -> usize {
         self.total_cells
     }
 
-    fn get_piece(&self, coord: &Coordinate) -> Option<Piece> {
-        let index = self.get_index(coord)?;
+    pub fn get_piece(&self, coord: &Coordinate) -> Option<Piece> {
+        let index = self.coords_to_index(&coord.values)?;
 
         let owner = if self.white_occupancy.get_bit(index) {
             Some(Player::White)
@@ -290,22 +271,21 @@ impl BoardState for BitBoardState {
         Some(Piece { piece_type, owner })
     }
 
-    fn apply_move(&mut self, mv: &Move) -> Result<(), String> {
-        let from_idx = self.get_index(&mv.from).ok_or("Invalid From coord")?;
-        let to_idx = self.get_index(&mv.to).ok_or("Invalid To coord")?;
+    pub fn apply_move(&mut self, mv: &Move) -> Result<(), String> {
+        let from_idx = self
+            .coords_to_index(&mv.from.values)
+            .ok_or("Invalid From coord")?;
+        let to_idx = self
+            .coords_to_index(&mv.to.values)
+            .ok_or("Invalid To coord")?;
 
         let moving_piece = self.get_piece(&mv.from).ok_or("No piece at origin")?;
 
-        // Push current hash to history BEFORE modifying state
         self.history.push(self.hash);
 
-        // 1. Remove piece from 'from'
         self.remove_piece_at_index(from_idx);
-
-        // 2. Remove any piece at 'to' (Capture)
         self.remove_piece_at_index(to_idx);
 
-        // 3. Place piece at 'to'
         let piece_to_place = if let Some(promo_type) = mv.promotion {
             Piece {
                 piece_type: promo_type,
@@ -317,17 +297,12 @@ impl BoardState for BitBoardState {
 
         self.place_piece_at_index(to_idx, piece_to_place);
 
-        // Update Hash
-        // We know the player who moved is `moving_piece.owner`.
-        // The NEXT player is `moving_piece.owner.opponent()`.
-        // Zobrist hash depends on "side to move".
-        // Use the opponent as the side to move for the NEW state.
         self.hash = self.zobrist.get_hash(self, moving_piece.owner.opponent());
 
         Ok(())
     }
 
-    fn get_king_coordinate(&self, player: Player) -> Option<Coordinate> {
+    pub fn get_king_coordinate(&self, player: Player) -> Option<Coordinate> {
         let occupancy = match player {
             Player::White => &self.white_occupancy,
             Player::Black => &self.black_occupancy,
@@ -335,43 +310,38 @@ impl BoardState for BitBoardState {
 
         for i in 0..self.total_cells {
             if occupancy.get_bit(i) && self.kings.get_bit(i) {
-                return Some(Coordinate::new(index_to_coords(
-                    i,
-                    self.dimension,
-                    self.side,
-                )));
+                return Some(Coordinate::new(self.index_to_coords(i)));
             }
         }
         None
     }
 
-    fn set_piece(&mut self, coord: &Coordinate, piece: Piece) -> Result<(), String> {
-        let index = self.get_index(coord).ok_or("Invalid coord")?;
+    pub fn set_piece(&mut self, coord: &Coordinate, piece: Piece) -> Result<(), String> {
+        let index = self.coords_to_index(&coord.values).ok_or("Invalid coord")?;
         self.remove_piece_at_index(index);
         self.place_piece_at_index(index, piece);
-        // Note: set_piece is usually for setup. We should probably invalidate history or just update hash.
-        // For debugging/setup, let's just update hash assuming White to move default?
-        // Or leave it stale. safer to update if possible.
-        // Let's assume White to move for arbitrary set_piece calls unless specified.
         self.hash = self.zobrist.get_hash(self, Player::White);
         Ok(())
     }
 
-    fn clear_cell(&mut self, coord: &Coordinate) {
-        if let Some(index) = self.get_index(coord) {
+    pub fn clear_cell(&mut self, coord: &Coordinate) {
+        if let Some(index) = self.coords_to_index(&coord.values) {
             self.remove_piece_at_index(index);
             self.hash = self.zobrist.get_hash(self, Player::White);
         }
     }
 
-    fn check_status(&self, _player_to_move: Player) -> crate::domain::models::GameResult {
-        crate::domain::models::GameResult::InProgress
+    pub fn check_status(&self, _player_to_move: Player) -> GameResult {
+        GameResult::InProgress
     }
 }
 
-impl fmt::Display for BitBoardState {
+// Display trait implementation - might move to presentation/display?
+// For now, keep generic Debug or Display
+impl fmt::Display for Board {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", crate::infrastructure::display::render_board(self))
+        // Needs display.rs logic.. will refactor later.
+        write!(f, "Board(dim={}, side={})", self.dimension, self.side)
     }
 }
 
@@ -452,27 +422,4 @@ impl BitBoard {
             _ => panic!("Mismatched BitBoard types"),
         }
     }
-}
-
-pub fn index_to_coords(index: usize, dimension: usize, side: usize) -> Vec<usize> {
-    let mut coords = vec![0; dimension];
-    let mut temp = index;
-    for i in 0..dimension {
-        coords[i] = temp % side;
-        temp /= side;
-    }
-    coords
-}
-
-pub fn coords_to_index(coords: &[usize], side: usize) -> Option<usize> {
-    let mut index = 0;
-    let mut multiplier = 1;
-    for &c in coords {
-        if c >= side {
-            return None;
-        }
-        index += c * multiplier;
-        multiplier *= side;
-    }
-    Some(index)
 }

@@ -1,9 +1,10 @@
-use crate::domain::models::{BoardState, PieceType, Player};
+use crate::domain::board::Board;
+use crate::domain::models::{PieceType, Player};
 use std::fmt;
 
 const COLOR_RESET: &str = "\x1b[0m";
-const COLOR_WHITE: &str = "\x1b[37m"; // White text
-const COLOR_BLACK: &str = "\x1b[31m"; // Red for black to stand out on dark terminals? Or Blue? Let's use Red for visual contrast as "Opponent" or simple Yellow. Let's stick to standard terminal colors.
+const COLOR_WHITE: &str = "\x1b[37m";
+const COLOR_BLACK: &str = "\x1b[31m";
 const COLOR_DIM: &str = "\x1b[90m";
 
 struct Canvas {
@@ -40,22 +41,11 @@ impl fmt::Display for Canvas {
     }
 }
 
-pub fn render_board<S: BoardState>(board: &S) -> String {
+pub fn render_board(board: &Board) -> String {
     let dim = board.dimension();
     let side = board.side();
     let (w, h) = calculate_size(dim, side);
     let mut canvas = Canvas::new(w, h);
-    // Wait, the original logic had `side=3` hardcoded.
-    // We should respect `board.side()`.
-
-    // Original code assumed TicTacToe dim recursion.
-    // For Chess 4x4 (HyperChess default usually 4 side), logic changes.
-    // If side is variable, layout is tricky.
-    // Let's assume recursion logic works for generic side if updated.
-
-    // For now, let's keep it simple and assume standard recursion logic for N-dim.
-    // If side != 3, formatting might break if not generalized.
-    // Let's generalize `side`.
 
     draw_recursive(board, dim, &mut canvas, 0, 0, 0);
 
@@ -71,7 +61,7 @@ fn calculate_size(dim: usize, side: usize) -> (usize, usize) {
     }
     if dim == 2 {
         return (side * 2 - 1, side);
-    } // simple 2D view: "P . . ."
+    }
 
     let (child_w, child_h) = calculate_size(dim - 1, side);
 
@@ -84,8 +74,8 @@ fn calculate_size(dim: usize, side: usize) -> (usize, usize) {
     }
 }
 
-fn draw_recursive<S: BoardState>(
-    board: &S,
+fn draw_recursive(
+    board: &Board,
     current_dim: usize,
     canvas: &mut Canvas,
     x: usize,
@@ -98,11 +88,7 @@ fn draw_recursive<S: BoardState>(
         for dy in 0..side {
             for dx in 0..side {
                 let cell_idx = base_index + dx + dy * side;
-                let coord_vals = crate::infrastructure::persistence::index_to_coords(
-                    cell_idx,
-                    board.dimension(),
-                    board.side(),
-                );
+                let coord_vals = board.index_to_coords(cell_idx);
                 let coord = crate::domain::coordinate::Coordinate::new(coord_vals);
 
                 let s = match board.get_piece(&coord) {
@@ -125,10 +111,7 @@ fn draw_recursive<S: BoardState>(
                                 PieceType::King => "♚",
                             },
                         };
-                        // No color needed for symbols usually, but user kept color struct?
-                        // User specifically asked: "Replace X/O coloring with Piece Characters".
-                        // Assuming we can drop the explicit color codes or keep them.
-                        // Let's keep the color codes for extra clarity but use the symbols.
+
                         let color = match piece.owner {
                             Player::White => COLOR_WHITE,
                             Player::Black => COLOR_BLACK,
@@ -144,9 +127,6 @@ fn draw_recursive<S: BoardState>(
     }
 
     let (child_w, child_h) = calculate_size(current_dim - 1, side);
-    // Note: calculate_size is static and hardcoded to side=4 above, be careful if side!=4
-    // Better to pass side to calculate_size or make it dynamic if recursion depth matches.
-
     let stride = side.pow((current_dim - 1) as u32);
 
     if current_dim % 2 != 0 {

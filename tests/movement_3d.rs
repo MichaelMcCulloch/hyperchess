@@ -1,7 +1,7 @@
+use hyperchess::domain::board::Board;
 use hyperchess::domain::coordinate::Coordinate;
-use hyperchess::domain::models::{BoardState, Piece, PieceType, Player};
-use hyperchess::infrastructure::mechanics::MoveGenerator;
-use hyperchess::infrastructure::persistence::BitBoardState;
+use hyperchess::domain::models::{Piece, PieceType, Player};
+use hyperchess::domain::rules::Rules;
 use std::collections::HashSet;
 
 fn coord3(x: usize, y: usize, z: usize) -> Coordinate {
@@ -11,7 +11,7 @@ fn coord3(x: usize, y: usize, z: usize) -> Coordinate {
 #[test]
 fn test_bishop_moves_3d() {
     // 3D board, 4x4x4
-    let mut board = BitBoardState::new_empty(3, 4);
+    let mut board = Board::new_empty(3, 4);
     let pos = coord3(1, 1, 1);
     board
         .set_piece(
@@ -23,7 +23,7 @@ fn test_bishop_moves_3d() {
         )
         .unwrap();
 
-    let moves = MoveGenerator::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&board, Player::White);
     // Bishops in 3D: even number of non-zero displacements.
     // Dirs:
     // 1. (±1, ±1, 0)
@@ -51,7 +51,7 @@ fn test_bishop_moves_3d() {
 
 #[test]
 fn test_rook_moves_3d() {
-    let mut board = BitBoardState::new_empty(3, 4);
+    let mut board = Board::new_empty(3, 4);
     let pos = coord3(1, 1, 1);
     board
         .set_piece(
@@ -63,7 +63,7 @@ fn test_rook_moves_3d() {
         )
         .unwrap();
 
-    let moves = MoveGenerator::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&board, Player::White);
     // Rooks: 1 non-zero displacement.
     // directions: (±1, 0, 0), (0, ±1, 0), (0, 0, ±1) -> 6 dirs.
 
@@ -78,7 +78,7 @@ fn test_rook_moves_3d() {
 
 #[test]
 fn test_knight_moves_3d() {
-    let mut board = BitBoardState::new_empty(3, 4);
+    let mut board = Board::new_empty(3, 4);
     let pos = coord3(0, 0, 0);
     board
         .set_piece(
@@ -90,7 +90,7 @@ fn test_knight_moves_3d() {
         )
         .unwrap();
 
-    let moves = MoveGenerator::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&board, Player::White);
     let dests: HashSet<Coordinate> = moves.iter().map(|m| m.to.clone()).collect();
 
     // Knights: One axis ±2, one axis ±1.

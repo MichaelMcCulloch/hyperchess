@@ -1,5 +1,6 @@
+use crate::domain::board::Board;
 use crate::domain::coordinate::Coordinate;
-use crate::domain::models::{BoardState, Move, Player};
+use crate::domain::models::{Move, Player};
 use crate::domain::services::PlayerStrategy;
 use std::io::{self, Write};
 
@@ -28,8 +29,8 @@ impl HumanConsolePlayer {
     }
 }
 
-impl<S: BoardState> PlayerStrategy<S> for HumanConsolePlayer {
-    fn get_move(&mut self, board: &S, _player: Player) -> Option<Move> {
+impl PlayerStrategy for HumanConsolePlayer {
+    fn get_move(&mut self, board: &Board, _player: Player) -> Option<Move> {
         let dim = board.dimension();
         let side = board.side();
         let total = board.total_cells();

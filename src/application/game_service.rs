@@ -1,20 +1,19 @@
-use crate::domain::models::{Board, BoardState, GameResult, Player};
+use crate::domain::board::Board;
+use crate::domain::models::{GameResult, Player};
 use crate::domain::services::PlayerStrategy;
-use std::fmt::Display;
 
-pub struct GameService<'a, S: BoardState> {
-    board: Board<S>,
-    player_white: Box<dyn PlayerStrategy<S> + 'a>,
-    player_black: Box<dyn PlayerStrategy<S> + 'a>, // Assuming PlayerStrategy<S> is object safe or we use generic S?
-    // Box<dyn PlayerStrategy<S>> is valid if PlayerStrategy is object safe.
+pub struct GameService<'a> {
+    board: Board,
+    player_white: Box<dyn PlayerStrategy + 'a>,
+    player_black: Box<dyn PlayerStrategy + 'a>,
     turn: Player,
 }
 
-impl<'a, S: BoardState + Display> GameService<'a, S> {
+impl<'a> GameService<'a> {
     pub fn new(
-        board: Board<S>,
-        player_white: Box<dyn PlayerStrategy<S> + 'a>,
-        player_black: Box<dyn PlayerStrategy<S> + 'a>,
+        board: Board,
+        player_white: Box<dyn PlayerStrategy + 'a>,
+        player_black: Box<dyn PlayerStrategy + 'a>,
     ) -> Self {
         GameService {
             board,
@@ -24,7 +23,7 @@ impl<'a, S: BoardState + Display> GameService<'a, S> {
         }
     }
 
-    pub fn board(&self) -> &Board<S> {
+    pub fn board(&self) -> &Board {
         &self.board
     }
 
@@ -49,8 +48,7 @@ impl<'a, S: BoardState + Display> GameService<'a, S> {
             Player::Black => &mut self.player_black,
         };
 
-        // Assuming get_move returns Option<Move>
-        if let Some(mv) = strategy.get_move(self.board.state(), self.turn) {
+        if let Some(mv) = strategy.get_move(&self.board, self.turn) {
             self.board.apply_move(&mv).map_err(|e| e.to_string())?;
 
             self.turn = self.turn.opponent();

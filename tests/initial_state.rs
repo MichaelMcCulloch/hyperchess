@@ -1,6 +1,6 @@
+use hyperchess::domain::board::Board;
 use hyperchess::domain::coordinate::Coordinate;
-use hyperchess::domain::models::{Board, BoardState, PieceType, Player};
-use hyperchess::infrastructure::persistence::BitBoardState;
+use hyperchess::domain::models::{PieceType, Player};
 
 fn coord(x: usize, y: usize) -> Coordinate {
     Coordinate::new(vec![x, y])
@@ -8,7 +8,7 @@ fn coord(x: usize, y: usize) -> Coordinate {
 
 #[test]
 fn test_standard_2d_chess_setup() {
-    let board = Board::<BitBoardState>::new(2, 8);
+    let board = Board::new(2, 8);
 
     // Check Corner Rooks
     assert!(
@@ -58,7 +58,7 @@ fn test_standard_2d_chess_setup() {
 #[test]
 fn test_3d_setup() {
     // 3D 4x4x4
-    let board = Board::<BitBoardState>::new(3, 4);
+    let board = Board::new(3, 4);
 
     // New Setup Logic:
     // White: x=0 (Rank), pieces at z=0.
@@ -105,7 +105,7 @@ fn test_3d_setup() {
     // Check occupancy count if possible, or just trust specific checks.
 }
 
-fn is_piece_at<S: BoardState>(board: &Board<S>, c: &Coordinate, t: PieceType, p: Player) -> bool {
+fn is_piece_at(board: &Board, c: &Coordinate, t: PieceType, p: Player) -> bool {
     if let Some(piece) = board.get_piece(c) {
         piece.piece_type == t && piece.owner == p
     } else {

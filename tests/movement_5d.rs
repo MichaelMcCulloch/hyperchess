@@ -1,7 +1,7 @@
+use hyperchess::domain::board::Board;
 use hyperchess::domain::coordinate::Coordinate;
-use hyperchess::domain::models::{BoardState, Piece, PieceType, Player};
-use hyperchess::infrastructure::mechanics::MoveGenerator;
-use hyperchess::infrastructure::persistence::BitBoardState;
+use hyperchess::domain::models::{Piece, PieceType, Player};
+use hyperchess::domain::rules::Rules;
 
 #[test]
 fn test_5d_bishop_movement() {
@@ -9,7 +9,7 @@ fn test_5d_bishop_movement() {
     // Small side ensures we don't explode memory if vec size depends on (side^N) linearly.
     let dimension = 5;
     let side = 3;
-    let mut board = BitBoardState::new_empty(dimension, side);
+    let mut board = Board::new_empty(dimension, side);
 
     // Center-ish: (1, 1, 1, 1, 1)
     let center = Coordinate::new(vec![1, 1, 1, 1, 1]);
@@ -23,7 +23,7 @@ fn test_5d_bishop_movement() {
         )
         .unwrap();
 
-    let moves = MoveGenerator::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&board, Player::White);
 
     // Valid moves must have EVEN number of unit steps.
     for m in moves {
@@ -44,7 +44,7 @@ fn test_5d_bishop_movement() {
 fn test_5d_rook_movement() {
     let dimension = 5;
     let side = 3;
-    let mut board = BitBoardState::new_empty(dimension, side);
+    let mut board = Board::new_empty(dimension, side);
 
     let center = Coordinate::new(vec![1, 1, 1, 1, 1]);
     board
@@ -57,7 +57,7 @@ fn test_5d_rook_movement() {
         )
         .unwrap();
 
-    let moves = MoveGenerator::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&board, Player::White);
 
     // Valid moves must have EXACTLY ONE unit step.
     for m in moves {
@@ -74,7 +74,7 @@ fn test_5d_rook_movement() {
 fn test_5d_knight_movement() {
     let dimension = 5;
     let side = 5; // Need enough space for L-jump
-    let mut board = BitBoardState::new_empty(dimension, side);
+    let mut board = Board::new_empty(dimension, side);
 
     let center = Coordinate::new(vec![2, 2, 2, 2, 2]);
     board
@@ -87,7 +87,7 @@ fn test_5d_knight_movement() {
         )
         .unwrap();
 
-    let moves = MoveGenerator::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&board, Player::White);
 
     for m in moves {
         let diff = diff_coords(&center, &m.to);

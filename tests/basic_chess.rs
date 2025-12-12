@@ -1,12 +1,12 @@
-use hyperchess::domain::models::{BoardState, Player};
-use hyperchess::infrastructure::mechanics::MoveGenerator;
-use hyperchess::infrastructure::persistence::{index_to_coords, BitBoardState};
+use hyperchess::domain::board::Board;
+use hyperchess::domain::models::Player;
+use hyperchess::domain::rules::Rules;
 
 #[test]
 fn test_initial_board_setup_and_pawn_move() {
     let dim = 2; // Simple 2D chess
     let side = 8;
-    let mut board = BitBoardState::new_empty(dim, side);
+    let mut board = Board::new_empty(dim, side);
 
     // We need to populate the board first. BitBoardState::new returns EMPTY board now (based on persistence.rs change).
     // So we must manually setup pieces or assume GameService setup.
@@ -21,7 +21,7 @@ fn test_initial_board_setup_and_pawn_move() {
         owner: Player::White,
     };
     let start_idx = 8; // (0, 1) in 8x8
-    let start_coord = Coordinate::new(index_to_coords(start_idx, dim, side));
+    let start_coord = Coordinate::new(board.index_to_coords(start_idx));
 
     board.set_piece(&start_coord, pawn).unwrap();
 
@@ -43,7 +43,7 @@ fn test_initial_board_setup_and_pawn_move() {
     board.set_piece(&b_king_coord, b_king).unwrap();
 
     // Generate moves for White
-    let moves = MoveGenerator::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&board, Player::White);
 
     assert!(!moves.is_empty(), "Should generate moves");
 

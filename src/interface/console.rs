@@ -1,16 +1,13 @@
 use crate::application::game_service::GameService;
-use crate::domain::models::{BoardState, GameResult};
-use std::fmt::Display;
+use crate::domain::models::GameResult;
+use crate::infrastructure::display::render_board;
 
 pub struct ConsoleInterface;
 
 impl ConsoleInterface {
-    pub fn run<S>(mut game_service: GameService<S>)
-    where
-        S: BoardState + Display,
-    {
+    pub fn run(mut game_service: GameService) {
         println!("Starting Game...");
-        println!("{}", game_service.board().state());
+        println!("{}", render_board(game_service.board()));
 
         loop {
             if let Some(result) = game_service.is_game_over() {
@@ -27,13 +24,11 @@ impl ConsoleInterface {
 
             match game_service.perform_next_move() {
                 Ok(_) => {
-                    println!("{}", game_service.board().state());
+                    println!("{}", render_board(game_service.board()));
                 }
                 Err(e) => {
                     println!("Error: {}", e);
                     if e == "No move available" {
-                        // Should be caught by is_game_over if checks are correct,
-                        // but if perform_next_move fails explicitly:
                         break;
                     }
                 }

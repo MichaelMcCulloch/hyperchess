@@ -1,7 +1,7 @@
+use hyperchess::domain::board::Board;
 use hyperchess::domain::coordinate::Coordinate;
-use hyperchess::domain::models::{BoardState, Piece, PieceType, Player};
-use hyperchess::infrastructure::mechanics::MoveGenerator;
-use hyperchess::infrastructure::persistence::BitBoardState;
+use hyperchess::domain::models::{Piece, PieceType, Player};
+use hyperchess::domain::rules::Rules;
 use std::collections::HashSet;
 
 fn coord(x: usize, y: usize) -> Coordinate {
@@ -10,7 +10,7 @@ fn coord(x: usize, y: usize) -> Coordinate {
 
 #[test]
 fn test_pawn_moves_white_start() {
-    let mut board = BitBoardState::new_empty(2, 8);
+    let mut board = Board::new_empty(2, 8);
     // Remove all pieces for clean slate testing?
     // `new` creates empty board? User prompt said "The board is empty at the beginning of the game".
     // Let's verify that. If so, we just place what we need.
@@ -30,7 +30,7 @@ fn test_pawn_moves_white_start() {
     };
     board.set_piece(&pawn_pos, p).unwrap();
 
-    let moves = MoveGenerator::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&board, Player::White);
 
     // Expect: Single push to (2, 3), Double push to (3, 3).
     // No captures available.
@@ -47,7 +47,7 @@ fn test_pawn_moves_white_start() {
 
 #[test]
 fn test_pawn_blocked() {
-    let mut board = BitBoardState::new_empty(2, 8);
+    let mut board = Board::new_empty(2, 8);
     let pawn_pos = coord(1, 4);
     let blocker = coord(2, 4);
 
@@ -70,7 +70,7 @@ fn test_pawn_blocked() {
         )
         .unwrap(); // Enemy blocks
 
-    let moves = MoveGenerator::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&board, Player::White);
 
     // Pawn cannot move forward if blocked.
     assert_eq!(moves.len(), 0, "Pawn should be blocked");
@@ -78,7 +78,7 @@ fn test_pawn_blocked() {
 
 #[test]
 fn test_pawn_capture() {
-    let mut board = BitBoardState::new_empty(2, 8);
+    let mut board = Board::new_empty(2, 8);
     let pawn_pos = coord(3, 3); // Not start rank
     let enemy_pos = coord(4, 4); // Diagonally forward right
 
@@ -101,7 +101,7 @@ fn test_pawn_capture() {
         )
         .unwrap();
 
-    let moves = MoveGenerator::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&board, Player::White);
 
     let dests: HashSet<Coordinate> = moves.iter().map(|m| m.to.clone()).collect();
 
@@ -114,7 +114,7 @@ fn test_pawn_capture() {
 
 #[test]
 fn test_knight_moves_center() {
-    let mut board = BitBoardState::new_empty(2, 8);
+    let mut board = Board::new_empty(2, 8);
     let pos = coord(4, 4);
     board
         .set_piece(
@@ -126,7 +126,7 @@ fn test_knight_moves_center() {
         )
         .unwrap();
 
-    let moves = MoveGenerator::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&board, Player::White);
 
     // 8 possible moves in 2D
     assert_eq!(moves.len(), 8);
@@ -145,7 +145,7 @@ fn test_knight_moves_center() {
 
 #[test]
 fn test_rook_moves() {
-    let mut board = BitBoardState::new_empty(2, 8);
+    let mut board = Board::new_empty(2, 8);
     let pos = coord(4, 4);
     board
         .set_piece(
@@ -168,7 +168,7 @@ fn test_rook_moves() {
         )
         .unwrap(); // Clean block
 
-    let moves = MoveGenerator::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&board, Player::White);
     let rook_moves: Vec<_> = moves.into_iter().filter(|m| m.from == pos).collect();
     let dests: HashSet<Coordinate> = rook_moves.iter().map(|m| m.to.clone()).collect();
 
@@ -187,7 +187,7 @@ fn test_rook_moves() {
 
 #[test]
 fn test_bishop_moves() {
-    let mut board = BitBoardState::new_empty(2, 8);
+    let mut board = Board::new_empty(2, 8);
     let pos = coord(0, 0); // Corner
     board
         .set_piece(
@@ -199,14 +199,14 @@ fn test_bishop_moves() {
         )
         .unwrap();
 
-    let moves = MoveGenerator::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&board, Player::White);
     // Main diagonal only: (1,1) .. (7,7) -> 7 moves
     assert_eq!(moves.len(), 7);
 }
 
 #[test]
 fn test_king_moves() {
-    let mut board = BitBoardState::new_empty(2, 8);
+    let mut board = Board::new_empty(2, 8);
     let pos = coord(1, 1);
     board
         .set_piece(
@@ -218,7 +218,7 @@ fn test_king_moves() {
         )
         .unwrap();
 
-    let moves = MoveGenerator::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&board, Player::White);
     // 8 neighbors
     assert_eq!(moves.len(), 8);
 }

@@ -1,9 +1,9 @@
 use super::mcts::MCTS;
-use crate::domain::models::{BoardState, Move, Player};
+use crate::domain::board::Board;
+use crate::domain::models::{Move, Player};
+use crate::domain::rules::Rules;
 use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::ai::transposition::{Flag, LockFreeTT};
-use crate::infrastructure::mechanics::MoveGenerator;
-use crate::infrastructure::persistence::BitBoardState;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -53,7 +53,7 @@ impl MinimaxBot {
         }
     }
 
-    fn evaluate(&self, board: &BitBoardState, player_at_leaf: Option<Player>) -> i32 {
+    fn evaluate(&self, board: &Board, player_at_leaf: Option<Player>) -> i32 {
         if self.use_mcts {
             if let Some(player) = player_at_leaf {
                 // Run MCTS
@@ -87,7 +87,7 @@ impl MinimaxBot {
         score
     }
 
-    fn get_piece_value(&self, board: &BitBoardState, idx: usize) -> i32 {
+    fn get_piece_value(&self, board: &Board, idx: usize) -> i32 {
         if board.pawns.get_bit(idx) {
             VAL_PAWN
         } else if board.knights.get_bit(idx) {
@@ -107,7 +107,7 @@ impl MinimaxBot {
 
     fn minimax(
         &self,
-        board: &mut BitBoardState,
+        board: &mut Board,
         depth: usize,
         mut alpha: i32,
         mut beta: i32,
@@ -150,11 +150,11 @@ impl MinimaxBot {
             };
         }
 
-        let moves = MoveGenerator::generate_legal_moves(board, player);
+        let moves = Rules::generate_legal_moves(board, player);
 
         if moves.is_empty() {
             if let Some(king_pos) = board.get_king_coordinate(player) {
-                if MoveGenerator::is_square_attacked(board, &king_pos, player.opponent()) {
+                if Rules::is_square_attacked(board, &king_pos, player.opponent()) {
                     return -CHECKMATE_SCORE + (self.depth - depth) as i32;
                 }
             }
@@ -204,8 +204,8 @@ impl MinimaxBot {
     }
 }
 
-impl PlayerStrategy<BitBoardState> for MinimaxBot {
-    fn get_move(&mut self, board: &BitBoardState, player: Player) -> Option<Move> {
+impl PlayerStrategy for MinimaxBot {
+    fn get_move(&mut self, board: &Board, player: Player) -> Option<Move> {
         self.nodes_searched.store(0, Ordering::Relaxed);
         self.stop_flag.store(false, Ordering::Relaxed);
 
@@ -214,7 +214,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
         let mut best_moves = Vec::new(); // Collect all best moves
 
         // Root Search
-        let moves = MoveGenerator::generate_legal_moves(board, player);
+        let moves = Rules::generate_legal_moves(board, player);
         if moves.is_empty() {
             return None;
         }

@@ -1,4 +1,5 @@
-use crate::domain::models::{Board, BoardState, GameResult, Move, Player};
+use crate::domain::board::Board;
+use crate::domain::models::{GameResult, Move, Player};
 
 #[derive(Debug)]
 pub enum GameError {
@@ -7,15 +8,15 @@ pub enum GameError {
 
 /// The Game Aggregate Root.
 /// It controls the lifecycle of the game, turns, and winning conditions.
-pub struct Game<S: BoardState> {
-    board: Board<S>,
+pub struct Game {
+    board: Board,
     turn: Player,
     status: GameResult,
     move_history: Vec<(Player, Move)>,
 }
 
-impl<S: BoardState> Game<S> {
-    pub fn new(board: Board<S>) -> Self {
+impl Game {
+    pub fn new(board: Board) -> Self {
         Self {
             board,
             turn: Player::White,
@@ -34,13 +35,11 @@ impl<S: BoardState> Game<S> {
             return Err(GameError::InvalidMove("Game is already over".to_string()));
         }
 
-        self.board
-            .apply_move(&mv) // Updated for Board::apply_move taking &Move
-            .map_err(GameError::InvalidMove)?;
+        self.board.apply_move(&mv).map_err(GameError::InvalidMove)?;
 
-        self.move_history.push((self.turn, mv));
+        self.move_history.push((self.turn, mv.clone()));
 
-        let result = self.board.check_status(self.turn); // Pass turn
+        let result = self.board.check_status(self.turn);
         self.status = result;
 
         if result == GameResult::InProgress {
@@ -58,11 +57,7 @@ impl<S: BoardState> Game<S> {
         self.status
     }
 
-    pub fn board(&self) -> &Board<S> {
+    pub fn board(&self) -> &Board {
         &self.board
-    }
-
-    pub fn state(&self) -> &S {
-        self.board.state()
     }
 }

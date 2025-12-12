@@ -1,9 +1,8 @@
 use hyperchess::application::game_service::GameService;
-use hyperchess::domain::models::{Board, BoardState};
+use hyperchess::domain::board::Board;
 use hyperchess::domain::services::PlayerStrategy;
 use hyperchess::infrastructure::ai::MinimaxBot;
 use hyperchess::infrastructure::console::HumanConsolePlayer;
-use hyperchess::infrastructure::persistence::BitBoardState;
 use std::env;
 
 fn main() {
@@ -34,23 +33,19 @@ fn main() {
         }
     }
 
-    // Support custom side via args? For now default 4.
-
-    let _board_state = BitBoardState::new(dimension, side);
-
-    let player_white: Box<dyn PlayerStrategy<BitBoardState>> = match player_white_type {
+    let player_white: Box<dyn PlayerStrategy> = match player_white_type {
         "h" => Box::new(HumanConsolePlayer::new()),
         "c" => Box::new(MinimaxBot::new(depth, time_limit, dimension, side).with_mcts(50)),
         _ => Box::new(HumanConsolePlayer::new()),
     };
 
-    let player_black: Box<dyn PlayerStrategy<BitBoardState>> = match player_black_type {
+    let player_black: Box<dyn PlayerStrategy> = match player_black_type {
         "h" => Box::new(HumanConsolePlayer::new()),
         "c" => Box::new(MinimaxBot::new(depth, time_limit, dimension, side).with_mcts(50)),
         _ => Box::new(MinimaxBot::new(depth, time_limit, dimension, side).with_mcts(50)),
     };
 
-    let board = Board::<BitBoardState>::new(dimension, side);
+    let board = Board::new(dimension, side);
 
     let game = GameService::new(board, player_white, player_black);
     hyperchess::interface::console::ConsoleInterface::run(game);

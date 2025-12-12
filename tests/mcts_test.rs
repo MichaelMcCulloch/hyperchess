@@ -1,10 +1,10 @@
-use hyperchess::domain::models::{BoardState, Player};
+use hyperchess::domain::board::Board;
+use hyperchess::domain::models::Player;
 use hyperchess::infrastructure::ai::mcts::MCTS;
-use hyperchess::infrastructure::persistence::BitBoardState;
 
 #[test]
 fn test_mcts_initialization_and_run() {
-    let board = BitBoardState::new(3, 4); // Small 3D board
+    let board = Board::new(3, 4); // Small 3D board
     let mut mcts = MCTS::new(&board, Player::White, None);
     let win_rate = mcts.run(&board, 50);
 
@@ -16,8 +16,10 @@ fn test_mcts_initialization_and_run() {
 
 #[test]
 fn test_mcts_checkmate_detection() {
-    let mut board = BitBoardState::new(2, 8);
-    board.setup_standard_chess();
+    let board = Board::new(2, 8);
+    // Board::new already sets up standard chess.
+    // board.setup_standard_chess(); // No need to call again if new calls it, but let's check.
+    // Board::new calls setup_standard_chess.
 
     let mut mcts = MCTS::new(&board, Player::White, None);
     let win_rate = mcts.run(&board, 50);

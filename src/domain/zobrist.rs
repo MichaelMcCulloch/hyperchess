@@ -1,5 +1,5 @@
+use crate::domain::board::Board; // Will create this next
 use crate::domain::models::Player;
-use crate::infrastructure::persistence::BitBoardState;
 use rand::Rng;
 
 #[derive(Debug, Clone)]
@@ -14,7 +14,6 @@ impl ZobristKeys {
         let size = 12 * total_cells;
         let mut piece_keys = Vec::with_capacity(size);
         for _ in 0..size {
-            // Using r#gen because 'gen' is a reserved keyword in Rust 2024
             piece_keys.push(rng.r#gen());
         }
         Self {
@@ -23,7 +22,7 @@ impl ZobristKeys {
         }
     }
 
-    pub fn get_hash(&self, board: &BitBoardState, current_player: Player) -> u64 {
+    pub fn get_hash(&self, board: &Board, current_player: Player) -> u64 {
         let mut hash = 0;
         if current_player == Player::Black {
             hash ^= self.black_to_move;

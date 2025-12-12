@@ -1,11 +1,11 @@
+use crate::domain::board::Board;
 use crate::domain::coordinate::Coordinate;
-use crate::domain::models::{BoardState, Move, PieceType, Player};
-use crate::infrastructure::persistence::{coords_to_index, index_to_coords, BitBoardState};
+use crate::domain::models::{Move, PieceType, Player};
 
-pub struct MoveGenerator;
+pub struct Rules;
 
-impl MoveGenerator {
-    pub fn generate_legal_moves(board: &BitBoardState, player: Player) -> Vec<Move> {
+impl Rules {
+    pub fn generate_legal_moves(board: &Board, player: Player) -> Vec<Move> {
         let mut moves = Vec::new();
         let pseudo_legal = Self::generate_pseudo_legal_moves(board, player);
 
@@ -17,18 +17,17 @@ impl MoveGenerator {
         moves
     }
 
-    pub fn is_square_attacked(
-        board: &BitBoardState,
-        square: &Coordinate,
-        by_player: Player,
-    ) -> bool {
+    pub fn is_square_attacked(board: &Board, square: &Coordinate, by_player: Player) -> bool {
         // To check if a square is attacked by `by_player`, we can pretend there is a piece on `square`
         // and see if it can "capture" a piece of `by_player` using the movement rules of that piece.
         // E.g. if a Knight on `square` can jump to a square occupied by an enemy Knight, then `square` is attacked by that enemy Knight.
+        // NOTE: We rely on board.get_index / coords_to_index which are now internal or public?
+        // We made `coords_to_index` public in Board.
 
         let dimension = board.dimension;
         let side = board.side;
-        let _index = if let Some(idx) = coords_to_index(&square.values, side) {
+        // Accessing helper on board instance
+        let _index = if let Some(idx) = board.coords_to_index(&square.values) {
             idx
         } else {
             return false;
@@ -44,7 +43,7 @@ impl MoveGenerator {
         let knight_offsets = Self::get_knight_offsets(dimension);
         for offset in &knight_offsets {
             if let Some(target_coord) = Self::apply_offset(&square.values, offset, side) {
-                if let Some(target_idx) = coords_to_index(&target_coord, side) {
+                if let Some(target_idx) = board.coords_to_index(&target_coord) {
                     if enemy_occupancy.get_bit(target_idx) && board.knights.get_bit(target_idx) {
                         return true;
                     }
@@ -56,7 +55,7 @@ impl MoveGenerator {
         let king_offsets = Self::get_king_offsets(dimension);
         for offset in &king_offsets {
             if let Some(target_coord) = Self::apply_offset(&square.values, offset, side) {
-                if let Some(target_idx) = coords_to_index(&target_coord, side) {
+                if let Some(target_idx) = board.coords_to_index(&target_coord) {
                     if enemy_occupancy.get_bit(target_idx) && board.kings.get_bit(target_idx) {
                         return true;
                     }
@@ -104,7 +103,7 @@ impl MoveGenerator {
         let pawn_attack_offsets = Self::get_pawn_capture_offsets_for_target(dimension, by_player);
         for offset in &pawn_attack_offsets {
             if let Some(target_coord) = Self::apply_offset(&square.values, offset, side) {
-                if let Some(target_idx) = coords_to_index(&target_coord, side) {
+                if let Some(target_idx) = board.coords_to_index(&target_coord) {
                     if enemy_occupancy.get_bit(target_idx) && board.pawns.get_bit(target_idx) {
                         return true;
                     }
@@ -115,12 +114,83 @@ impl MoveGenerator {
         false
     }
 
+    fn scan_ray_for_threat(
+        board: &Board,
+        origin_vals: &[usize],
+        direction: &[isize],
+        attacker: Player,
+        threat_types: &[PieceType],
+    ) -> bool {
+        // We are at `origin_vals` (which is empty or the target square).
+        // We look OUTWARD in `direction`.
+        // If we hit an enemy piece of `threat_types`, return true.
+        // If we hit any other piece (own or enemy non-threat), return false (blocked).
+
+        let mut current = origin_vals.to_vec();
+        let enemy_occupancy = match attacker {
+            Player::White => &board.white_occupancy,
+            Player::Black => &board.black_occupancy,
+        };
+        // Own occupancy relative to the square being attacked?
+        // No, 'own' relative to the attacker is 'enemy' relative to the square?
+        // Wait. `by_player` is the ATTACKER.
+        // So `enemy_occupancy` is the ATTACKER's pieces.
+        // `own_occupancy` is the DEFENDER's pieces (or Empty).
+        // Any piece blocks the ray.
+
+        // Actually simpler: Just check ALL occupancy.
+        let all_occupancy = board
+            .white_occupancy
+            .clone()
+            .or_with(&board.black_occupancy);
+
+        loop {
+            if let Some(next) = Self::apply_offset(&current, direction, board.side) {
+                if let Some(idx) = board.coords_to_index(&next) {
+                    if all_occupancy.get_bit(idx) {
+                        // Hit a piece. Is it an enemy threat?
+                        if enemy_occupancy.get_bit(idx) {
+                            // It is an enemy piece. Check type.
+                            // We need to check if it is one of the threat_types.
+
+                            // Optimization: The caller passes specific threat types (e.g. Rook+Queen).
+                            // But board bitboards are separated.
+                            // Let's iterate threat types passed.
+                            for &t in threat_types {
+                                let match_found = match t {
+                                    PieceType::Rook => board.rooks.get_bit(idx),
+                                    PieceType::Bishop => board.bishops.get_bit(idx),
+                                    PieceType::Queen => board.queens.get_bit(idx),
+                                    _ => false,
+                                };
+                                if match_found {
+                                    return true;
+                                }
+                            }
+                            // If we hit an enemy piece but it's not in the threat list (e.g. a pawn blocking a rook),
+                            // then it blocks the view.
+                            return false;
+                        } else {
+                            // Hit own piece (Defender's piece), blocks view.
+                            return false;
+                        }
+                    }
+                    current = next;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        false
+    }
+
     // --- Internal Helpers ---
 
-    fn generate_pseudo_legal_moves(board: &BitBoardState, player: Player) -> Vec<Move> {
+    fn generate_pseudo_legal_moves(board: &Board, player: Player) -> Vec<Move> {
         let mut moves = Vec::new();
         // Iterate all cells, find pieces owned by player
-        // Optimization: Use an iterator over set bits if possible. For now, loop.
         for i in 0..board.total_cells {
             let occupancy = match player {
                 Player::White => &board.white_occupancy,
@@ -128,7 +198,7 @@ impl MoveGenerator {
             };
 
             if occupancy.get_bit(i) {
-                let coord_vals = index_to_coords(i, board.dimension, board.side);
+                let coord_vals = board.index_to_coords(i);
                 let coord = Coordinate::new(coord_vals.clone());
 
                 // Identify piece type
@@ -200,7 +270,7 @@ impl MoveGenerator {
         moves
     }
 
-    fn leaves_king_in_check(board: &BitBoardState, player: Player, mv: &Move) -> bool {
+    fn leaves_king_in_check(board: &Board, player: Player, mv: &Move) -> bool {
         // Clone board, apply move, check if king is attacked
         // This is expensive. Future optimization: Incremental update or specialized check.
         let mut temp_board = board.clone();
@@ -233,9 +303,6 @@ impl MoveGenerator {
 
     fn get_bishop_directions(dimension: usize) -> Vec<Vec<isize>> {
         // Even number of non-zero elements (user spec).
-        // Actually, normally strict bishop is 2 non-zero elements?
-        // User said: "Permutations of (±1, ±1, ..., 0) where the count of non-zero elements is EVEN."
-        // We will generate all 3^N directions, filter for even count of non-zeros.
         let mut dirs = Vec::new();
         let num_dirs = 3_usize.pow(dimension as u32);
         for i in 0..num_dirs {
@@ -326,8 +393,6 @@ impl MoveGenerator {
         // So we want to find where an Attacker could be relative to the Target.
         // Target = Attacker + Move.
         // Attacker = Target - Move.
-        // Move = (+1, 0, ..., +/-1, ...)
-        // Inverse Move = (-1, 0, ..., -/+1, ...)
 
         let direction = match attacker {
             Player::White => -1, // Look back
@@ -363,7 +428,7 @@ impl MoveGenerator {
     }
 
     fn generate_leaper_moves(
-        board: &BitBoardState,
+        board: &Board,
         origin: &Coordinate,
         player: Player,
         offsets: &[Vec<isize>],
@@ -376,7 +441,7 @@ impl MoveGenerator {
 
         for offset in offsets {
             if let Some(target_coords) = Self::apply_offset(&origin.values, offset, board.side) {
-                if let Some(target_idx) = coords_to_index(&target_coords, board.side) {
+                if let Some(target_idx) = board.coords_to_index(&target_coords) {
                     if !same_occupancy.get_bit(target_idx) {
                         // Empty or Enemy -> Legal
                         moves.push(Move {
@@ -391,7 +456,7 @@ impl MoveGenerator {
     }
 
     fn generate_slider_moves(
-        board: &BitBoardState,
+        board: &Board,
         origin: &Coordinate,
         player: Player,
         directions: &[Vec<isize>],
@@ -410,7 +475,7 @@ impl MoveGenerator {
             let mut current = origin.values.clone();
             loop {
                 if let Some(next) = Self::apply_offset(&current, dir, board.side) {
-                    if let Some(idx) = coords_to_index(&next, board.side) {
+                    if let Some(idx) = board.coords_to_index(&next) {
                         if own_occupancy.get_bit(idx) {
                             break; // Blocked by own piece
                         }
@@ -437,7 +502,7 @@ impl MoveGenerator {
     }
 
     fn generate_pawn_moves(
-        board: &BitBoardState,
+        board: &Board,
         origin: &Coordinate,
         player: Player,
         moves: &mut Vec<Move>,
@@ -447,25 +512,22 @@ impl MoveGenerator {
             Player::Black => -1,
         };
 
-        let _own_occupancy = match player {
-            Player::White => &board.white_occupancy,
-            Player::Black => &board.black_occupancy,
-        };
         let enemy_occupancy = match player.opponent() {
             Player::White => &board.white_occupancy,
             Player::Black => &board.black_occupancy,
         };
+        // Just checking occupancy generically
         let all_occupancy = board
             .white_occupancy
             .clone()
-            .or_with(&board.black_occupancy); // Or logic might be expensive
+            .or_with(&board.black_occupancy);
 
         // 1. One step forward
         let mut forward_step = vec![0; board.dimension];
         forward_step[0] = forward_dir;
 
         if let Some(target) = Self::apply_offset(&origin.values, &forward_step, board.side) {
-            if let Some(idx) = coords_to_index(&target, board.side) {
+            if let Some(idx) = board.coords_to_index(&target) {
                 if !all_occupancy.get_bit(idx) {
                     // Must be empty
                     Self::add_pawn_move(
@@ -478,9 +540,6 @@ impl MoveGenerator {
                     );
 
                     // 2. Double step?
-                    // Assume rank 1 (index 1) for White, rank Side-2 for Black?
-                    // Let's assume standard chess setup logic relative to side.
-                    // White starts at x0 = 1. Black starts at x0 = side - 2.
                     let is_start_rank = match player {
                         Player::White => origin.values[0] == 1,
                         Player::Black => origin.values[0] == board.side - 2,
@@ -490,7 +549,7 @@ impl MoveGenerator {
                         if let Some(target2) =
                             Self::apply_offset(&target, &forward_step, board.side)
                         {
-                            if let Some(idx2) = coords_to_index(&target2, board.side) {
+                            if let Some(idx2) = board.coords_to_index(&target2) {
                                 if !all_occupancy.get_bit(idx2) {
                                     Self::add_pawn_move(
                                         origin,
@@ -515,7 +574,7 @@ impl MoveGenerator {
                 let mut cap_step = forward_step.clone();
                 cap_step[i] = s;
                 if let Some(target) = Self::apply_offset(&origin.values, &cap_step, board.side) {
-                    if let Some(idx) = coords_to_index(&target, board.side) {
+                    if let Some(idx) = board.coords_to_index(&target) {
                         if enemy_occupancy.get_bit(idx) {
                             Self::add_pawn_move(
                                 origin,
@@ -567,54 +626,5 @@ impl MoveGenerator {
                 promotion: None,
             });
         }
-    }
-
-    fn scan_ray_for_threat(
-        board: &BitBoardState,
-        origin: &[usize],
-        dir: &[isize],
-        by_player: Player,
-        threat_types: &[PieceType],
-    ) -> bool {
-        let enemy_occupancy = match by_player {
-            Player::White => &board.white_occupancy,
-            Player::Black => &board.black_occupancy,
-        };
-        let own_occupancy = match by_player.opponent() {
-            Player::White => &board.white_occupancy,
-            Player::Black => &board.black_occupancy,
-        };
-
-        let mut current = origin.to_vec();
-        loop {
-            if let Some(next) = Self::apply_offset(&current, dir, board.side) {
-                if let Some(idx) = coords_to_index(&next, board.side) {
-                    if own_occupancy.get_bit(idx) {
-                        return false; // Blocked by own piece
-                    }
-                    if enemy_occupancy.get_bit(idx) {
-                        // Found enemy. Is it a threat?
-                        for &t in threat_types {
-                            let is_type = match t {
-                                PieceType::Queen => board.queens.get_bit(idx),
-                                PieceType::Rook => board.rooks.get_bit(idx),
-                                PieceType::Bishop => board.bishops.get_bit(idx),
-                                _ => false,
-                            };
-                            if is_type {
-                                return true;
-                            }
-                        }
-                        return false; // Enemy but not right type (e.g. Pawn blocking Queen ray)
-                    }
-                    current = next;
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-        false
     }
 }

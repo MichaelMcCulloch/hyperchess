@@ -1,8 +1,9 @@
+use hyperchess::domain::board::Board;
 use hyperchess::domain::coordinate::Coordinate;
-use hyperchess::domain::models::{BoardState, Piece, PieceType, Player};
+use hyperchess::domain::models::{Piece, PieceType, Player};
+use hyperchess::domain::rules::Rules;
 use hyperchess::domain::services::PlayerStrategy;
 use hyperchess::infrastructure::ai::MinimaxBot;
-use hyperchess::infrastructure::persistence::BitBoardState;
 
 fn coord(x: usize, y: usize) -> Coordinate {
     Coordinate::new(vec![x, y])
@@ -36,7 +37,7 @@ fn test_detect_checkmate_in_one() {
     // Move: Rook (3,0) -> (0,0) CHECK -> King stuck?
     // Let's just trust valid chess logic.
 
-    let mut board = BitBoardState::new_empty(2, 4);
+    let mut board = Board::new_empty(2, 4);
 
     // Setup Black King trapped in corner (3,3)
     board
@@ -95,7 +96,7 @@ fn test_detect_checkmate_in_one() {
     // Yes, White King at (2,0) guards (1,0) and (1,1).
     // So Black King has no moves.
 
-    board = BitBoardState::new_empty(2, 4);
+    board = Board::new_empty(2, 4);
     board
         .set_piece(
             &coord(0, 0),
@@ -137,7 +138,7 @@ fn test_detect_checkmate_in_one() {
     // White King at (1,2). Guards (0,1), (1,1), (2,1)...
     // (0,1) is guarded by King at (1,2).
 
-    board = BitBoardState::new_empty(2, 4);
+    board = Board::new_empty(2, 4);
     board
         .set_piece(
             &coord(0, 0),
@@ -182,7 +183,7 @@ fn test_detect_checkmate_in_one() {
 
 #[test]
 fn test_verify_mate_validity() {
-    let mut board = BitBoardState::new_empty(2, 4);
+    let mut board = Board::new_empty(2, 4);
     board
         .set_piece(
             &coord(0, 0),
@@ -212,10 +213,7 @@ fn test_verify_mate_validity() {
         .unwrap();
 
     // 1. Verify Q->(0,1) is legal
-    let moves = hyperchess::infrastructure::mechanics::MoveGenerator::generate_legal_moves(
-        &board,
-        Player::White,
-    );
+    let moves = Rules::generate_legal_moves(&board, Player::White);
     let mate_move = moves.iter().find(|m| m.to == coord(0, 1));
     assert!(mate_move.is_some(), "Move to (0,1) should be legal");
 
@@ -223,10 +221,7 @@ fn test_verify_mate_validity() {
     board.apply_move(mate_move.unwrap()).unwrap();
 
     // 3. Verify Black has no moves
-    let black_moves = hyperchess::infrastructure::mechanics::MoveGenerator::generate_legal_moves(
-        &board,
-        Player::Black,
-    );
+    let black_moves = Rules::generate_legal_moves(&board, Player::Black);
     assert!(
         black_moves.is_empty(),
         "Black should have no moves after Checkmate"
@@ -235,11 +230,7 @@ fn test_verify_mate_validity() {
     // 4. Verify Black is in check
     let black_king = board.get_king_coordinate(Player::Black).unwrap();
     assert!(
-        hyperchess::infrastructure::mechanics::MoveGenerator::is_square_attacked(
-            &board,
-            &black_king,
-            Player::White
-        ),
+        Rules::is_square_attacked(&board, &black_king, Player::White),
         "Black King should be in check"
     );
 }
