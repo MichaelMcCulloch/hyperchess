@@ -68,15 +68,22 @@ pub mod game_service;
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{GameResult, Move, Piece, PieceType, Player};
 use crate::domain::zobrist::ZobristKeys;
+use smallvec::{smallvec, SmallVec};
 use std::fmt;
 use std::sync::Arc;
 
-// BitBoard implementation as Domain Primitive for Board Representation
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BitBoard {
     Small(u32),
     Medium(u128),
     Large { data: Vec<u64> },
+}
+
+#[derive(Clone, Debug)]
+pub struct UnmakeInfo {
+    pub captured: Option<(usize, Piece)>,
+    pub en_passant_target: Option<(usize, usize)>,
+    pub castling_rights: u8,
 }
 
 pub struct BitIterator<'a> {
@@ -113,39 +120,23 @@ impl<'a> Iterator for BitIterator<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if self.current_chunk != 0 {
-                // Hardware intrinsic: TZCNT via trailing_zeros()
                 let trailing = self.current_chunk.trailing_zeros();
 
-                // Hardware intrinsic: BLSR (Reset lowest set bit)
-                // self.current_chunk &= self.current_chunk - 1;
-                // Note: Rust compiler optimizes the below to BLSR if BMI1 is enabled.
-                // We use the safe XOR approach or just clear the bit directly.
-                // Resetting via XOR is clean.
                 self.current_chunk &= !(1 << trailing);
-
-                // For medium board, we need to handle the upper bits if it was > 64 bits?
-                // Wait, Small(u32) is fine (fits in u64). Medium(u128) might be > 64 bits.
-                // My logic for Medium below treats it as 2 chunks.
-
-                // Correction for Medium(u128):
-                // In `new`, I took `*b as u64`. That only grabs the lower 64 bits.
-                // I need to handle the Medium case correctly in `next`.
 
                 let index = if let BitBoard::Medium(_) = self.board {
                     self.current_chunk_idx * 64 + trailing as usize
                 } else if let BitBoard::Large { .. } = self.board {
                     self.current_chunk_idx * 64 + trailing as usize
                 } else {
-                    // Small
                     trailing as usize
                 };
 
                 return Some(index);
             }
 
-            // Move to next chunk if needed
             match self.board {
-                BitBoard::Small(_) => return None, // Small only has 1 chunk (and we just processed it)
+                BitBoard::Small(_) => return None,
                 BitBoard::Medium(b) => {
                     if self.current_chunk_idx == 0 {
                         self.current_chunk_idx = 1;
@@ -173,7 +164,6 @@ pub struct Board {
     pub side: usize,
     pub total_cells: usize,
 
-    // Occupancy (fast collision check)
     pub white_occupancy: BitBoard,
     pub black_occupancy: BitBoard,
 
@@ -184,11 +174,10 @@ pub struct Board {
     pub queens: BitBoard,
     pub kings: BitBoard,
 
-    // Hashing and History
     pub zobrist: Arc<ZobristKeys>,
     pub hash: u64,
     pub history: Vec<u64>,
-    pub en_passant_target: Option<(usize, usize)>, // (target_index, victim_index)
+    pub en_passant_target: Option<(usize, usize)>,
     pub castling_rights: u8,
 }
 
@@ -222,15 +211,10 @@ impl Board {
 
     pub fn new(dimension: usize, side: usize) -> Self {
         let mut board = Self::new_empty(dimension, side);
-        board.castling_rights = 0xF; // Assume standard start rights
+        board.castling_rights = 0xF;
         board.setup_standard_chess();
         board
     }
-
-    // NOTE: Temporarily duplicating helper for now to avoid circular dep if needed,
-    // but ideally we move coords_to_index utility to domain too?
-    // Actually, persistence.rs will be DELETED, so we need to move the utility functions!
-    // I will add them to this file at the bottom or as methods.
 
     pub fn coords_to_index(&self, coords: &[usize]) -> Option<usize> {
         let mut index = 0;
@@ -245,8 +229,10 @@ impl Board {
         Some(index)
     }
 
-    pub fn index_to_coords(&self, index: usize) -> Vec<usize> {
-        let mut coords = vec![0; self.dimension];
+    pub fn index_to_coords(&self, index: usize) -> SmallVec<[usize; 4]> {
+        let mut coords = SmallVec::with_capacity(self.dimension);
+
+        coords.resize(self.dimension, 0);
         let mut temp = index;
         for i in 0..self.dimension {
             coords[i] = temp % self.side;
@@ -284,11 +270,9 @@ impl Board {
 
     pub fn setup_standard_chess(&mut self) {
         for file_y in 0..self.side {
-            // --- White Pieces (z=0, w=0, ...) ---
             let mut white_coords = vec![0; self.dimension];
             white_coords[1] = file_y;
 
-            // Place Pawn at Rank 1
             white_coords[0] = 1;
             if let Some(idx) = self.coords_to_index(&white_coords) {
                 self.place_piece_at_index(
@@ -300,7 +284,6 @@ impl Board {
                 );
             }
 
-            // Place Backrank at Rank 0
             white_coords[0] = 0;
             if let Some(idx) = self.coords_to_index(&white_coords) {
                 let piece_type = self.determine_backrank_piece(file_y, self.side);
@@ -313,13 +296,10 @@ impl Board {
                 );
             }
 
-            // --- Black Pieces (z=side-1, w=side-1, ...) ---
-            // Initialize all coords to side-1 (for z, w, ...)
             let mut black_coords = vec![self.side - 1; self.dimension];
-            // But 'y' varies
+
             black_coords[1] = file_y;
 
-            // Place Pawn at Rank side-2
             if self.side > 3 {
                 black_coords[0] = self.side - 2;
                 if let Some(idx) = self.coords_to_index(&black_coords) {
@@ -333,7 +313,6 @@ impl Board {
                 }
             }
 
-            // Place Backrank at Rank side-1
             black_coords[0] = self.side - 1;
             if let Some(idx) = self.coords_to_index(&black_coords) {
                 let piece_type = self.determine_backrank_piece(file_y, self.side);
@@ -350,7 +329,6 @@ impl Board {
     }
 
     fn determine_backrank_piece(&self, file_idx: usize, total_files: usize) -> PieceType {
-        // Special case for 2D 8x8 standard chess
         if self.dimension == 2 && self.side == 8 {
             return match file_idx {
                 0 | 7 => PieceType::Rook,
@@ -431,47 +409,74 @@ impl Board {
         Some(Piece { piece_type, owner })
     }
 
-    pub fn apply_move(&mut self, mv: &Move) -> Result<(), String> {
+    pub fn get_piece_at_index(&self, index: usize) -> Option<Piece> {
+        let owner = if self.white_occupancy.get_bit(index) {
+            Some(Player::White)
+        } else if self.black_occupancy.get_bit(index) {
+            Some(Player::Black)
+        } else {
+            None
+        }?;
+
+        let piece_type = if self.pawns.get_bit(index) {
+            PieceType::Pawn
+        } else if self.rooks.get_bit(index) {
+            PieceType::Rook
+        } else if self.knights.get_bit(index) {
+            PieceType::Knight
+        } else if self.bishops.get_bit(index) {
+            PieceType::Bishop
+        } else if self.queens.get_bit(index) {
+            PieceType::Queen
+        } else if self.kings.get_bit(index) {
+            PieceType::King
+        } else {
+            return None;
+        };
+
+        Some(Piece { piece_type, owner })
+    }
+
+    pub fn apply_move(&mut self, mv: &Move) -> Result<UnmakeInfo, String> {
         let from_idx = self
             .coords_to_index(&mv.from.values)
-            .ok_or("Invalid from".to_string())?;
-        let to_idx = self
-            .coords_to_index(&mv.to.values)
-            .ok_or("Invalid to".to_string())?;
+            .ok_or("Invalid from")?;
+        let to_idx = self.coords_to_index(&mv.to.values).ok_or("Invalid to")?;
 
         let moving_piece = self
-            .get_piece(&mv.from)
-            .ok_or("No piece at from".to_string())?;
+            .get_piece_at_index(from_idx)
+            .ok_or("No piece at from")?;
+
+        let saved_ep = self.en_passant_target;
+        let saved_castling = self.castling_rights;
+        let mut captured = None;
+
+        if let Some(target_p) = self.get_piece_at_index(to_idx) {
+            captured = Some((to_idx, target_p));
+        }
 
         self.history.push(self.hash);
 
-        // 1. Check if this is an EP capture
         if moving_piece.piece_type == PieceType::Pawn {
             if let Some((target, victim)) = self.en_passant_target {
                 if to_idx == target {
-                    // EP Capture: Remove the victim pawn
+                    if let Some(victim_p) = self.get_piece_at_index(victim) {
+                        captured = Some((victim, victim_p));
+                    }
                     self.remove_piece_at_index(victim);
                 }
             }
         }
 
-        // 2. Clear EP target for the next turn
         self.en_passant_target = None;
 
-        // 3. Set EP target if double push
-        // Note: We need to detect "Double Push" on ANY axis for Phase 2.
-        // For now, assuming standard rank-based double push, but keeping generic distance check.
         if moving_piece.piece_type == PieceType::Pawn {
-            // Check distance on all axes. If exactly ONE axis has distance 2, and others 0.
-            let mut diffs = Vec::new();
+            let mut diffs = SmallVec::<[usize; 4]>::new();
             for i in 0..self.dimension {
                 let d = (mv.from.values[i] as isize - mv.to.values[i] as isize).abs();
-                diffs.push(d);
+                diffs.push(d as usize);
             }
 
-            // A double push must be distance 2 on movement axis and 0 on others?
-            // Yes, strict double push.
-            // Identify the movement axis.
             let double_step_axis = diffs.iter().position(|&d| d == 2);
             let any_other_movement = diffs
                 .iter()
@@ -480,9 +485,6 @@ impl Board {
 
             if let Some(axis) = double_step_axis {
                 if !any_other_movement {
-                    // It is a double push!
-                    // Target is the skipped square.
-                    // Victim is `to_idx` (the pawn that moved).
                     let dir = if mv.to.values[axis] > mv.from.values[axis] {
                         1
                     } else {
@@ -497,10 +499,8 @@ impl Board {
             }
         }
 
-        // --- Castling Logic ---
-        let mut castling_rook_move = None;
+        let mut castling_rook_move: Option<(usize, usize, Piece)> = None;
 
-        // Update Rights if King Moves
         if moving_piece.piece_type == PieceType::King {
             match moving_piece.owner {
                 Player::White => self.castling_rights &= !0x3,
@@ -508,27 +508,17 @@ impl Board {
             }
         }
 
-        // Update Rights if Rook Moves/Captured (Side=8 enforced)
         if self.side == 8 {
-            // White Rooks: A1 (0,0), H1 (0,7). Indices depend on dimension.
-            // We need to construct coords to check indices.
-            // But we can check "corner" properties if standard setup.
-            // Let's safely calculate rook indices.
-
-            // Base coords: Rank=0 (White) or 7 (Black).
-            // File=0 or 7.
-            // Other Axes: 0 (White) or 7 (Black).
             let w_rank = 0;
             let b_rank = 7;
-
-            let mut w_qs_c = vec![w_rank; self.dimension];
+            let mut w_qs_c: SmallVec<[usize; 4]> = smallvec![w_rank; self.dimension];
             w_qs_c[1] = 0;
-            let mut w_ks_c = vec![w_rank; self.dimension];
+            let mut w_ks_c: SmallVec<[usize; 4]> = smallvec![w_rank; self.dimension];
             w_ks_c[1] = 7;
 
-            let mut b_qs_c = vec![b_rank; self.dimension];
+            let mut b_qs_c: SmallVec<[usize; 4]> = smallvec![b_rank; self.dimension];
             b_qs_c[1] = 0;
-            let mut b_ks_c = vec![b_rank; self.dimension];
+            let mut b_ks_c: SmallVec<[usize; 4]> = smallvec![b_rank; self.dimension];
             b_ks_c[1] = 7;
 
             let w_qs = self.coords_to_index(&w_qs_c);
@@ -549,7 +539,6 @@ impl Board {
             }
         }
 
-        // Check Execution (King moves 2 sq on Axis 1)
         if moving_piece.piece_type == PieceType::King {
             let dist_file = (mv.from.values[1] as isize - mv.to.values[1] as isize).abs();
 
@@ -562,8 +551,6 @@ impl Board {
             }
 
             if dist_file == 2 && !other_axes_moved {
-                // Must be castling.
-                // Kingside: 4 -> 6. Queenside: 4 -> 2.
                 let is_kingside = mv.to.values[1] > mv.from.values[1];
                 let rook_file_from = if is_kingside { 7 } else { 0 };
                 let rook_file_to = if is_kingside { 5 } else { 3 };
@@ -586,8 +573,8 @@ impl Board {
             }
         }
 
-        // --- Apply Main Move ---
         self.remove_piece_at_index(from_idx);
+
         self.remove_piece_at_index(to_idx);
 
         let piece_to_place = if let Some(promo_type) = mv.promotion {
@@ -601,7 +588,6 @@ impl Board {
 
         self.place_piece_at_index(to_idx, piece_to_place);
 
-        // --- Apply Castling Rook Move (Secondary) ---
         if let Some((r_from, r_to, r_piece)) = castling_rook_move {
             self.remove_piece_at_index(r_from);
             self.place_piece_at_index(r_to, r_piece);
@@ -609,7 +595,73 @@ impl Board {
 
         self.hash = self.zobrist.get_hash(self, moving_piece.owner.opponent());
 
-        Ok(())
+        Ok(UnmakeInfo {
+            captured,
+            en_passant_target: saved_ep,
+            castling_rights: saved_castling,
+        })
+    }
+
+    pub fn unmake_move(&mut self, mv: &Move, info: UnmakeInfo) {
+        if let Some(h) = self.history.pop() {
+            self.hash = h;
+        }
+
+        self.en_passant_target = info.en_passant_target;
+        self.castling_rights = info.castling_rights;
+
+        let from_idx = self.coords_to_index(&mv.from.values).unwrap();
+        let to_idx = self.coords_to_index(&mv.to.values).unwrap();
+
+        let moved_piece = self
+            .get_piece_at_index(to_idx)
+            .expect("Piece missing in unmake");
+
+        if moved_piece.piece_type == PieceType::King {
+            let dist_file = (mv.from.values[1] as isize - mv.to.values[1] as isize).abs();
+            let mut other_axes_moved = false;
+            for i in 0..self.dimension {
+                if i != 1 && mv.from.values[i] != mv.to.values[i] {
+                    other_axes_moved = true;
+                    break;
+                }
+            }
+            if dist_file == 2 && !other_axes_moved {
+                let is_kingside = mv.to.values[1] > mv.from.values[1];
+                let rook_file_from = if is_kingside { 7 } else { 0 };
+                let rook_file_to = if is_kingside { 5 } else { 3 };
+
+                let mut rook_from_coords = mv.from.values.clone();
+                rook_from_coords[1] = rook_file_from;
+                let mut rook_to_coords = mv.from.values.clone();
+                rook_to_coords[1] = rook_file_to;
+
+                let r_from_idx = self.coords_to_index(&rook_from_coords).unwrap();
+                let r_to_idx = self.coords_to_index(&rook_to_coords).unwrap();
+
+                let rook_piece = self
+                    .get_piece_at_index(r_to_idx)
+                    .expect("Rook missing unmake");
+                self.remove_piece_at_index(r_to_idx);
+                self.place_piece_at_index(r_from_idx, rook_piece);
+            }
+        }
+
+        self.remove_piece_at_index(to_idx);
+
+        let original_piece = if mv.promotion.is_some() {
+            Piece {
+                piece_type: PieceType::Pawn,
+                owner: moved_piece.owner,
+            }
+        } else {
+            moved_piece
+        };
+        self.place_piece_at_index(from_idx, original_piece);
+
+        if let Some((idx, piece)) = info.captured {
+            self.place_piece_at_index(idx, piece);
+        }
     }
 
     pub fn get_king_coordinate(&self, player: Player) -> Option<Coordinate> {
@@ -646,11 +698,8 @@ impl Board {
     }
 }
 
-// Display trait implementation - might move to presentation/display?
-// For now, keep generic Debug or Display
 impl fmt::Display for Board {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Needs display.rs logic.. will refactor later.
         write!(f, "Board(dim={}, side={})", self.dimension, self.side)
     }
 }
@@ -724,16 +773,12 @@ impl BitBoard {
             (BitBoard::Small(a), BitBoard::Small(b)) => BitBoard::Small(a | b),
             (BitBoard::Medium(a), BitBoard::Medium(b)) => BitBoard::Medium(a | b),
             (BitBoard::Large { mut data }, BitBoard::Large { data: other_data }) => {
-                // Determine the common length for vectorization
                 let len = std::cmp::min(data.len(), other_data.len());
 
-                // This slice-based loop allows LLVM to generate AVX2 instructions
-                // (vpor ymm0, ymm0, ymm1)
                 for (d, o) in data[0..len].iter_mut().zip(&other_data[0..len]) {
                     *d |= *o;
                 }
 
-                // Handle size mismatches (rare in static board dimensions)
                 if other_data.len() > data.len() {
                     data.extend_from_slice(&other_data[len..]);
                 }
@@ -749,16 +794,19 @@ impl BitBoard {
 }
 ```
 ```./src/domain/coordinate.rs
+use smallvec::SmallVec;
 use std::fmt;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Coordinate {
-    pub values: Vec<usize>,
+    pub values: SmallVec<[usize; 4]>,
 }
 
 impl Coordinate {
-    pub fn new(values: Vec<usize>) -> Self {
-        Self { values }
+    pub fn new<I: Into<SmallVec<[usize; 4]>>>(values: I) -> Self {
+        Self {
+            values: values.into(),
+        }
     }
 
     pub fn dim(&self) -> usize {
@@ -788,8 +836,6 @@ pub enum GameError {
     InvalidMove(String),
 }
 
-/// The Game Aggregate Root.
-/// It controls the lifecycle of the game, turns, and winning conditions.
 pub struct Game {
     board: Board,
     turn: Player,
@@ -847,10 +893,10 @@ impl Game {
 ```./src/domain/mod.rs
 pub mod board;
 pub mod coordinate;
-pub mod game; // Existing game.rs, verify if it needs updates
+pub mod game;
 pub mod models;
 pub mod rules;
-pub mod services; // Existing services.rs
+pub mod services;
 pub mod zobrist;
 ```
 ```./src/domain/models.rs
@@ -907,12 +953,15 @@ pub enum GameResult {
 use crate::domain::board::Board;
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{Move, PieceType, Player};
+use smallvec::SmallVec;
+
+pub type MoveList = SmallVec<[Move; 64]>;
 
 pub struct Rules;
 
 impl Rules {
-    pub fn generate_legal_moves(board: &Board, player: Player) -> Vec<Move> {
-        let mut moves = Vec::new();
+    pub fn generate_legal_moves(board: &mut Board, player: Player) -> MoveList {
+        let mut moves = MoveList::new();
         let pseudo_legal = Self::generate_pseudo_legal_moves(board, player);
 
         for mv in pseudo_legal {
@@ -921,22 +970,11 @@ impl Rules {
             }
         }
 
-        // Castling moves
         Self::generate_castling_moves(board, player, &mut moves);
-
         moves
     }
 
     pub fn is_square_attacked(board: &Board, square: &Coordinate, by_player: Player) -> bool {
-        // To check if a square is attacked by `by_player`, we can pretend there is a piece on `square`
-        // and see if it can "capture" a piece of `by_player` using the movement rules of that piece.
-        // E.g. if a Knight on `square` can jump to a square occupied by an enemy Knight, then `square` is attacked by that enemy Knight.
-        // NOTE: We rely on board.get_index / coords_to_index which are now internal or public?
-        // We made `coords_to_index` public in Board.
-
-        let dimension = board.dimension;
-        let side = board.side;
-        // Accessing helper on board instance
         let _index = if let Some(idx) = board.coords_to_index(&square.values) {
             idx
         } else {
@@ -948,8 +986,9 @@ impl Rules {
             Player::Black => &board.black_occupancy,
         };
 
-        // 1. Check Leapers (Knights, Kings)
-        // Check Knight attacks
+        let dimension = board.dimension;
+        let side = board.side;
+
         let knight_offsets = Self::get_knight_offsets(dimension);
         for offset in &knight_offsets {
             if let Some(target_coord) = Self::apply_offset(&square.values, offset, side) {
@@ -961,7 +1000,6 @@ impl Rules {
             }
         }
 
-        // Check King attacks (useful for validation, though kings can't really attack to checkmate)
         let king_offsets = Self::get_king_offsets(dimension);
         for offset in &king_offsets {
             if let Some(target_coord) = Self::apply_offset(&square.values, offset, side) {
@@ -973,10 +1011,6 @@ impl Rules {
             }
         }
 
-        // 2. Check Rays (Rook, Bishop, Queen)
-        // Reverse raycast: Look outwards from `square`. If first piece hit is enemy slider of relevant type, then attacked.
-
-        // Rook vectors
         let rook_dirs = Self::get_rook_directions(dimension);
         for dir in &rook_dirs {
             if Self::scan_ray_for_threat(
@@ -990,7 +1024,6 @@ impl Rules {
             }
         }
 
-        // Bishop vectors
         let bishop_dirs = Self::get_bishop_directions(dimension);
         for dir in &bishop_dirs {
             if Self::scan_ray_for_threat(
@@ -1003,12 +1036,6 @@ impl Rules {
                 return true;
             }
         }
-
-        // 3. Check Pawns
-        // Pawns attack "Forward" + "Sideways".
-        // Inverse: Check if there is an enemy pawn that can capture `square`.
-        // Enemy pawn moves "Forward" (relative to enemy).
-        // So we look "Backward" relative to enemy from `square`.
 
         let pawn_attack_offsets = Self::get_pawn_capture_offsets_for_target(dimension, by_player);
         for offset in &pawn_attack_offsets {
@@ -1031,24 +1058,11 @@ impl Rules {
         attacker: Player,
         threat_types: &[PieceType],
     ) -> bool {
-        // We are at `origin_vals` (which is empty or the target square).
-        // We look OUTWARD in `direction`.
-        // If we hit an enemy piece of `threat_types`, return true.
-        // If we hit any other piece (own or enemy non-threat), return false (blocked).
-
-        let mut current = origin_vals.to_vec();
+        let mut current: SmallVec<[usize; 4]> = SmallVec::from_slice(origin_vals);
         let enemy_occupancy = match attacker {
             Player::White => &board.white_occupancy,
             Player::Black => &board.black_occupancy,
         };
-        // Own occupancy relative to the square being attacked?
-        // No, 'own' relative to the attacker is 'enemy' relative to the square?
-        // Wait. `by_player` is the ATTACKER.
-        // So `enemy_occupancy` is the ATTACKER's pieces.
-        // `own_occupancy` is the DEFENDER's pieces (or Empty).
-        // Any piece blocks the ray.
-
-        // Actually simpler: Just check ALL occupancy.
         let all_occupancy = board
             .white_occupancy
             .clone()
@@ -1058,14 +1072,7 @@ impl Rules {
             if let Some(next) = Self::apply_offset(&current, direction, board.side) {
                 if let Some(idx) = board.coords_to_index(&next) {
                     if all_occupancy.get_bit(idx) {
-                        // Hit a piece. Is it an enemy threat?
                         if enemy_occupancy.get_bit(idx) {
-                            // It is an enemy piece. Check type.
-                            // We need to check if it is one of the threat_types.
-
-                            // Optimization: The caller passes specific threat types (e.g. Rook+Queen).
-                            // But board bitboards are separated.
-                            // Let's iterate threat types passed.
                             for &t in threat_types {
                                 let match_found = match t {
                                     PieceType::Rook => board.rooks.get_bit(idx),
@@ -1077,11 +1084,8 @@ impl Rules {
                                     return true;
                                 }
                             }
-                            // If we hit an enemy piece but it's not in the threat list (e.g. a pawn blocking a rook),
-                            // then it blocks the view.
                             return false;
                         } else {
-                            // Hit own piece (Defender's piece), blocks view.
                             return false;
                         }
                     }
@@ -1096,11 +1100,8 @@ impl Rules {
         false
     }
 
-    // --- Internal Helpers ---
-
-    fn generate_pseudo_legal_moves(board: &Board, player: Player) -> Vec<Move> {
-        let mut moves = Vec::new();
-        // Iterate all cells, find pieces owned by player
+    fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
+        let mut moves = MoveList::new();
         let occupancy = match player {
             Player::White => &board.white_occupancy,
             Player::Black => &board.black_occupancy,
@@ -1110,7 +1111,6 @@ impl Rules {
             let coord_vals = board.index_to_coords(i);
             let coord = Coordinate::new(coord_vals.clone());
 
-            // Identify piece type
             let piece_type = if board.pawns.get_bit(i) {
                 PieceType::Pawn
             } else if board.knights.get_bit(i) {
@@ -1124,7 +1124,7 @@ impl Rules {
             } else if board.kings.get_bit(i) {
                 PieceType::King
             } else {
-                continue; // Error?
+                continue;
             };
 
             match piece_type {
@@ -1178,30 +1178,30 @@ impl Rules {
         moves
     }
 
-    fn leaves_king_in_check(board: &Board, player: Player, mv: &Move) -> bool {
-        // Clone board, apply move, check if king is attacked
-        // This is expensive. Future optimization: Incremental update or specialized check.
-        let mut temp_board = board.clone();
-        if let Err(_) = temp_board.apply_move(mv) {
-            return true; // Illegal move invocation
-        }
+    fn leaves_king_in_check(board: &mut Board, player: Player, mv: &Move) -> bool {
+        let info = match board.apply_move(mv) {
+            Ok(i) => i,
+            Err(_) => return true,
+        };
 
-        if let Some(king_pos) = temp_board.get_king_coordinate(player) {
-            Self::is_square_attacked(&temp_board, &king_pos, player.opponent())
+        let in_check = if let Some(king_pos) = board.get_king_coordinate(player) {
+            Self::is_square_attacked(board, &king_pos, player.opponent())
         } else {
-            // No king? For testing (sandbox), assume safe.
             false
-        }
+        };
+
+        board.unmake_move(mv, info);
+        in_check
     }
 
-    fn generate_castling_moves(board: &Board, player: Player, moves: &mut Vec<Move>) {
+    fn generate_castling_moves(board: &Board, player: Player, moves: &mut MoveList) {
         if board.side != 8 {
-            return; // Standard castling requires 8x8 geometry (File 0..7)
+            return;
         }
 
         let (rights_mask, rank) = match player {
-            Player::White => (0x3, 0),              // Rights 1 & 2 (KS, QS)
-            Player::Black => (0xC, board.side - 1), // Rights 4 & 8 (KS, QS)
+            Player::White => (0x3, 0),
+            Player::Black => (0xC, board.side - 1),
         };
 
         let my_rights = board.castling_rights & rights_mask;
@@ -1209,14 +1209,13 @@ impl Rules {
             return;
         }
 
-        // Determine King Position (Fixed at File 4)
         let king_file = 4;
         let mut king_coords = vec![rank; board.dimension];
         king_coords[1] = king_file;
         let king_coord = Coordinate::new(king_coords.clone());
 
         if Self::is_square_attacked(board, &king_coord, player.opponent()) {
-            return; // King in check
+            return;
         }
 
         let all_occupancy = board
@@ -1224,7 +1223,6 @@ impl Rules {
             .clone()
             .or_with(&board.black_occupancy);
 
-        // Kingside (File 5, 6 empty; To=6; Rook from 7 to 5)
         let ks_mask = match player {
             Player::White => 0x1,
             Player::Black => 0x4,
@@ -1233,7 +1231,6 @@ impl Rules {
             let f_file = 5;
             let g_file = 6;
 
-            // Check Empty Path (5, 6)
             let mut f_coords = king_coords.clone();
             f_coords[1] = f_file;
             let mut g_coords = king_coords.clone();
@@ -1250,7 +1247,6 @@ impl Rules {
             }
 
             if !blocked {
-                // Check Safe Passage (5, 6)
                 if !Self::is_square_attacked(board, &Coordinate::new(f_coords), player.opponent())
                     && !Self::is_square_attacked(
                         board,
@@ -1267,7 +1263,6 @@ impl Rules {
             }
         }
 
-        // Queenside (File 1, 2, 3 empty; To=2; Rook from 0 to 3)
         let qs_mask = match player {
             Player::White => 0x2,
             Player::Black => 0x8,
@@ -1299,9 +1294,6 @@ impl Rules {
             }
 
             if !blocked {
-                // Check Safe Passage (3 (through) and 2 (dest)). Note: B(1) not traversed by King.
-                // King moves 4->3->2.
-                // Square 3 (D) must be safe. Square 2 (C) must be safe.
                 if !Self::is_square_attacked(board, &Coordinate::new(d_coords), player.opponent())
                     && !Self::is_square_attacked(
                         board,
@@ -1319,11 +1311,9 @@ impl Rules {
         }
     }
 
-    // Geometry Generators
-
     fn get_rook_directions(dimension: usize) -> Vec<Vec<isize>> {
         let mut dirs = Vec::new();
-        // Just one non-zero component, +/- 1
+
         for i in 0..dimension {
             let mut v = vec![0; dimension];
             v[i] = 1;
@@ -1335,7 +1325,6 @@ impl Rules {
     }
 
     fn get_bishop_directions(dimension: usize) -> Vec<Vec<isize>> {
-        // Even number of non-zero elements (user spec).
         let mut dirs = Vec::new();
         let num_dirs = 3_usize.pow(dimension as u32);
         for i in 0..num_dirs {
@@ -1366,19 +1355,14 @@ impl Rules {
     }
 
     fn get_knight_offsets(dimension: usize) -> Vec<Vec<isize>> {
-        // Permutations of (+/- 2, +/- 1, 0...)
-        // We need exactly one '2' and one '1', rest 0.
         let mut offsets = Vec::new();
 
-        // This is a bit tricky to generate generically for N dimensions.
-        // Iterate all pairs of axes.
         for i in 0..dimension {
             for j in 0..dimension {
                 if i == j {
                     continue;
                 }
 
-                // +/- 2 on axis i, +/- 1 on axis j
                 for s1 in [-1, 1] {
                     for s2 in [-1, 1] {
                         let mut v = vec![0; dimension];
@@ -1393,7 +1377,6 @@ impl Rules {
     }
 
     fn get_king_offsets(dimension: usize) -> Vec<Vec<isize>> {
-        // Chebyshev 1. All 3^N - 1 neighbors.
         let mut offsets = Vec::new();
         let num_dirs = 3_usize.pow(dimension as u32);
         for i in 0..num_dirs {
@@ -1421,20 +1404,13 @@ impl Rules {
     }
 
     fn get_pawn_capture_offsets_for_target(dimension: usize, attacker: Player) -> Vec<Vec<isize>> {
-        // If 'attacker' is White, they move +1 on axis 0 (forward).
-        // Captures are +1 on axis 0 AND +/- 1 on exactly ONE other axis.
-        // So we want to find where an Attacker could be relative to the Target.
-        // Target = Attacker + Move.
-        // Attacker = Target - Move.
-
         let direction = match attacker {
-            Player::White => -1, // Look back
+            Player::White => -1,
             Player::Black => 1,
         };
 
         let mut offsets = Vec::new();
-        // Axis 0 is forward.
-        // For each other dimension, allow +/- 1.
+
         for i in 1..dimension {
             for s in [-1, 1] {
                 let mut v = vec![0; dimension];
@@ -1446,10 +1422,12 @@ impl Rules {
         offsets
     }
 
-    // Move Generation Logic implementation
-
-    fn apply_offset(coords: &[usize], offset: &[isize], side: usize) -> Option<Vec<usize>> {
-        let mut new_coords = Vec::with_capacity(coords.len());
+    fn apply_offset(
+        coords: &[usize],
+        offset: &[isize],
+        side: usize,
+    ) -> Option<SmallVec<[usize; 4]>> {
+        let mut new_coords = SmallVec::with_capacity(coords.len());
         for (c, &o) in coords.iter().zip(offset.iter()) {
             let val = *c as isize + o;
             if val < 0 || val >= side as isize {
@@ -1465,7 +1443,7 @@ impl Rules {
         origin: &Coordinate,
         player: Player,
         offsets: &[Vec<isize>],
-        moves: &mut Vec<Move>,
+        moves: &mut MoveList,
     ) {
         let same_occupancy = match player {
             Player::White => &board.white_occupancy,
@@ -1476,7 +1454,6 @@ impl Rules {
             if let Some(target_coords) = Self::apply_offset(&origin.values, offset, board.side) {
                 if let Some(target_idx) = board.coords_to_index(&target_coords) {
                     if !same_occupancy.get_bit(target_idx) {
-                        // Empty or Enemy -> Legal
                         moves.push(Move {
                             from: origin.clone(),
                             to: Coordinate::new(target_coords),
@@ -1493,7 +1470,7 @@ impl Rules {
         origin: &Coordinate,
         player: Player,
         directions: &[Vec<isize>],
-        moves: &mut Vec<Move>,
+        moves: &mut MoveList,
     ) {
         let own_occupancy = match player {
             Player::White => &board.white_occupancy,
@@ -1510,7 +1487,7 @@ impl Rules {
                 if let Some(next) = Self::apply_offset(&current, dir, board.side) {
                     if let Some(idx) = board.coords_to_index(&next) {
                         if own_occupancy.get_bit(idx) {
-                            break; // Blocked by own piece
+                            break;
                         }
 
                         moves.push(Move {
@@ -1520,7 +1497,7 @@ impl Rules {
                         });
 
                         if enemy_occupancy.get_bit(idx) {
-                            break; // Capture, then stop
+                            break;
                         }
 
                         current = next;
@@ -1538,7 +1515,7 @@ impl Rules {
         board: &Board,
         origin: &Coordinate,
         player: Player,
-        moves: &mut Vec<Move>,
+        moves: &mut MoveList,
     ) {
         let all_occupancy = board
             .white_occupancy
@@ -1550,11 +1527,7 @@ impl Rules {
             Player::Black => &board.black_occupancy,
         };
 
-        // Super Pawn: Can move along ANY axis
         for movement_axis in 0..board.dimension {
-            // Restriction: Pawns cannot push or capture primarily along the File axis (Axis 1).
-            // In 2D: Rank (0) allowed, File (1) forbidden.
-            // In 3D: Rank (0) allowed, File (1) forbidden, Height (2) allowed.
             if movement_axis == 1 {
                 continue;
             }
@@ -1564,17 +1537,14 @@ impl Rules {
                 Player::Black => -1,
             };
 
-            // 1. One step forward along movement_axis
             let mut forward_step = vec![0; board.dimension];
             forward_step[movement_axis] = forward_dir;
 
             if let Some(target) = Self::apply_offset(&origin.values, &forward_step, board.side) {
                 if let Some(idx) = board.coords_to_index(&target) {
                     if !all_occupancy.get_bit(idx) {
-                        // Empty -> Legal PUSH
                         Self::add_pawn_move(origin, &target, board.side, player, moves);
 
-                        // 2. Double step?
                         let is_start_rank = match player {
                             Player::White => origin.values[movement_axis] == 1,
                             Player::Black => origin.values[movement_axis] == board.side - 2,
@@ -1597,8 +1567,6 @@ impl Rules {
                 }
             }
 
-            // 3. Captures (Diagonal on any other axis)
-            // Move forward on movement_axis, AND +/- 1 on capture_axis
             for capture_axis in 0..board.dimension {
                 if capture_axis == movement_axis {
                     continue;
@@ -1610,14 +1578,10 @@ impl Rules {
                     if let Some(target) = Self::apply_offset(&origin.values, &cap_step, board.side)
                     {
                         if let Some(idx) = board.coords_to_index(&target) {
-                            // Regular Capture
                             if enemy_occupancy.get_bit(idx) {
                                 Self::add_pawn_move(origin, &target, board.side, player, moves);
-                            }
-                            // En Passant Capture
-                            else if let Some((ep_target, _)) = board.en_passant_target {
+                            } else if let Some((ep_target, _)) = board.en_passant_target {
                                 if idx == ep_target {
-                                    // This is a valid EP capture move
                                     moves.push(Move {
                                         from: origin.clone(),
                                         to: Coordinate::new(target),
@@ -1637,11 +1601,11 @@ impl Rules {
         to_vals: &[usize],
         side: usize,
         player: Player,
-        moves: &mut Vec<Move>,
+        moves: &mut MoveList,
     ) {
         let is_promotion = (0..to_vals.len()).all(|i| {
             if i == 1 {
-                true // File axis doesn't count for promotion depth
+                true
             } else {
                 match player {
                     Player::White => to_vals[i] == side - 1,
@@ -1689,7 +1653,7 @@ pub trait PlayerStrategy {
 }
 ```
 ```./src/domain/zobrist.rs
-use crate::domain::board::Board; // Will create this next
+use crate::domain::board::Board;
 use crate::domain::models::Player;
 use rand::Rng;
 
@@ -1710,20 +1674,11 @@ impl ZobristKeys {
             piece_keys.push(rng.r#gen());
         }
 
-        // En Passant keys: one per file?
-        // Actually, EP target is an index. But it's restricted to specific ranks.
-        // It's cleaner to have one key per FILE (column).
-        // Total files = side^(dimension-1)? Or just 'side' if we assume 2D-like columns?
-        // Actually, let's just use `total_cells` size for simplicity, or just map 'index' -> key.
-        // Let's use `total_cells` to support EP on any square (technically only rank 2/5 etc)
-        // Optimization: typical EP is only valid on specific files.
-        // We'll trust the board size isn't massive.
         let mut en_passant_keys = Vec::with_capacity(total_cells);
         for _ in 0..total_cells {
             en_passant_keys.push(rng.r#gen());
         }
 
-        // Castling rights: 16 combinations (4 bits)
         let mut castling_keys = Vec::with_capacity(16);
         for _ in 0..16 {
             castling_keys.push(rng.r#gen());
@@ -1796,16 +1751,16 @@ impl ZobristKeys {
 }
 ```
 ```./src/infrastructure/ai/mcts.rs
-use crate::domain::board::Board;
+use crate::domain::board::{Board, UnmakeInfo};
 use crate::domain::models::{Move, Player};
-use crate::domain::rules::Rules;
+use crate::domain::rules::{MoveList, Rules};
 use crate::infrastructure::ai::transposition::{Flag, LockFreeTT};
 use rand::seq::SliceRandom;
 use std::sync::Arc;
 
 use std::f64;
 
-const UCT_C: f64 = 1.4142; // Sqrt(2)
+const UCT_C: f64 = 1.4142;
 const CHECKMATE_SCORE: i32 = 30000;
 
 struct Node {
@@ -1813,7 +1768,7 @@ struct Node {
     children: Vec<usize>,
     visits: u32,
     score: f64,
-    unexpanded_moves: Vec<Move>,
+    unexpanded_moves: MoveList,
     is_terminal: bool,
     move_to_node: Option<Move>,
     player_to_move: Player,
@@ -1823,13 +1778,15 @@ pub struct MCTS {
     nodes: Vec<Node>,
     root_player: Player,
     tt: Option<Arc<LockFreeTT>>,
+    serial: bool,
 }
 
 use rayon::prelude::*;
 
 impl MCTS {
     pub fn new(root_state: &Board, root_player: Player, tt: Option<Arc<LockFreeTT>>) -> Self {
-        let mut moves = Rules::generate_legal_moves(root_state, root_player);
+        let mut root_clone = root_state.clone();
+        let mut moves = Rules::generate_legal_moves(&mut root_clone, root_player);
         let mut rng = rand::thread_rng();
         moves.shuffle(&mut rng);
 
@@ -1848,7 +1805,13 @@ impl MCTS {
             nodes: vec![root],
             root_player,
             tt,
+            serial: false,
         }
+    }
+
+    pub fn with_serial(mut self) -> Self {
+        self.serial = true;
+        self
     }
 
     pub fn run(&mut self, root_state: &Board, iterations: usize) -> f64 {
@@ -1856,12 +1819,31 @@ impl MCTS {
             return 0.5;
         }
 
-        // Parallel Execution (Root Parallelization)
         let num_threads = rayon::current_num_threads();
-        let chunk_size = iterations / num_threads;
-        let remainder = iterations % num_threads;
+        // User requested strategy: "chunk work, maybe 5 iterations a thread".
+        // We ensure at least 5 iterations per task to amortize the setup cost (Board clone).
+        const MIN_ITERATIONS_PER_TASK: usize = 5;
 
-        let results: Vec<(u32, f64)> = (0..num_threads)
+        let num_tasks = if self.serial {
+            1
+        } else {
+            (iterations / MIN_ITERATIONS_PER_TASK).clamp(1, num_threads)
+        };
+
+        if num_tasks <= 1 {
+            self.execute_iterations(root_state, iterations);
+            let root = &self.nodes[0];
+            return if root.visits == 0 {
+                0.5
+            } else {
+                root.score / root.visits as f64
+            };
+        }
+
+        let chunk_size = iterations / num_tasks;
+        let remainder = iterations % num_tasks;
+
+        let results: Vec<(u32, f64)> = (0..num_tasks)
             .into_par_iter()
             .map(|i| {
                 let count = if i < remainder {
@@ -1873,8 +1855,6 @@ impl MCTS {
                     return (0, 0.0);
                 }
 
-                // Create a local MCTS instance for this thread
-                // Note: We share the Transposition Table (tt) which is thread-safe (Arc<LockFreeTT>)
                 let mut local_mcts = MCTS::new(root_state, self.root_player, self.tt.clone());
                 local_mcts.execute_iterations(root_state, count);
 
@@ -1883,7 +1863,6 @@ impl MCTS {
             })
             .collect();
 
-        // Aggregation
         let (total_visits, total_score) = results
             .into_iter()
             .fold((0, 0.0), |acc, x| (acc.0 + x.0, acc.1 + x.1));
@@ -1898,12 +1877,14 @@ impl MCTS {
     fn execute_iterations(&mut self, root_state: &Board, iterations: usize) {
         let mut rng = rand::thread_rng();
 
+        let mut current_state = root_state.clone();
+
         for _ in 0..iterations {
             let mut node_idx = 0;
-            let mut current_state = root_state.clone();
             let mut current_player = self.root_player;
 
-            // 1. Selection
+            let mut path_stack: Vec<(Move, UnmakeInfo)> = Vec::with_capacity(64);
+
             while self.nodes[node_idx].unexpanded_moves.is_empty()
                 && !self.nodes[node_idx].children.is_empty()
             {
@@ -1911,19 +1892,22 @@ impl MCTS {
                 node_idx = best_child;
 
                 let mv = self.nodes[node_idx].move_to_node.as_ref().unwrap();
-                current_state.apply_move(mv).unwrap();
+
+                let info = current_state.apply_move(mv).unwrap();
+                path_stack.push((mv.clone(), info));
+
                 current_player = current_player.opponent();
             }
 
-            // 2. Expansion
             if !self.nodes[node_idx].unexpanded_moves.is_empty() {
                 let mv = self.nodes[node_idx].unexpanded_moves.pop().unwrap();
 
-                let mut next_state = current_state.clone();
-                next_state.apply_move(&mv).unwrap();
+                let info = current_state.apply_move(&mv).unwrap();
+                path_stack.push((mv.clone(), info));
+
                 let next_player = current_player.opponent();
 
-                let legal_moves = Rules::generate_legal_moves(&next_state, next_player);
+                let legal_moves = Rules::generate_legal_moves(&mut current_state, next_player);
                 let is_terminal = legal_moves.is_empty();
 
                 let new_node = Node {
@@ -1942,19 +1926,25 @@ impl MCTS {
                 self.nodes[node_idx].children.push(new_node_idx);
 
                 node_idx = new_node_idx;
-                current_state = next_state;
                 current_player = next_player;
             }
 
-            // 3. Simulation
             let result_score = if self.nodes[node_idx].is_terminal {
                 self.evaluate_terminal(&current_state, current_player)
             } else {
-                self.rollout(&mut current_state, current_player, &mut rng)
+                self.rollout_inplace(
+                    &mut current_state,
+                    current_player,
+                    &mut rng,
+                    &mut path_stack,
+                )
             };
 
-            // 4. Backpropagation
             self.backpropagate(node_idx, result_score);
+
+            while let Some((mv, info)) = path_stack.pop() {
+                current_state.unmake_move(&mv, info);
+            }
         }
     }
 
@@ -1988,11 +1978,12 @@ impl MCTS {
         best_child
     }
 
-    fn rollout(
+    fn rollout_inplace(
         &self,
         state: &mut Board,
         mut player: Player,
         rng: &mut rand::rngs::ThreadRng,
+        stack: &mut Vec<(Move, UnmakeInfo)>,
     ) -> f64 {
         let mut depth = 0;
         const MAX_ROLLOUT_DEPTH: usize = 50;
@@ -2014,7 +2005,9 @@ impl MCTS {
             }
 
             let mv = moves.choose(rng).unwrap();
-            state.apply_move(mv).unwrap();
+            let info = state.apply_move(mv).unwrap();
+            stack.push((mv.clone(), info));
+
             player = player.opponent();
             depth += 1;
         }
@@ -2025,26 +2018,23 @@ impl MCTS {
     fn evaluate_terminal(&self, state: &Board, player_at_leaf: Player) -> f64 {
         if let Some(king_pos) = state.get_king_coordinate(player_at_leaf) {
             if Rules::is_square_attacked(state, &king_pos, player_at_leaf.opponent()) {
-                // Checkmate
                 if let Some(tt) = &self.tt {
-                    // Store loss for the player who is checkmated (Negamax perspective)
                     tt.store(state.hash, -CHECKMATE_SCORE, 255, Flag::Exact, None);
                 }
 
                 if player_at_leaf == self.root_player {
-                    return 0.0; // Root lost (Checkmate)
+                    return 0.0;
                 } else {
-                    return 1.0; // Root won (Opponent Checkmated)
+                    return 1.0;
                 }
             }
         }
 
-        // Stalemate/Draw
         if let Some(tt) = &self.tt {
             tt.store(state.hash, 0, 255, Flag::Exact, None);
         }
 
-        0.5 // Stalemate/Draw
+        0.5
     }
 
     fn backpropagate(&mut self, mut node_idx: usize, score: f64) {
@@ -2070,7 +2060,7 @@ mod tests {
 
     #[test]
     fn test_mcts_smoke() {
-        let board = Board::new(2, 8); // 2D board, side 8
+        let board = Board::new(2, 8);
         let mut mcts = MCTS::new(&board, Player::White, None);
         let score = mcts.run(&board, 10);
         assert!(score >= 0.0 && score <= 1.0);
@@ -2078,9 +2068,9 @@ mod tests {
 
     #[test]
     fn test_mcts_parallel_execution() {
-        let board = Board::new(2, 8); // 2D board, side 8
+        let board = Board::new(2, 8);
         let mut mcts = MCTS::new(&board, Player::White, None);
-        // Run with enough iterations to likely trigger multiple threads
+
         let score = mcts.run(&board, 100);
         assert!(score >= 0.0 && score <= 1.0);
     }
@@ -2093,14 +2083,14 @@ use crate::domain::models::{Move, Player};
 use crate::domain::rules::Rules;
 use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::ai::transposition::{Flag, LockFreeTT};
-use std::sync::atomic::{AtomicBool, Ordering};
+use rayon::prelude::*;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 const CHECKMATE_SCORE: i32 = 30000;
 const TIMEOUT_CHECK_INTERVAL: usize = 2048;
 
-// Material values
 const VAL_PAWN: i32 = 100;
 const VAL_KNIGHT: i32 = 320;
 const VAL_BISHOP: i32 = 330;
@@ -2114,54 +2104,49 @@ pub struct MinimaxBot {
     tt: Arc<LockFreeTT>,
     stop_flag: Arc<AtomicBool>,
     nodes_searched: std::sync::atomic::AtomicUsize,
-    _randomized: bool,
     use_mcts: bool,
     mcts_iterations: usize,
+    num_threads: usize,
 }
 
 impl MinimaxBot {
     pub fn new(depth: usize, time_limit_ms: u64, _dimension: usize, _side: usize) -> Self {
+        let num_threads = std::thread::available_parallelism()
+            .map(|n| n.get().saturating_sub(2).max(1))
+            .unwrap_or(1);
+
         Self {
             depth,
             time_limit: Duration::from_millis(time_limit_ms),
-            tt: Arc::new(LockFreeTT::new(64)),
+            tt: Arc::new(LockFreeTT::new(256)), // Increased TT size for parallel access
             stop_flag: Arc::new(AtomicBool::new(false)),
             nodes_searched: std::sync::atomic::AtomicUsize::new(0),
-            _randomized: true,
-            use_mcts: false,      // Default off
-            mcts_iterations: 100, // Default 100
+            use_mcts: false,
+            mcts_iterations: 100,
+            num_threads,
         }
     }
 
     pub fn with_mcts(mut self, iterations: usize) -> Self {
         self.use_mcts = true;
         self.mcts_iterations = iterations;
-        Self {
-            depth: if self.use_mcts { 2 } else { self.depth }, // Reduce depth if MCTS is on to compensate?
-            ..self
-        }
+        // Adjust depth for hybrid approach
+        self.depth = if self.use_mcts { 3 } else { self.depth };
+        self
     }
 
     fn evaluate(&self, board: &Board, player_at_leaf: Option<Player>) -> i32 {
         if self.use_mcts {
             if let Some(player) = player_at_leaf {
-                // Run MCTS
-                // Note: MCTS is expensive.
-                let mut mcts = MCTS::new(board, player, Some(self.tt.clone()));
+                // Critical: Run MCTS serially here!
+                // We are already inside a parallel Minimax thread.
+                let mut mcts = MCTS::new(board, player, None).with_serial();
                 let win_rate = mcts.run(board, self.mcts_iterations);
 
-                // win_rate is [0, 1] for `player`.
-                // Map to score. 1.0 -> 20000, 0.0 -> -20000.
-                // value = (win_rate - 0.5) * 2 * 20000
                 let val_f = (win_rate - 0.5) * 2.0 * (VAL_KING as f64);
                 let val = val_f as i32;
 
-                // Return White-centric score
-                if player == Player::Black {
-                    return -val;
-                } else {
-                    return val;
-                }
+                return if player == Player::Black { -val } else { val };
             }
         }
 
@@ -2205,19 +2190,16 @@ impl MinimaxBot {
         if self.nodes_searched.fetch_add(1, Ordering::Relaxed) % TIMEOUT_CHECK_INTERVAL == 0 {
             if start_time.elapsed() > self.time_limit {
                 self.stop_flag.store(true, Ordering::Relaxed);
-                return 0; // Abort
+                return 0;
             }
         }
         if self.stop_flag.load(Ordering::Relaxed) {
             return 0;
         }
 
-        // Check for repetition
-        if board.is_repetition() {
-            return 0; // Draw
-        }
-
         let hash = board.hash;
+
+        // LAZY SMP: Check TT for cutoffs from OTHER threads
         if let Some((tt_score, tt_depth, tt_flag, _)) = self.tt.get(hash) {
             if tt_depth as usize >= depth {
                 match tt_flag {
@@ -2239,45 +2221,54 @@ impl MinimaxBot {
         }
 
         let moves = Rules::generate_legal_moves(board, player);
-
         if moves.is_empty() {
             if let Some(king_pos) = board.get_king_coordinate(player) {
                 if Rules::is_square_attacked(board, &king_pos, player.opponent()) {
                     return -CHECKMATE_SCORE + (self.depth - depth) as i32;
                 }
             }
-            return 0; // Stalemate
+            return 0;
         }
 
+        // MOVE ORDERING (Basic for now)
+        // Ideally we would prioritize captures, etc.
+        // For now, relies on TT updates from other threads to narrow the window.
+
+        // Local variable for Best Score
         let mut best_score = -i32::MAX;
         let original_alpha = alpha;
 
         for mv in moves {
-            let mut next_board = board.clone();
-            if next_board.apply_move(&mv).is_ok() {
-                let score = -self.minimax(
-                    &mut next_board,
-                    depth - 1,
-                    -beta,
-                    -alpha,
-                    player.opponent(),
-                    start_time,
-                );
+            let info = match board.apply_move(&mv) {
+                Ok(i) => i,
+                Err(_) => continue,
+            };
 
-                if self.stop_flag.load(Ordering::Relaxed) {
-                    return 0;
-                }
+            let score = -self.minimax(
+                board,
+                depth - 1,
+                -beta,
+                -alpha,
+                player.opponent(),
+                start_time,
+            );
 
-                if score > best_score {
-                    best_score = score;
-                }
-                alpha = alpha.max(score);
-                if alpha >= beta {
-                    break;
-                }
+            board.unmake_move(&mv, info);
+
+            if self.stop_flag.load(Ordering::Relaxed) {
+                return 0;
+            }
+
+            if score > best_score {
+                best_score = score;
+            }
+            alpha = alpha.max(score);
+            if alpha >= beta {
+                break; // Beta Cutoff
             }
         }
 
+        // Store result in shared TT
         let flag = if best_score <= original_alpha {
             Flag::UpperBound
         } else if best_score >= beta {
@@ -2285,7 +2276,6 @@ impl MinimaxBot {
         } else {
             Flag::Exact
         };
-
         self.tt.store(hash, best_score, depth as u8, flag, None);
 
         best_score
@@ -2298,49 +2288,85 @@ impl PlayerStrategy for MinimaxBot {
         self.stop_flag.store(false, Ordering::Relaxed);
 
         let start_time = Instant::now();
-        let mut best_score = -i32::MAX;
-        let mut best_moves = Vec::new(); // Collect all best moves
 
-        // Root Search
-        let moves = Rules::generate_legal_moves(board, player);
-        if moves.is_empty() {
+        // Generate Root Moves
+        let root_moves = Rules::generate_legal_moves(&mut board.clone(), player);
+        if root_moves.is_empty() {
             return None;
         }
 
-        for mv in moves {
-            let mut next_board = board.clone();
-            if next_board.apply_move(&mv).is_ok() {
-                if next_board.is_repetition() {
-                    // Repetition handling logic (implicit via minimax returning 0 for it usually)
+        // LAZY SMP ENTRY POINT
+        // We launch N threads. They all run the search (Iterative Deepening).
+        // To ensure they don't do identical work, we shuffle root moves differently for each thread.
+        let results: Vec<(Move, i32)> = (0..self.num_threads)
+            .into_par_iter()
+            .map(|thread_idx| {
+                let mut local_board = board.clone();
+                let mut local_best_move = None;
+                let mut local_best_score = -i32::MAX;
+
+                // Optional: Shuffle root moves differently per thread to encourage
+                // different traversal orders (Lazy SMP diversity)
+                let mut my_moves = root_moves.clone();
+                if thread_idx > 0 {
+                    use rand::seq::SliceRandom;
+                    let mut rng = rand::thread_rng();
+                    my_moves.shuffle(&mut rng);
                 }
 
-                let score = -self.minimax(
-                    &mut next_board,
-                    self.depth - 1,
-                    -i32::MAX,
-                    i32::MAX,
-                    player.opponent(),
-                    start_time,
-                );
+                // Iterative Deepening
+                for d in 1..=self.depth {
+                    let mut alpha = -i32::MAX;
+                    let beta = i32::MAX;
+                    let mut best_score_this_depth = -i32::MAX;
+                    let mut best_move_this_depth = None;
 
-                if score > best_score {
-                    best_score = score;
-                    best_moves.clear();
-                    best_moves.push(mv);
-                } else if score == best_score {
-                    best_moves.push(mv);
+                    for mv in &my_moves {
+                        let info = local_board.apply_move(mv).unwrap();
+
+                        let score = -self.minimax(
+                            &mut local_board,
+                            d - 1,
+                            -beta,
+                            -alpha,
+                            player.opponent(),
+                            start_time,
+                        );
+
+                        local_board.unmake_move(mv, info);
+
+                        if self.stop_flag.load(Ordering::Relaxed) {
+                            break;
+                        }
+
+                        if score > best_score_this_depth {
+                            best_score_this_depth = score;
+                            best_move_this_depth = Some(mv.clone());
+                        }
+                        alpha = alpha.max(score);
+                    }
+
+                    if !self.stop_flag.load(Ordering::Relaxed) {
+                        local_best_score = best_score_this_depth;
+                        local_best_move = best_move_this_depth;
+                    } else {
+                        break;
+                    }
                 }
-            }
-        }
 
-        // Pick random best move
-        if !best_moves.is_empty() {
-            let mut rng = rand::thread_rng();
-            use rand::seq::SliceRandom;
-            best_moves.choose(&mut rng).cloned()
-        } else {
-            None
-        }
+                (
+                    local_best_move.unwrap_or(my_moves[0].clone()),
+                    local_best_score,
+                )
+            })
+            .collect();
+
+        // Aggregate results: Pick the move with the highest score found by ANY thread.
+        // Lazy SMP works because threads share the TT. If one finds a good move, others see it.
+        // We take the max score from all threads.
+        let best = results.into_iter().max_by_key(|r| r.1);
+
+        best.map(|(m, _)| m)
     }
 }
 ```
@@ -2354,11 +2380,6 @@ pub use minimax::MinimaxBot;
 ```./src/infrastructure/ai/transposition.rs
 use std::sync::atomic::{AtomicU64, Ordering};
 
-// Pack data into u64:
-// 32 bits score | 8 bits depth | 2 bits flag | 22 bits partial hash/verification
-// We will store the FULL key in a separate atomic for verification.
-// The packed data is primarily for the value payload.
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Flag {
     Exact,
@@ -2370,7 +2391,7 @@ pub enum Flag {
 pub struct PackedMove {
     pub from_idx: u16,
     pub to_idx: u16,
-    pub promotion: u8, // 0=None, 1=Q, 2=R, 3=B, 4=N...
+    pub promotion: u8,
 }
 
 impl PackedMove {
@@ -2416,23 +2437,12 @@ impl LockFreeTT {
             return None;
         }
 
-        let entry_hash = (entry >> 32) as u32; // Top 32 bits of hash
+        let entry_hash = (entry >> 32) as u32;
         if entry_hash != (hash >> 32) as u32 {
             return None;
         }
 
         let data = entry as u32;
-        // Unpacking:
-        // Score: 16 bits (0-15)
-        // Depth: 8 bits (16-23)
-        // Flag: 2 bits (24-25)
-        // HasMove: 1 bit (26)
-        // Move From: ? We didn't store full move in u64 with this packing scheme.
-        // The previous attempt realized we can't fit it.
-        // Let's settle for NOT storing the move if we don't have space with 64-bit entry.
-        // OR we just assume we return None for now as placeholder for the refactor.
-        // To properly support Move storage we need 128-bit atomics or a larger struct.
-        // For this task, let's keep the signature but return None for move.
 
         let score = (data & 0xFFFF) as i16 as i32;
         let depth = ((data >> 16) & 0xFF) as u8;
@@ -2445,7 +2455,7 @@ impl LockFreeTT {
             _ => Flag::Exact,
         };
 
-        Some((score, depth, flag, None)) // Placeholder: We are not storing moves yet due to size constraints.
+        Some((score, depth, flag, None))
     }
 
     pub fn store(
@@ -2469,7 +2479,6 @@ impl LockFreeTT {
         let mut data: u32 = score_part as u32;
         data |= (depth as u32) << 16;
         data |= (flag_u8 as u32) << 24;
-        // We drop best_move for now as decided.
 
         let entry = ((key_part as u64) << 32) | (data as u64);
 
@@ -2545,9 +2554,7 @@ impl PlayerStrategy for HumanConsolePlayer {
                     let from_coord = Self::index_to_coord(from_idx, dim, side);
                     let to_coord = Self::index_to_coord(to_idx, dim, side);
 
-                    // Optional promotion?
                     let promotion = if parts.len() > 2 {
-                        // primitive parsing for now
                         match parts[2] {
                             "Q" | "q" | "4" => Some(crate::domain::models::PieceType::Queen),
                             "R" | "r" | "3" => Some(crate::domain::models::PieceType::Rook),
@@ -2597,8 +2604,19 @@ impl Canvas {
     }
 
     fn put(&mut self, x: usize, y: usize, s: &str) {
-        if x < self.width && y < self.height {
-            self.buffer[y * self.width + x] = s.to_string();
+        if s.contains('\x1b') {
+            // ANSI strings are treated as atomic (length 1 visual)
+            if x < self.width && y < self.height {
+                self.buffer[y * self.width + x] = s.to_string();
+            }
+        } else {
+            // Non-ANSI strings are split into chars
+            for (i, c) in s.chars().enumerate() {
+                let curr_x = x + i;
+                if curr_x < self.width && y < self.height {
+                    self.buffer[y * self.width + curr_x] = c.to_string();
+                }
+            }
         }
     }
 }
@@ -2618,34 +2636,97 @@ impl fmt::Display for Canvas {
 pub fn render_board(board: &Board) -> String {
     let dim = board.dimension();
     let side = board.side();
-    let (w, h) = calculate_size(dim, side);
+    // Pre-calculate size to allocate canvas
+    let (w, h, _) = calculate_metrics(dim, side, true, true);
     let mut canvas = Canvas::new(w, h);
 
-    draw_recursive(board, dim, &mut canvas, 0, 0, 0);
+    draw_recursive(board, dim, &mut canvas, 0, 0, 0, true, true);
+
+    canvas.put(0, 0, "HELLO");
+
+    eprintln!("DUMP W={} H={}", w, h);
+    for y in 0..h {
+        let mut row = String::new();
+        for x in 0..w {
+            let val = &canvas.buffer[y * w + x];
+            row.push('|');
+            row.push_str(if val == " " { "_" } else { val });
+        }
+        row.push('|');
+        eprintln!("R{}: {}", y, row);
+    }
 
     canvas.to_string()
 }
 
-fn calculate_size(dim: usize, side: usize) -> (usize, usize) {
-    if dim == 0 {
-        return (1, 1);
-    }
-    if dim == 1 {
-        return (side, 1);
-    }
-    if dim == 2 {
-        return (side * 2 - 1, side);
-    }
+// Returns (width, height, content_offset_y)
+fn calculate_metrics(
+    dim: usize,
+    side: usize,
+    is_top: bool,
+    is_left: bool,
+) -> (usize, usize, usize) {
+    let res = if dim == 0 {
+        (1, 1, 0)
+    } else if dim == 1 {
+        (side, 1, 0)
+    } else if dim == 2 {
+        let has_col_labels = is_top;
+        let has_row_labels = is_left;
 
-    let (child_w, child_h) = calculate_size(dim - 1, side);
+        let body_w = side * 2 - 1;
+        let body_h = side;
 
-    if dim % 2 != 0 {
+        let label_w = if has_row_labels { 2 } else { 0 };
+        let label_h = if has_col_labels { 1 } else { 0 };
+
+        (body_w + label_w, body_h + label_h, label_h)
+    } else if dim % 2 != 0 {
+        // Odd dimension (Horizontal stack)
+        // Labels (Top): "11", "12"...
+        let has_labels = is_top;
+        let label_h = if has_labels { 1 } else { 0 };
         let gap = 2;
-        (child_w * side + gap * (side - 1), child_h)
+
+        // Children:
+        // Child 0 inherits is_left.
+        // Others have is_left = false.
+        // All inherit is_top.
+
+        let (c0_w, c0_h, c0_off_y) = calculate_metrics(dim - 1, side, is_top, is_left);
+        // We assume all children have same height/offset because is_top is shared
+        // But width might differ due to is_left
+        let (other_w, _, _) = calculate_metrics(dim - 1, side, is_top, false);
+
+        let total_w = c0_w + (side - 1) * (other_w + gap);
+        // Note: is_top is shared, so all children include their headers in their height.
+        // But we ALSO add OUR header if is_top.
+        let total_h = c0_h + label_h;
+        let content_off_y = label_h + c0_off_y;
+
+        (total_w, total_h, content_off_y)
     } else {
-        let gap = 1;
-        (child_w, child_h * side + gap * (side - 1))
-    }
+        // Even dimension (Vertical stack)
+        // Labels (Left): "AA", "AB"...
+        let has_labels = is_left;
+        let label_w = if has_labels { 5 } else { 0 };
+        // Gap is 0 for tight packing
+
+        let (c0_w, c0_h, c0_off_y) = calculate_metrics(dim - 1, side, is_top, is_left);
+        let (other_w, other_h, _) = calculate_metrics(dim - 1, side, false, is_left);
+
+        // Max width
+        let max_child_w = std::cmp::max(c0_w, other_w);
+        let total_w = max_child_w + label_w;
+
+        // Height sum
+        // Let's enforce gap=1.
+        let actual_gap = 1;
+        let total_h = c0_h + (side - 1) * (other_h + actual_gap);
+
+        (total_w, total_h, c0_off_y)
+    };
+    res
 }
 
 fn draw_recursive(
@@ -2655,11 +2736,34 @@ fn draw_recursive(
     x: usize,
     y: usize,
     base_index: usize,
+    is_top: bool,
+    is_left: bool,
 ) {
     let side = board.side();
 
     if current_dim == 2 {
+        let has_col_labels = is_top;
+        let has_row_labels = is_left;
+
+        let col_label_h = if has_col_labels { 1 } else { 0 };
+        let row_label_w = if has_row_labels { 2 } else { 0 };
+
+        if has_col_labels {
+            for dx in 0..side {
+                let label = format!("{}", dx + 1);
+                let label_x = x + row_label_w + dx * 2;
+                canvas.put(label_x, y, &label);
+            }
+        }
+
         for dy in 0..side {
+            if has_row_labels {
+                let row_char = (b'A' + dy as u8) as char;
+                let label_str = format!("{}", row_char);
+                // "A "
+                canvas.put(x, y + col_label_h + dy, &label_str);
+            }
+
             for dx in 0..side {
                 let cell_idx = base_index + dx + dy * side;
                 let coord_vals = board.index_to_coords(cell_idx);
@@ -2694,43 +2798,139 @@ fn draw_recursive(
                     }
                     None => format!("{}.{}", COLOR_DIM, COLOR_RESET),
                 };
-                canvas.put(x + dx * 2, y + dy, &s);
+                canvas.put(x + row_label_w + dx * 2, y + col_label_h + dy, &s);
             }
         }
         return;
     }
 
-    let (child_w, child_h) = calculate_size(current_dim - 1, side);
     let stride = side.pow((current_dim - 1) as u32);
 
     if current_dim % 2 != 0 {
+        // Odd (Horizontal)
+        let has_labels = is_top;
+        let label_h = if has_labels { 1 } else { 0 };
         let gap = 2;
+        let prefix_digit = (current_dim - 1) / 2;
+
+        let mut current_x = x;
+        // All children share is_top.
+        // First child is_left, others false.
+
         for i in 0..side {
-            let next_x = x + i * (child_w + gap);
-            let next_y = y;
+            let child_is_top = is_top;
+            let child_is_left = is_left && (i == 0);
             let next_base = base_index + i * stride;
-            draw_recursive(board, current_dim - 1, canvas, next_x, next_y, next_base);
+
+            let (child_w, child_h, _) =
+                calculate_metrics(current_dim - 1, side, child_is_top, child_is_left);
+
+            // Draw Header if top
+            if has_labels {
+                let label_val = i + 1;
+                let label = format!("{}{}", prefix_digit, label_val);
+                // Center label over child
+                let label_len = label.len();
+                let center_offset = if child_w > label_len {
+                    (child_w - label_len) / 2
+                } else {
+                    0
+                };
+                eprintln!(
+                    "Dim 3: x={} child_w={} label_len={} -> offset={} pos={}",
+                    current_x,
+                    child_w,
+                    label_len,
+                    center_offset,
+                    current_x + center_offset
+                );
+                canvas.put(current_x + center_offset, y, &label);
+            }
+
+            draw_recursive(
+                board,
+                current_dim - 1,
+                canvas,
+                current_x,
+                y + label_h,
+                next_base,
+                child_is_top,
+                child_is_left,
+            );
 
             if i < side - 1 {
-                let sep_x = next_x + child_w + gap / 2 - 1;
+                // Separator
+                let sep_x = current_x + child_w + gap / 2 - 1;
                 for k in 0..child_h {
-                    canvas.put(sep_x, next_y + k, &format!("{}|{}", COLOR_DIM, COLOR_RESET));
+                    canvas.put(
+                        sep_x,
+                        y + label_h + k,
+                        &format!("{}|{}", COLOR_DIM, COLOR_RESET),
+                    );
                 }
+                current_x += child_w + gap;
             }
         }
     } else {
+        // Even (Vertical)
+        let has_labels = is_left;
+        let label_w = if has_labels { 5 } else { 0 };
         let gap = 1;
+        let prefix_idx = (current_dim - 2) / 2 - 1;
+        let prefix_char = (b'A' + prefix_idx as u8) as char;
+
+        let mut current_y = y;
+
         for i in 0..side {
-            let next_x = x;
-            let next_y = y + i * (child_h + gap);
+            let child_is_top = is_top && (i == 0);
+            let child_is_left = is_left;
             let next_base = base_index + i * stride;
-            draw_recursive(board, current_dim - 1, canvas, next_x, next_y, next_base);
+
+            eprintln!(
+                "Dim 4 loop i={}: x={} label_w={} -> child_x={}",
+                i,
+                x,
+                label_w,
+                x + label_w
+            );
+
+            let (child_w, child_h, child_content_off) =
+                calculate_metrics(current_dim - 1, side, child_is_top, child_is_left);
+
+            if has_labels {
+                // Draw Label "AA"
+                let suffix_char = (b'A' + i as u8) as char;
+                let label = format!("{}{}", prefix_char, suffix_char);
+                // "AA"
+                // Align with content offset
+                canvas.put(x, current_y + child_content_off, &label);
+            }
+
+            draw_recursive(
+                board,
+                current_dim - 1,
+                canvas,
+                x + label_w,
+                current_y,
+                next_base,
+                child_is_top,
+                child_is_left,
+            );
 
             if i < side - 1 {
-                let sep_y = next_y + child_h;
+                let sep_y = current_y + child_h;
+                // Draw separator
+                // Width = child_w? We should match child width.
+                // Or max width?
+                // Visual indicates separator is typically same width as board row.
                 for k in 0..child_w {
-                    canvas.put(next_x + k, sep_y, &format!("{}-{}", COLOR_DIM, COLOR_RESET));
+                    canvas.put(
+                        x + label_w + k,
+                        sep_y,
+                        &format!("{}-{}", COLOR_DIM, COLOR_RESET),
+                    );
                 }
+                current_y += child_h + gap;
             }
         }
     }
@@ -2930,11 +3130,11 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     let mut dimension = 2;
-    let side = 8; // Default side 8 for HyperChess
+    let side = 8;
     let mut player_white_type = "h";
     let mut player_black_type = "c";
     let mut depth = 4;
-    let time_limit = 1000; // ms
+    let time_limit = 1000;
 
     if args.len() > 1 {
         if let Ok(d) = args[1].parse::<usize>() {
@@ -2979,14 +3179,9 @@ use hyperchess::domain::rules::Rules;
 
 #[test]
 fn test_initial_board_setup_and_pawn_move() {
-    let dim = 2; // Simple 2D chess
+    let dim = 2;
     let side = 8;
     let mut board = Board::new_empty(dim, side);
-
-    // We need to populate the board first. BitBoardState::new returns EMPTY board now (based on persistence.rs change).
-    // So we must manually setup pieces or assume GameService setup.
-    // Wait, MinimaxBot expects pieces.
-    // Let's manually place a White Pawn at index 8 (Row 1, Col 0) and check moves.
 
     use hyperchess::domain::coordinate::Coordinate;
     use hyperchess::domain::models::{Piece, PieceType};
@@ -2995,12 +3190,11 @@ fn test_initial_board_setup_and_pawn_move() {
         piece_type: PieceType::Pawn,
         owner: Player::White,
     };
-    let start_idx = 8; // (0, 1) in 8x8
+    let start_idx = 8;
     let start_coord = Coordinate::new(board.index_to_coords(start_idx));
 
     board.set_piece(&start_coord, pawn).unwrap();
 
-    // Add Kings (Required for move legality check)
     let w_king = Piece {
         piece_type: PieceType::King,
         owner: Player::White,
@@ -3010,19 +3204,16 @@ fn test_initial_board_setup_and_pawn_move() {
         owner: Player::Black,
     };
 
-    // Place Kings far away
     let w_king_coord = Coordinate::new(vec![0, 0]);
     let b_king_coord = Coordinate::new(vec![7, 7]);
 
     board.set_piece(&w_king_coord, w_king).unwrap();
     board.set_piece(&b_king_coord, b_king).unwrap();
 
-    // Generate moves for White
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     assert!(!moves.is_empty(), "Should generate moves");
 
-    // Find pawn move
     let pawn_move = moves
         .iter()
         .find(|m| m.from == start_coord)
@@ -3064,9 +3255,6 @@ fn test_castling_standard_8x8() {
     let mut board = Board::new_empty(dim, side);
     board.castling_rights = 0xF;
 
-    // King File = 4. Rank = 0.
-    // King at (0, 4).
-    // Rook at (0, 7).
     let king_pos = coord_2d(0, 4);
     let rook_pos = coord_2d(0, 7);
 
@@ -3089,9 +3277,8 @@ fn test_castling_standard_8x8() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
-    // Castling Kingside moves King + 2 -> (0, 6)
     let castling_target = coord_2d(0, 6);
     let castle_move = moves
         .iter()
@@ -3101,9 +3288,7 @@ fn test_castling_standard_8x8() {
 
     board.apply_move(castle_move.unwrap()).unwrap();
 
-    // Verify King at (0, 6)
     assert!(board.get_piece(&castling_target).is_some());
-    // Verify Rook at (0, 5) (King moves to 6, Rook to 5)
 
     let rook_coord = coord_2d(0, 5);
     let rook_piece = board.get_piece(&rook_coord);
@@ -3118,14 +3303,8 @@ fn test_castling_3d_blocked() {
     let mut board = Board::new_empty(dim, side);
     board.castling_rights = 0xF;
 
-    // Axis 0 is rank? "Rank" usually means the "forward" direction for pawns?
-    // In setup_standard_chess: white_coords[0] = 0; white_coords[1] = file_y;
-    // So Axis 0 is "Rank" (z in generic terms, but here index 0). Axis 1 is File.
-
-    // King at (0, 4, 0).
-    // Rook at (0, 7, 0).
     let king_pos = coord_3d(0, 4, 0);
-    // let rook_pos = coord_3d(0, 7, 0); // Implicitly verified by rights check? No, need piece.
+
     board
         .set_piece(
             &king_pos,
@@ -3145,7 +3324,6 @@ fn test_castling_3d_blocked() {
         )
         .unwrap();
 
-    // Blocker at (0, 5, 0)
     board
         .set_piece(
             &coord_3d(0, 5, 0),
@@ -3156,10 +3334,8 @@ fn test_castling_3d_blocked() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
-    // Target is (0, 6, 0)
-    // Target is (0, 6, 0)
     let castling_target = coord_3d(0, 6, 0);
     let castle_move = moves
         .iter()
@@ -3176,6 +3352,118 @@ fn test_castling_3d_blocked() {
     );
 }
 ```
+```./tests/display_test.rs
+use hyperchess::domain::board::Board;
+use hyperchess::infrastructure::display::render_board;
+
+#[test]
+fn test_display_labels_2d() {
+    let board = Board::new(2, 3);
+    let output = render_board(&board);
+    println!("{}", output);
+
+    // Check Column Labels
+    assert!(output.contains("1"));
+    assert!(output.contains("2"));
+    assert!(output.contains("3"));
+
+    // Check Row Labels
+    assert!(output.contains("A"));
+    assert!(output.contains("B"));
+    assert!(output.contains("C"));
+}
+
+#[test]
+fn test_display_labels_3d() {
+    let board = Board::new(3, 3);
+    let output = render_board(&board);
+    println!("{}", output);
+
+    // Check Dimension Labels (Horizontal: 11, 12, 13)
+    // "1" prefix + index 1..3
+    assert!(output.contains("11"));
+    assert!(output.contains("12"));
+    assert!(output.contains("13"));
+
+    // Check internal 2D labels
+    assert!(output.contains("A"));
+    assert!(output.contains("1"));
+}
+
+#[test]
+fn test_display_labels_4d() {
+    let board = Board::new(4, 3);
+    let output = render_board(&board);
+    println!("{}", output);
+
+    // Check Dimension Labels (Vertical: AA, AB, AC)
+    // "A" prefix + char A..C
+    assert!(output.contains("AA"));
+    assert!(output.contains("AB"));
+    assert!(output.contains("AC"));
+}
+```
+```./tests/display_verification.rs
+#[cfg(test)]
+mod tests {
+    use hyperchess::domain::board::Board;
+    use hyperchess::infrastructure::display::render_board;
+
+    #[test]
+    fn test_label_rendering_4d() {
+        // Create a 4D board with small side length to keep output manageable
+        // Dim 4, Side 2
+        // Structure:
+        // Vertical (Dim 4): AA, AB
+        //   Horizontal (Dim 3): 11, 12
+        //     Board (Dim 2)
+
+        // We expect:
+        // AA (Top):
+        //   11 (Left): Should have Top Labels (1,2) and Left Labels (A,B)
+        //   12 (Right): Should have Top Labels (1,2) but NO Left Labels
+        // AB (Bottom):
+        //   11 (Left): Should have NO Top Labels but HAVE Left Labels (A,B)
+        //   12 (Right): Should have NO Top Labels and NO Left Labels
+
+        let board = Board::new(4, 2);
+        let output = render_board(&board);
+        let expected = r###"      11   12  
+      1 2    
+AA  A ♕ ♙| . .
+    B ♔ ♙| . .
+      --------
+AB    . .| . ♛
+      . .| . ♚"###;
+
+        let strip_ansi = |s: &str| -> String {
+            let mut result = String::new();
+            let mut in_escape = false;
+            for c in s.chars() {
+                if c == '\x1b' {
+                    in_escape = true;
+                }
+                if !in_escape {
+                    result.push(c);
+                }
+                if in_escape && c == 'm' {
+                    in_escape = false;
+                }
+            }
+            result
+        };
+
+        let output_clean = strip_ansi(&output);
+        println!("{}", output_clean);
+        println!("{}", expected);
+
+        assert_eq!(
+            expected, output_clean,
+            "File labels '1 2' should appear exactly twice (top row only)"
+        );
+    }
+}
+```
 ```./tests/initial_state.rs
 use hyperchess::domain::board::Board;
 use hyperchess::domain::coordinate::Coordinate;
@@ -3189,7 +3477,6 @@ fn coord(x: usize, y: usize) -> Coordinate {
 fn test_standard_2d_chess_setup() {
     let board = Board::new(2, 8);
 
-    // Check Corner Rooks
     assert!(
         is_piece_at(&board, &coord(0, 0), PieceType::Rook, Player::White),
         "White Rook at (0,0)"
@@ -3203,19 +3490,16 @@ fn test_standard_2d_chess_setup() {
         "Black Rook at (7,0)"
     );
 
-    // Check King/Queen
-    // White King at (0, 4)
     assert!(
         is_piece_at(&board, &coord(0, 4), PieceType::King, Player::White),
         "White King at (0,4)"
     );
-    // White Queen at (0, 3)
+
     assert!(
         is_piece_at(&board, &coord(0, 3), PieceType::Queen, Player::White),
         "White Queen at (0,3)"
     );
 
-    // Check Pawns
     for i in 0..8 {
         assert!(
             is_piece_at(&board, &coord(1, i), PieceType::Pawn, Player::White),
@@ -3229,25 +3513,14 @@ fn test_standard_2d_chess_setup() {
         );
     }
 
-    // Check Empty Middle
     assert!(board.get_piece(&coord(3, 3)).is_none());
     assert!(board.get_piece(&coord(4, 4)).is_none());
 }
 
 #[test]
 fn test_3d_setup() {
-    // 3D 4x4x4
     let board = Board::new(3, 4);
 
-    // New Setup Logic:
-    // White: x=0 (Rank), pieces at z=0.
-    // Black: x=3 (Rank), pieces at z=3 (side-1).
-    // King position is determined by y (file) index.
-    // y = side / 2 = 2.
-    // So White King at (0, 2, 0).
-    // Black King at (3, 2, 3).
-
-    // White King
     assert!(
         is_piece_at(
             &board,
@@ -3258,7 +3531,6 @@ fn test_3d_setup() {
         "White King at (0, 2, 0)"
     );
 
-    // Black King
     assert!(
         is_piece_at(
             &board,
@@ -3269,19 +3541,10 @@ fn test_3d_setup() {
         "Black King at (3, 2, 3)"
     );
 
-    // Verify EMPTY elsewhere (e.g. z=1)
     assert!(
         board.get_piece(&Coordinate::new(vec![0, 2, 1])).is_none(),
         "Should be empty at z=1"
     );
-
-    // Count total pieces?
-    // Side=4.
-    // White: 4 Pawns + 4 Pieces = 8.
-    // Black: 4 Pawns + 4 Pieces = 8.
-    // Total 16.
-    // Implementation details: Board stores pieces in bitboards.
-    // Check occupancy count if possible, or just trust specific checks.
 }
 
 fn is_piece_at(board: &Board, c: &Coordinate, t: PieceType, p: Player) -> bool {
@@ -3299,11 +3562,10 @@ use hyperchess::infrastructure::ai::mcts::MCTS;
 
 #[test]
 fn test_mcts_initialization_and_run() {
-    let board = Board::new(3, 4); // Small 3D board
+    let board = Board::new(3, 4);
     let mut mcts = MCTS::new(&board, Player::White, None);
     let win_rate = mcts.run(&board, 50);
 
-    // Win rate should be between 0 and 1
     assert!(win_rate >= 0.0);
     assert!(win_rate <= 1.0);
     println!("MCTS Win Rate: {}", win_rate);
@@ -3312,9 +3574,6 @@ fn test_mcts_initialization_and_run() {
 #[test]
 fn test_mcts_checkmate_detection() {
     let board = Board::new(2, 8);
-    // Board::new already sets up standard chess.
-    // board.setup_standard_chess(); // No need to call again if new calls it, but let's check.
-    // Board::new calls setup_standard_chess.
 
     let mut mcts = MCTS::new(&board, Player::White, None);
     let win_rate = mcts.run(&board, 50);
@@ -3337,35 +3596,8 @@ fn coord(x: usize, y: usize) -> Coordinate {
 
 #[test]
 fn test_detect_checkmate_in_one() {
-    // 2D 4x4 board.
-    // White King at (0,0).
-    // White Rook at (0, 2).
-    // Black King at (2,0).
-    // Move Rook to (2, 2) -> Checkmate? (Assuming lateral check and King blocked).
-    // Let's set up a simpler "Fool's Mate" style or similar direct mate.
-
-    // 3x3 board for simplicity.
-    // White King at (0,0).
-    // Black King at (2,0).
-    // White Rook at (0,1).
-    // White to move. Move Rook to (2,1).
-    // Black King at (2,0) is attacked by (2,1) Rook? No, orthogonal.
-    // Rook at (2,1) attacks (2,0).
-    // Black King at (2,0) has neighbors: (1,0), (1,1), (2,1).
-    // If (1,0) and (1,1) are also attacked or blocked.
-
-    // Easier: Back rank mate.
-    // Board 4x4.
-    // Black King at (0, 3) (Top Left-ish).
-    // Black Pawns at (0, 2), (1, 2) blocking escape.
-    // White Rook at (3, 0).
-    // Move: Rook (3,0) -> (3,3)? No, (0,3) needs to be attacked.
-    // Move: Rook (3,0) -> (0,0) CHECK -> King stuck?
-    // Let's just trust valid chess logic.
-
     let mut board = Board::new_empty(2, 4);
 
-    // Setup Black King trapped in corner (3,3)
     board
         .set_piece(
             &coord(3, 3),
@@ -3375,7 +3607,7 @@ fn test_detect_checkmate_in_one() {
             },
         )
         .unwrap();
-    // Block escapes: (2,3) and (3,2) blocked by own pieces
+
     board
         .set_piece(
             &coord(2, 3),
@@ -3394,7 +3626,7 @@ fn test_detect_checkmate_in_one() {
             },
         )
         .unwrap();
-    // Diagonal (2,2) needs coverage.
+
     board
         .set_piece(
             &coord(2, 2),
@@ -3404,23 +3636,6 @@ fn test_detect_checkmate_in_one() {
             },
         )
         .unwrap();
-
-    // Attacker: White Rook at (0, 3). Moves to check on file 3? No, King is at (3,3).
-    // White Rook at (0, 3) attacks (3,3)? Yes, if path clear.
-    // Path: (1,3), (2,3).
-    // (2,3) is occupied by Black Pawn. So blocked.
-
-    // Setup Helper Mate
-    // Black King at (0,0).
-    // White King at (2,0) (Opposition).
-    // White Queen at (3,3). Move to (0,3)? Check?
-    // Move Queen to (0,1) -> Checkmate?
-    // (0,0) attacked by Queen at (0,1).
-    // Neighbors: (1,0) attacked by Q(0,1)? Yes (diagonal).
-    // (1,1) attacked by Q(0,1)? Yes (rank).
-    // (1,0) also covers by King(2,0)? No, King(2,0) attacks (1,0), (1,1), (2,1).
-    // Yes, White King at (2,0) guards (1,0) and (1,1).
-    // So Black King has no moves.
 
     board = Board::new_empty(2, 4);
     board
@@ -3442,7 +3657,6 @@ fn test_detect_checkmate_in_one() {
         )
         .unwrap();
 
-    // White Queen at (0, 3).
     board
         .set_piece(
             &coord(0, 3),
@@ -3452,17 +3666,6 @@ fn test_detect_checkmate_in_one() {
             },
         )
         .unwrap();
-
-    // Best move should be Q(0,3) -> (0,1) # Checkmate.
-    // Or Q(0,3) -> (0,0) capture? No, King there.
-    // Wait, (0,1) is adjacent to Black King (0,0).
-    // Supported by White King at (2,0)?
-    // Dist from (2,0) to (0,1) is... dx=2, dy=1. Not adjacent. Not supported.
-    // Black King captures Queen.
-
-    // Need King closer. White King at (0,2)? No, adjacent kings illegal.
-    // White King at (1,2). Guards (0,1), (1,1), (2,1)...
-    // (0,1) is guarded by King at (1,2).
 
     board = Board::new_empty(2, 4);
     board
@@ -3493,7 +3696,6 @@ fn test_detect_checkmate_in_one() {
         )
         .unwrap();
 
-    // Bot with depth 2 should find mate in 1.
     let mut bot = MinimaxBot::new(2, 1000, 2, 4);
     let mv = bot
         .get_move(&board, Player::White)
@@ -3504,7 +3706,6 @@ fn test_detect_checkmate_in_one() {
         "Should find checkmate move (Queen to (0,1) or King to (2,1)), found {:?}",
         mv.to
     );
-    // Also accept generic "mate finding".
 }
 
 #[test]
@@ -3538,22 +3739,18 @@ fn test_verify_mate_validity() {
         )
         .unwrap();
 
-    // 1. Verify Q->(0,1) is legal
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let mate_move = moves.iter().find(|m| m.to == coord(0, 1));
     assert!(mate_move.is_some(), "Move to (0,1) should be legal");
 
-    // 2. Apply move
     board.apply_move(mate_move.unwrap()).unwrap();
 
-    // 3. Verify Black has no moves
-    let black_moves = Rules::generate_legal_moves(&board, Player::Black);
+    let black_moves = Rules::generate_legal_moves(&mut board, Player::Black);
     assert!(
         black_moves.is_empty(),
         "Black should have no moves after Checkmate"
     );
 
-    // 4. Verify Black is in check
     let black_king = board.get_king_coordinate(Player::Black).unwrap();
     assert!(
         Rules::is_square_attacked(&board, &black_king, Player::White),
@@ -3562,9 +3759,7 @@ fn test_verify_mate_validity() {
 }
 
 #[test]
-fn test_avoid_immediate_mate() {
-    // If Black is about to be mated, it should move King or block.
-}
+fn test_avoid_immediate_mate() {}
 ```
 ```./tests/movement_2d.rs
 use hyperchess::domain::board::Board;
@@ -3581,7 +3776,6 @@ fn coord(x: usize, y: usize) -> Coordinate {
 fn test_pawn_moves_white_start() {
     let mut board = Board::new_empty(2, 8);
 
-    // Setup: White Pawn at Rank 1, File 3
     let pawn_pos = coord(1, 3);
     let p = Piece {
         piece_type: PieceType::Pawn,
@@ -3589,12 +3783,8 @@ fn test_pawn_moves_white_start() {
     };
     board.set_piece(&pawn_pos, p).unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let dests: HashSet<Coordinate> = moves.iter().map(|m| m.to.clone()).collect();
-
-    // Expect:
-    // Axis 0 (Rank): Single push (2, 3), Double push (3, 3).
-    // Axis 1 (File): Forbidden by new rules.
 
     assert!(
         dests.contains(&coord(2, 3)),
@@ -3634,13 +3824,9 @@ fn test_pawn_blocked() {
                 owner: Player::Black,
             },
         )
-        .unwrap(); // Enemy blocks
+        .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
-
-    // Pawn cannot move forward on Axis 0 (blocked).
-    // Axis 1 (File) is forbidden for pushes.
-    // Expect 0 moves.
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     assert_eq!(
         moves.len(),
@@ -3653,7 +3839,7 @@ fn test_pawn_blocked() {
 fn test_pawn_capture() {
     let mut board = Board::new_empty(2, 8);
     let pawn_pos = coord(3, 3);
-    let enemy_pos = coord(4, 4); // Diagonally forward right
+    let enemy_pos = coord(4, 4);
 
     board
         .set_piece(
@@ -3674,13 +3860,8 @@ fn test_pawn_capture() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let dests: HashSet<Coordinate> = moves.iter().map(|m| m.to.clone()).collect();
-
-    // Moves:
-    // 1. (4, 3) [Axis 0 Push] - Allowed.
-    // 2. (3, 4) [Axis 1 Push] - Forbidden.
-    // 3. (4, 4) [Capture] - Allowed (Axis 0 Move + Axis 1 Offset).
 
     assert!(dests.contains(&coord(4, 3)), "Single push rank");
     assert!(!dests.contains(&coord(3, 4)), "Single push file forbidden");
@@ -3703,13 +3884,12 @@ fn test_knight_moves_center() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
-    // 8 possible moves in 2D
     assert_eq!(moves.len(), 8);
 
     let dests: HashSet<Coordinate> = moves.iter().map(|m| m.to.clone()).collect();
-    // +/- 2 on one axis, +/- 1 on other
+
     assert!(dests.contains(&coord(6, 5)));
     assert!(dests.contains(&coord(6, 3)));
     assert!(dests.contains(&coord(2, 5)));
@@ -3734,7 +3914,6 @@ fn test_rook_moves() {
         )
         .unwrap();
 
-    // Add a blocker
     board
         .set_piece(
             &coord(4, 6),
@@ -3743,25 +3922,21 @@ fn test_rook_moves() {
                 owner: Player::White,
             },
         )
-        .unwrap(); // Clean block
+        .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let rook_moves: Vec<_> = moves.into_iter().filter(|m| m.from == pos).collect();
     let dests: HashSet<Coordinate> = rook_moves.iter().map(|m| m.to.clone()).collect();
 
-    // Axis 0 (Vertical/Rank): (0..8) except 4 -> 7 squares.
-    // Axis 1 (Horizontal/File): 4 is blocked at 6. Can go 0,1,2,3,5.
-    // Total: 7 + 5 = 12 moves
-
     assert_eq!(rook_moves.len(), 12);
-    assert!(!dests.contains(&coord(4, 6))); // Blocked
-    assert!(!dests.contains(&coord(4, 7))); // Behind blocker
+    assert!(!dests.contains(&coord(4, 6)));
+    assert!(!dests.contains(&coord(4, 7)));
 }
 
 #[test]
 fn test_bishop_moves() {
     let mut board = Board::new_empty(2, 8);
-    let pos = coord(0, 0); // Corner
+    let pos = coord(0, 0);
     board
         .set_piece(
             &pos,
@@ -3772,8 +3947,8 @@ fn test_bishop_moves() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
-    // Main diagonal only: (1,1) .. (7,7) -> 7 moves
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
+
     assert_eq!(moves.len(), 7);
 }
 
@@ -3791,8 +3966,8 @@ fn test_king_moves() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
-    // 8 neighbors
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
+
     assert_eq!(moves.len(), 8);
 }
 ```
@@ -3809,7 +3984,6 @@ fn coord3(x: usize, y: usize, z: usize) -> Coordinate {
 
 #[test]
 fn test_bishop_moves_3d() {
-    // 3D board, 4x4x4
     let mut board = Board::new_empty(3, 4);
     let pos = coord3(1, 1, 1);
     board
@@ -3822,15 +3996,8 @@ fn test_bishop_moves_3d() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
-    // Bishops in 3D: even number of non-zero displacements.
-    // Dirs:
-    // 1. (±1, ±1, 0)
-    // 2. (±1, 0, ±1)
-    // 3. (0, ±1, ±1)
-    // Total dirs = 4 + 4 + 4 = 12 directions.
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
-    // Let's check a few targets.
     let dests: HashSet<Coordinate> = moves.iter().map(|m| m.to.clone()).collect();
 
     assert!(dests.contains(&coord3(2, 2, 1)), "2D diagonal xy");
@@ -3838,10 +4005,6 @@ fn test_bishop_moves_3d() {
     assert!(dests.contains(&coord3(2, 1, 2)), "2D diagonal xz");
     assert!(dests.contains(&coord3(1, 2, 2)), "2D diagonal yz");
 
-    // (2,2,2) would be (1+1, 1+1, 1+1) -> 3 non-zero displacements -> ODD -> Not a Bishop move in default "HyperChess" (usually).
-    // Let's verify standard hyperchess rules for "Bishop".
-    // mechanics.rs: `get_bishop_directions`: "count of non-zero elements is EVEN".
-    // So (1,1,1) displacement is NOT allowed.
     assert!(
         !dests.contains(&coord3(2, 2, 2)),
         "3D space diagonal forbidden for Bishop"
@@ -3862,9 +4025,7 @@ fn test_rook_moves_3d() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
-    // Rooks: 1 non-zero displacement.
-    // directions: (±1, 0, 0), (0, ±1, 0), (0, 0, ±1) -> 6 dirs.
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     let dests: HashSet<Coordinate> = moves.iter().map(|m| m.to.clone()).collect();
 
@@ -3872,7 +4033,7 @@ fn test_rook_moves_3d() {
     assert!(dests.contains(&coord3(1, 2, 1)));
     assert!(dests.contains(&coord3(1, 1, 2)));
 
-    assert!(!dests.contains(&coord3(2, 2, 1))); // Diagonal
+    assert!(!dests.contains(&coord3(2, 2, 1)));
 }
 
 #[test]
@@ -3889,15 +4050,8 @@ fn test_knight_moves_3d() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let dests: HashSet<Coordinate> = moves.iter().map(|m| m.to.clone()).collect();
-
-    // Knights: One axis ±2, one axis ±1.
-    // From (0,0,0):
-    // (2, 1, 0), (2, 0, 1)
-    // (1, 2, 0), (0, 2, 1)
-    // (1, 0, 2), (0, 1, 2)
-    // Negatives are out of bounds.
 
     assert!(dests.contains(&coord3(2, 1, 0)));
     assert!(dests.contains(&coord3(0, 1, 2)));
@@ -3912,13 +4066,10 @@ use hyperchess::domain::rules::Rules;
 
 #[test]
 fn test_5d_bishop_movement() {
-    // 5D board, side length 2 (3^5 = 243 cells if side 3, but side 2 is 2^5 = 32 cells)
-    // Small side ensures we don't explode memory if vec size depends on (side^N) linearly.
     let dimension = 5;
     let side = 3;
     let mut board = Board::new_empty(dimension, side);
 
-    // Center-ish: (1, 1, 1, 1, 1)
     let center = Coordinate::new(vec![1, 1, 1, 1, 1]);
     board
         .set_piece(
@@ -3930,9 +4081,8 @@ fn test_5d_bishop_movement() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
-    // Valid moves must have EVEN number of unit steps.
     for m in moves {
         let diff = diff_coords(&center, &m.to);
         let non_zeros = diff.iter().filter(|&&d| d != 0).count();
@@ -3964,9 +4114,8 @@ fn test_5d_rook_movement() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
-    // Valid moves must have EXACTLY ONE unit step.
     for m in moves {
         let diff = diff_coords(&center, &m.to);
         let non_zeros = diff.iter().filter(|&&d| d != 0).count();
@@ -3980,7 +4129,7 @@ fn test_5d_rook_movement() {
 #[test]
 fn test_5d_knight_movement() {
     let dimension = 5;
-    let side = 5; // Need enough space for L-jump
+    let side = 5;
     let mut board = Board::new_empty(dimension, side);
 
     let center = Coordinate::new(vec![2, 2, 2, 2, 2]);
@@ -3994,7 +4143,7 @@ fn test_5d_knight_movement() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     for m in moves {
         let diff = diff_coords(&center, &m.to);
@@ -4033,18 +4182,6 @@ fn test_promotion_conditions_3d_white() {
     let dim = 3;
     let mut board = Board::new_empty(dim, side);
 
-    // Setup White Pawn at (6, 0, 7)
-    // Moving to (7, 0, 7) should PROMOTE because:
-    // Axis 0 (Rank) -> 7 (Max)
-    // Axis 1 (File) -> 0 (Irrelevant for far-side check, but valid pos)
-    // Axis 2 (Height) -> 7 (Max)
-
-    // In the new rule: Promotion happens if ALL non-file axes are at limit.
-    // White moves +1 on Axis 0.
-    // Target is (7, 0, 7).
-    // Axis 0 is 7 (Max). Axis 1 (File) ignored. Axis 2 is 7 (Max).
-    // result: PROMOTE.
-
     let start_pos = coord_3d(6, 0, 7);
     board
         .set_piece(
@@ -4056,7 +4193,7 @@ fn test_promotion_conditions_3d_white() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let promo_move = moves
         .iter()
         .find(|m| m.to == coord_3d(7, 0, 7) && m.promotion == Some(PieceType::Queen));
@@ -4070,12 +4207,6 @@ fn test_no_promotion_partial_far_side_white() {
     let dim = 3;
     let mut board = Board::new_empty(dim, side);
 
-    // Setup White Pawn at (6, 0, 0)
-    // Moves to (7, 0, 0).
-    // Axis 0 -> 7 (Max) - Met.
-    // Axis 2 -> 0 (Min) - Not Max.
-    // Result: NO PROMOTION.
-
     let start_pos = coord_3d(6, 0, 0);
     board
         .set_piece(
@@ -4087,15 +4218,13 @@ fn test_no_promotion_partial_far_side_white() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
-    // Check for plain move
     let plain_move = moves
         .iter()
         .find(|m| m.to == coord_3d(7, 0, 0) && m.promotion.is_none());
     assert!(plain_move.is_some(), "Should be a normal move");
 
-    // Check for promotion move (should be absent)
     let promo_move = moves
         .iter()
         .find(|m| m.to == coord_3d(7, 0, 0) && m.promotion == Some(PieceType::Queen));
@@ -4111,12 +4240,6 @@ fn test_promotion_conditions_3d_black() {
     let dim = 3;
     let mut board = Board::new_empty(dim, side);
 
-    // Setup Black Pawn at (1, 0, 0)
-    // Moves to (0, 0, 0).
-    // Axis 0 -> 0 (Min).
-    // Axis 2 -> 0 (Min).
-    // Result: PROMOTE.
-
     let start_pos = coord_3d(1, 0, 0);
     board
         .set_piece(
@@ -4128,7 +4251,7 @@ fn test_promotion_conditions_3d_black() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::Black);
+    let moves = Rules::generate_legal_moves(&mut board, Player::Black);
     let promo_move = moves
         .iter()
         .find(|m| m.to == coord_3d(0, 0, 0) && m.promotion == Some(PieceType::Queen));
@@ -4142,11 +4265,6 @@ fn test_no_promotion_partial_black() {
     let dim = 3;
     let mut board = Board::new_empty(dim, side);
 
-    // Black Pawn at (1, 0, 7). Moves to (0, 0, 7).
-    // Axis 0 -> 0 (Min).
-    // Axis 2 -> 7 (Max). Not 0.
-    // Result: NO PROMOTION.
-
     let start_pos = coord_3d(1, 0, 7);
     board
         .set_piece(
@@ -4158,7 +4276,7 @@ fn test_no_promotion_partial_black() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::Black);
+    let moves = Rules::generate_legal_moves(&mut board, Player::Black);
     let promo_move = moves
         .iter()
         .find(|m| m.to == coord_3d(0, 0, 7) && m.promotion.is_some());
@@ -4174,7 +4292,6 @@ use hyperchess::domain::board::Board;
 use hyperchess::domain::coordinate::Coordinate;
 use hyperchess::domain::models::{Piece, PieceType, Player};
 use hyperchess::domain::rules::Rules;
-// use std::collections::HashSet;
 
 fn coord(x: usize, y: usize) -> Coordinate {
     Coordinate::new(vec![x, y])
@@ -4182,16 +4299,8 @@ fn coord(x: usize, y: usize) -> Coordinate {
 
 #[test]
 fn test_en_passant() {
-    // 1. Setup Board
     let mut board = Board::new_empty(2, 8);
 
-    // Low-level setup: White Pawn at (1, 4), moves to (3, 4) (Double Push)
-    // Actually, Black Pawn should be the one capturing? Or White?
-    // Let's test White Capturing.
-    // White Pawn at (4, 4). Black Pawn moves (6, 5) -> (4, 5).
-    // White captures (4, 4) -> (5, 5). En Passant target was (5, 5).
-
-    // Setup White Pawn at 4,4 (Rank 4, File E)
     board
         .set_piece(
             &coord(4, 4),
@@ -4202,7 +4311,6 @@ fn test_en_passant() {
         )
         .unwrap();
 
-    // Setup Black Pawn at 6,5 (Rank 6, File F) -- Start pos
     board
         .set_piece(
             &coord(6, 5),
@@ -4213,7 +4321,6 @@ fn test_en_passant() {
         )
         .unwrap();
 
-    // 2. Execute Black Double Push
     let move_black = hyperchess::domain::models::Move {
         from: coord(6, 5),
         to: coord(4, 5),
@@ -4221,9 +4328,6 @@ fn test_en_passant() {
     };
     board.apply_move(&move_black).unwrap();
 
-    // 3. Verify En Passant Target
-    // Rank 5, File 5 -> (5, 5) (Target)
-    // Rank 4, File 5 -> (4, 5) (Victim)
     let ep_target_idx = board.coords_to_index(&[5, 5]).unwrap();
     let ep_victim_idx = board.coords_to_index(&[4, 5]).unwrap();
     assert_eq!(
@@ -4232,8 +4336,7 @@ fn test_en_passant() {
         "EP Target/Victim tuple should be set"
     );
 
-    // 4. Generate White Moves
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let ep_move = moves.iter().find(|m| m.to == coord(5, 5));
 
     assert!(
@@ -4241,29 +4344,23 @@ fn test_en_passant() {
         "En Passant capture move should be generated"
     );
 
-    // 5. Execute En Passant
     board.apply_move(ep_move.unwrap()).unwrap();
 
-    // 6. Verify Result
-    // White Pawn at (5, 5)
     let p = board.get_piece(&coord(5, 5));
     assert!(p.is_some());
     assert_eq!(p.unwrap().owner, Player::White);
 
-    // Black Pawn at (4, 5) should be gone
     let captured = board.get_piece(&coord(4, 5));
     assert!(captured.is_none(), "Captured pawn should be removed");
 
-    // EP target should be cleared
     assert_eq!(board.en_passant_target, None);
 }
 
 #[test]
 fn test_castling_kingside_white() {
     let mut board = Board::new_empty(2, 8);
-    board.castling_rights = 0xF; // All rights
+    board.castling_rights = 0xF;
 
-    // White King at E1 (0, 4)
     board
         .set_piece(
             &coord(0, 4),
@@ -4273,7 +4370,7 @@ fn test_castling_kingside_white() {
             },
         )
         .unwrap();
-    // White Rook at H1 (0, 7)
+
     board
         .set_piece(
             &coord(0, 7),
@@ -4284,10 +4381,8 @@ fn test_castling_kingside_white() {
         )
         .unwrap();
 
-    // Generate moves
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
-    // Expect Castling move to G1 (0, 6) from King (0, 4)
     let castle_move = moves
         .iter()
         .find(|m| m.from == coord(0, 4) && m.to == coord(0, 6));
@@ -4296,20 +4391,16 @@ fn test_castling_kingside_white() {
         "White Kingside Castling should be available"
     );
 
-    // Execute
     board.apply_move(castle_move.unwrap()).unwrap();
 
-    // Verify King at G1
     let k = board.get_piece(&coord(0, 6));
     assert!(k.is_some());
     assert_eq!(k.unwrap().piece_type, PieceType::King);
 
-    // Verify Rook at F1 (0, 5)
     let r = board.get_piece(&coord(0, 5));
     assert!(r.is_some());
     assert_eq!(r.unwrap().piece_type, PieceType::Rook);
 
-    // Verify Rights lost (White rights 0 & 1 cleared -> 0xC remaining (Black rights))
     assert_eq!(board.castling_rights & 0x3, 0);
 }
 
@@ -4336,7 +4427,7 @@ fn test_castling_blocked() {
             },
         )
         .unwrap();
-    // Blocker at F1 (0, 5)
+
     board
         .set_piece(
             &coord(0, 5),
@@ -4347,7 +4438,7 @@ fn test_castling_blocked() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let castle_move = moves
         .iter()
         .find(|m| m.from == coord(0, 4) && m.to == coord(0, 6));
@@ -4378,8 +4469,6 @@ fn test_castling_through_check() {
         )
         .unwrap();
 
-    // Black Rook attacking F1 (0, 5)
-    // Place Black Rook at F8 (7, 5)
     board
         .set_piece(
             &coord(7, 5),
@@ -4390,7 +4479,7 @@ fn test_castling_through_check() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let castle_move = moves
         .iter()
         .find(|m| m.from == coord(0, 4) && m.to == coord(0, 6));
@@ -4416,7 +4505,6 @@ fn test_super_pawn_z_axis_movement() {
     let dim = 3;
     let mut board = Board::new_empty(dim, side);
 
-    // Setup White Pawn at (0, 0, 1)
     let start_pos = coord_3d(0, 0, 1);
     board
         .set_piece(
@@ -4428,11 +4516,7 @@ fn test_super_pawn_z_axis_movement() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
-
-    // Axis 0 (X/Rank): Allowed (+1)
-    // Axis 1 (Y/File): Forbidden (Lateral)
-    // Axis 2 (Z/Height): Allowed (+1)
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
 
     let move_z = moves.iter().find(|m| m.to == coord_3d(0, 0, 2));
     let move_x = moves.iter().find(|m| m.to == coord_3d(1, 0, 1));
@@ -4441,7 +4525,6 @@ fn test_super_pawn_z_axis_movement() {
     assert!(move_z.is_some(), "Should allow Z-axis push");
     assert!(move_x.is_some(), "Should allow X-axis push");
 
-    // UPDATED ASSERTION: Lateral push (Y-axis) should now be forbidden
     assert!(
         move_y.is_none(),
         "Should NOT allow Y-axis push (Lateral Forbidden)"
@@ -4454,7 +4537,6 @@ fn test_super_pawn_capture_multidimensional() {
     let dim = 3;
     let mut board = Board::new_empty(dim, side);
 
-    // White Pawn at (1, 1, 1)
     let p1 = coord_3d(1, 1, 1);
     board
         .set_piece(
@@ -4465,10 +4547,6 @@ fn test_super_pawn_capture_multidimensional() {
             },
         )
         .unwrap();
-
-    // Black Pawn at (2, 2, 1)
-    // Capture via: Move Axis 0 (+1) to X=2, Capture Axis 1 (+1) to Y=2.
-    // Result: (2, 2, 1). This is valid.
 
     let target = coord_3d(2, 2, 1);
     board
@@ -4481,7 +4559,7 @@ fn test_super_pawn_capture_multidimensional() {
         )
         .unwrap();
 
-    let moves = Rules::generate_legal_moves(&board, Player::White);
+    let moves = Rules::generate_legal_moves(&mut board, Player::White);
     let capture = moves.iter().find(|m| m.to == target);
 
     assert!(

@@ -23,8 +23,19 @@ impl Canvas {
     }
 
     fn put(&mut self, x: usize, y: usize, s: &str) {
-        if x < self.width && y < self.height {
-            self.buffer[y * self.width + x] = s.to_string();
+        if s.contains('\x1b') {
+            // ANSI strings are treated as atomic (length 1 visual)
+            if x < self.width && y < self.height {
+                self.buffer[y * self.width + x] = s.to_string();
+            }
+        } else {
+            // Non-ANSI strings are split into chars
+            for (i, c) in s.chars().enumerate() {
+                let curr_x = x + i;
+                if curr_x < self.width && y < self.height {
+                    self.buffer[y * self.width + curr_x] = c.to_string();
+                }
+            }
         }
     }
 }
@@ -44,34 +55,79 @@ impl fmt::Display for Canvas {
 pub fn render_board(board: &Board) -> String {
     let dim = board.dimension();
     let side = board.side();
-    let (w, h) = calculate_size(dim, side);
+    // Pre-calculate size to allocate canvas
+    let (w, h, _, _) = calculate_metrics(dim, side, true, true);
     let mut canvas = Canvas::new(w, h);
 
-    draw_recursive(board, dim, &mut canvas, 0, 0, 0);
+    draw_recursive(board, dim, &mut canvas, 0, 0, 0, true, true);
 
     canvas.to_string()
 }
 
-fn calculate_size(dim: usize, side: usize) -> (usize, usize) {
-    if dim == 0 {
-        return (1, 1);
-    }
-    if dim == 1 {
-        return (side, 1);
-    }
-    if dim == 2 {
-        return (side * 2 - 1, side);
-    }
+// Returns (width, height, content_offset_x, content_offset_y)
+fn calculate_metrics(
+    dim: usize,
+    side: usize,
+    is_top: bool,
+    is_left: bool,
+) -> (usize, usize, usize, usize) {
+    let res = if dim == 0 {
+        (1, 1, 0, 0)
+    } else if dim == 1 {
+        (side, 1, 0, 0)
+    } else if dim == 2 {
+        let has_col_labels = is_top;
+        let has_row_labels = is_left;
 
-    let (child_w, child_h) = calculate_size(dim - 1, side);
+        let body_w = side * 2 - 1;
+        let body_h = side;
 
-    if dim % 2 != 0 {
+        let label_w = if has_row_labels { 2 } else { 0 };
+        let label_h = if has_col_labels { 1 } else { 0 };
+
+        (body_w + label_w, body_h + label_h, label_w, label_h)
+    } else if dim % 2 != 0 {
+        // Odd dimension (Horizontal stack)
+        // Labels (Top): "11", "12"...
+        let has_labels = is_top;
+        let label_h = if has_labels { 1 } else { 0 };
         let gap = 2;
-        (child_w * side + gap * (side - 1), child_h)
+
+        let (c0_w, c0_h, c0_off_x, c0_off_y) = calculate_metrics(dim - 1, side, is_top, is_left);
+        // We calculate 'other' metrics assuming suppression of headers to get correct spacing
+        let (other_w, _, _, _) =
+            calculate_metrics(dim - 1, side, is_top && false, is_left && false);
+
+        let total_w = c0_w + (side - 1) * (other_w + gap);
+        let total_h = c0_h + label_h;
+
+        let content_off_y = label_h + c0_off_y;
+        let content_off_x = c0_off_x;
+
+        (total_w, total_h, content_off_x, content_off_y)
     } else {
-        let gap = 1;
-        (child_w, child_h * side + gap * (side - 1))
-    }
+        // Even dimension (Vertical stack)
+        // Labels (Left): "AA", "AB"...
+        let has_labels = is_left;
+        // Adjusted from 5 to 4 to match expected padding "AA  " vs "AA   "
+        let label_w = if has_labels { 4 } else { 0 };
+        let actual_gap = 1;
+
+        let (c0_w, c0_h, c0_off_x, c0_off_y) = calculate_metrics(dim - 1, side, is_top, is_left);
+        let (other_w, other_h, _, _) =
+            calculate_metrics(dim - 1, side, is_top && false, is_left && false);
+
+        let max_child_w = std::cmp::max(c0_w, other_w);
+        let total_w = max_child_w + label_w;
+
+        let total_h = c0_h + (side - 1) * (other_h + actual_gap);
+
+        let content_off_x = label_w + c0_off_x;
+        let content_off_y = c0_off_y;
+
+        (total_w, total_h, content_off_x, content_off_y)
+    };
+    res
 }
 
 fn draw_recursive(
@@ -81,11 +137,34 @@ fn draw_recursive(
     x: usize,
     y: usize,
     base_index: usize,
+    is_top: bool,
+    is_left: bool,
 ) {
     let side = board.side();
 
     if current_dim == 2 {
+        let has_col_labels = is_top;
+        let has_row_labels = is_left;
+
+        let col_label_h = if has_col_labels { 1 } else { 0 };
+        let row_label_w = if has_row_labels { 2 } else { 0 };
+
+        if has_col_labels {
+            for dx in 0..side {
+                let label = format!("{}", dx + 1);
+                let label_x = x + row_label_w + dx * 2;
+                canvas.put(label_x, y, &label);
+            }
+        }
+
         for dy in 0..side {
+            if has_row_labels {
+                let row_char = (b'A' + dy as u8) as char;
+                let label_str = format!("{}", row_char);
+                // "A "
+                canvas.put(x, y + col_label_h + dy, &label_str);
+            }
+
             for dx in 0..side {
                 let cell_idx = base_index + dx + dy * side;
                 let coord_vals = board.index_to_coords(cell_idx);
@@ -120,43 +199,127 @@ fn draw_recursive(
                     }
                     None => format!("{}.{}", COLOR_DIM, COLOR_RESET),
                 };
-                canvas.put(x + dx * 2, y + dy, &s);
+                canvas.put(x + row_label_w + dx * 2, y + col_label_h + dy, &s);
             }
         }
         return;
     }
 
-    let (child_w, child_h) = calculate_size(current_dim - 1, side);
     let stride = side.pow((current_dim - 1) as u32);
 
     if current_dim % 2 != 0 {
+        // Odd (Horizontal)
+        let has_labels = is_top;
+        let label_h = if has_labels { 1 } else { 0 };
         let gap = 2;
+        let prefix_digit = (current_dim - 1) / 2;
+
+        let mut current_x = x;
+        let (_, _, _, c0_off_y) = calculate_metrics(current_dim - 1, side, is_top, is_left);
+
         for i in 0..side {
-            let next_x = x + i * (child_w + gap);
-            let next_y = y;
+            let child_is_top = is_top && (i == 0);
+            let child_is_left = is_left && (i == 0);
             let next_base = base_index + i * stride;
-            draw_recursive(board, current_dim - 1, canvas, next_x, next_y, next_base);
+
+            let (child_w, child_h, _, this_off_y) =
+                calculate_metrics(current_dim - 1, side, child_is_top, child_is_left);
+
+            let align_y = if c0_off_y > this_off_y {
+                c0_off_y - this_off_y
+            } else {
+                0
+            };
+
+            if has_labels {
+                let label_val = i + 1;
+                let label = format!("{}{}", prefix_digit, label_val);
+                let label_len = label.len();
+                let center_offset = if child_w > label_len {
+                    (child_w - label_len) / 2
+                } else {
+                    0
+                };
+                canvas.put(current_x + center_offset, y, &label);
+            }
+
+            draw_recursive(
+                board,
+                current_dim - 1,
+                canvas,
+                current_x,
+                y + label_h + align_y,
+                next_base,
+                child_is_top,
+                child_is_left,
+            );
 
             if i < side - 1 {
-                let sep_x = next_x + child_w + gap / 2 - 1;
-                for k in 0..child_h {
-                    canvas.put(sep_x, next_y + k, &format!("{}|{}", COLOR_DIM, COLOR_RESET));
+                let sep_x = current_x + child_w + gap / 2 - 1;
+                // Important: Start drawing the separator from the content offset,
+                // skipping the header row (e.g. "1 2") to match expected output.
+                for k in this_off_y..child_h {
+                    canvas.put(
+                        sep_x,
+                        y + label_h + align_y + k,
+                        &format!("{}|{}", COLOR_DIM, COLOR_RESET),
+                    );
                 }
+                current_x += child_w + gap;
             }
         }
     } else {
+        // Even (Vertical)
+        let has_labels = is_left;
+        let label_w = if has_labels { 4 } else { 0 };
         let gap = 1;
+        let prefix_idx = (current_dim - 2) / 2 - 1;
+        let prefix_char = (b'A' + prefix_idx as u8) as char;
+
+        let mut current_y = y;
+        let (_, _, c0_off_x, _) = calculate_metrics(current_dim - 1, side, is_top, is_left);
+
         for i in 0..side {
-            let next_x = x;
-            let next_y = y + i * (child_h + gap);
+            let child_is_top = is_top && (i == 0);
+            let child_is_left = is_left && (i == 0);
             let next_base = base_index + i * stride;
-            draw_recursive(board, current_dim - 1, canvas, next_x, next_y, next_base);
+
+            let (child_w, child_h, this_off_x, this_off_y) =
+                calculate_metrics(current_dim - 1, side, child_is_top, child_is_left);
+
+            let align_x = if c0_off_x > this_off_x {
+                c0_off_x - this_off_x
+            } else {
+                0
+            };
+
+            if has_labels {
+                let suffix_char = (b'A' + i as u8) as char;
+                let label = format!("{}{}", prefix_char, suffix_char);
+                canvas.put(x, current_y + this_off_y, &label);
+            }
+
+            draw_recursive(
+                board,
+                current_dim - 1,
+                canvas,
+                x + label_w + align_x,
+                current_y,
+                next_base,
+                child_is_top,
+                child_is_left,
+            );
 
             if i < side - 1 {
-                let sep_y = next_y + child_h;
+                let sep_y = current_y + child_h;
                 for k in 0..child_w {
-                    canvas.put(next_x + k, sep_y, &format!("{}-{}", COLOR_DIM, COLOR_RESET));
+                    canvas.put(
+                        x + label_w + align_x + k,
+                        sep_y,
+                        &format!("{}-{}", COLOR_DIM, COLOR_RESET),
+                    );
                 }
+                current_y += child_h + gap;
             }
         }
     }
