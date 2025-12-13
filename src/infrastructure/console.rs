@@ -38,20 +38,11 @@ impl HumanConsolePlayer {
                 let letter_part = &remaining[..end_idx];
                 remaining = &remaining[end_idx..];
 
-                let val = if letter_part.len() == 1 {
-                    let c = letter_part.chars().next().unwrap().to_ascii_uppercase();
-                    (c as u8).saturating_sub(b'A') as usize
-                } else {
-                    let c = letter_part.chars().last().unwrap().to_ascii_uppercase();
-                    (c as u8).saturating_sub(b'A') as usize
-                };
+                let c = letter_part.chars().last().unwrap().to_ascii_uppercase();
+                let val = (c as u8).saturating_sub(b'A') as usize;
 
                 if val >= side {
-                    return Err(format!(
-                        "Coordinate letter '{}' out of bounds (Max {})",
-                        letter_part,
-                        (b'A' + (side - 1) as u8) as char
-                    ));
+                    return Err(format!("Coordinate letter '{}' out of bounds", letter_part));
                 }
                 coords[d] = val;
             } else {

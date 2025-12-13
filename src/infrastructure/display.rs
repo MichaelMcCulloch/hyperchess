@@ -53,7 +53,6 @@ impl fmt::Display for Canvas {
 pub fn render_board(board: &Board) -> String {
     let dim = board.dimension();
     let side = board.side();
-
     let (w, h, _, _) = calculate_metrics(dim, side, true, true);
     let mut canvas = Canvas::new(w, h);
 
@@ -89,7 +88,6 @@ fn calculate_metrics(
         let gap = 2;
 
         let (c0_w, c0_h, c0_off_x, c0_off_y) = calculate_metrics(dim - 1, side, is_top, is_left);
-
         let (other_w, _, _, _) =
             calculate_metrics(dim - 1, side, is_top && false, is_left && false);
 
@@ -103,7 +101,7 @@ fn calculate_metrics(
     } else {
         let has_labels = is_left;
 
-        let label_w = if has_labels { 4 } else { 0 };
+        let label_w = if has_labels { 2 } else { 0 };
         let actual_gap = 1;
 
         let (c0_w, c0_h, c0_off_x, c0_off_y) = calculate_metrics(dim - 1, side, is_top, is_left);
@@ -154,7 +152,6 @@ fn draw_recursive(
             if has_row_labels {
                 let row_char = (b'A' + dy as u8) as char;
                 let label_str = format!("{}", row_char);
-
                 canvas.put(x, y + col_label_h + dy, &label_str);
             }
 
@@ -204,7 +201,6 @@ fn draw_recursive(
         let has_labels = is_top;
         let label_h = if has_labels { 1 } else { 0 };
         let gap = 2;
-        let prefix_digit = (current_dim - 1) / 2;
 
         let mut current_x = x;
         let (_, _, _, c0_off_y) = calculate_metrics(current_dim - 1, side, is_top, is_left);
@@ -224,8 +220,7 @@ fn draw_recursive(
             };
 
             if has_labels {
-                let label_val = i + 1;
-                let label = format!("{}{}", prefix_digit, label_val);
+                let label = format!("{}", i + 1);
                 let label_len = label.len();
                 let center_offset = if child_w > label_len {
                     (child_w - label_len) / 2
@@ -248,7 +243,6 @@ fn draw_recursive(
 
             if i < side - 1 {
                 let sep_x = current_x + child_w + gap / 2 - 1;
-
                 for k in this_off_y..child_h {
                     canvas.put(
                         sep_x,
@@ -261,10 +255,8 @@ fn draw_recursive(
         }
     } else {
         let has_labels = is_left;
-        let label_w = if has_labels { 4 } else { 0 };
+        let label_w = if has_labels { 2 } else { 0 };
         let gap = 1;
-        let prefix_idx = (current_dim - 2) / 2 - 1;
-        let prefix_char = (b'A' + prefix_idx as u8) as char;
 
         let mut current_y = y;
         let (_, _, c0_off_x, _) = calculate_metrics(current_dim - 1, side, is_top, is_left);
@@ -285,7 +277,7 @@ fn draw_recursive(
 
             if has_labels {
                 let suffix_char = (b'A' + i as u8) as char;
-                let label = format!("{}{}", prefix_char, suffix_char);
+                let label = format!("{}", suffix_char);
                 canvas.put(x, current_y + this_off_y, &label);
             }
 
@@ -302,6 +294,7 @@ fn draw_recursive(
 
             if i < side - 1 {
                 let sep_y = current_y + child_h;
+
                 for k in this_off_x..child_w {
                     canvas.put(
                         x + label_w + align_x + k,

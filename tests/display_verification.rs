@@ -7,13 +7,13 @@ mod tests {
     fn test_label_rendering_4d() {
         let board = Board::new(4, 2);
         let output = render_board(&board);
-        let expected = r###"     11    12 
-      1 2     
-AA  A ♕ ♙| . .
-    B ♔ ♙| . .
-      --------
-AB    . .| . ♛
-      . .| . ♚
+        let expected = r###"    1     2 
+    1 2     
+A A ♕ ♙| . .
+  B ♔ ♙| . .
+    --------
+B   . .| . ♛
+    . .| . ♚
 "###;
 
         let strip_ansi = |s: &str| -> String {
@@ -34,8 +34,8 @@ AB    . .| . ♛
         };
 
         let output_clean = strip_ansi(&output);
-        println!("{}", output_clean);
         println!("{}", expected);
+        println!("{}", output_clean);
 
         assert_eq!(expected, output_clean,);
     }
