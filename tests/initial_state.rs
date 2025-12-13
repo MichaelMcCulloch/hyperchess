@@ -74,9 +74,46 @@ fn test_3d_setup() {
         "Black King at (3, 2, 3)"
     );
 
+    // With the new rule, White Pawns should be at z=1 (and x=1) for d=3
+    // But wait, x=1 is standard pawn rank.
+    // Let's check the code:
+    // white_coords[0] = 1 (Rank 1)
+    // white_coords[2] = 1 (Z 1)
+    // So White Pawn at (1, y, 1)
+
+    // Black Pawns:
+    // side = 4.
+    // black_coords[0] = side - 2 = 2.
+    // black_coords[2] = side - 2 = 2.
+    // So Black Pawn at (2, y, 2)
+
+    assert!(
+        is_piece_at(
+            &board,
+            &Coordinate::new(vec![1, 0, 1]),
+            PieceType::Pawn,
+            Player::White
+        ),
+        "White Pawn at (1, 0, 1)"
+    );
+
+    assert!(
+        is_piece_at(
+            &board,
+            &Coordinate::new(vec![2, 0, 2]), // side=4, rank=2, z=2
+            PieceType::Pawn,
+            Player::Black
+        ),
+        "Black Pawn at (2, 0, 2)"
+    );
+
+    // Old assertion was: board.get_piece(&Coordinate::new(vec![0, 2, 1])).is_none()
+    // This checked if (0, 2, 1) was empty.
+    // (0, 2, 1) corresponds to White Pieces rank (x=0), File 2 (Bishop/King/etc), Z=1.
+    // Since White Pieces are at Z=0, this should still be empty.
     assert!(
         board.get_piece(&Coordinate::new(vec![0, 2, 1])).is_none(),
-        "Should be empty at z=1"
+        "Should be empty at x=0, z=1"
     );
 }
 

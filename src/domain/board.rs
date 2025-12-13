@@ -1,7 +1,7 @@
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{GameResult, Move, Piece, PieceType, Player};
 use crate::domain::zobrist::ZobristKeys;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use std::fmt;
 use std::sync::Arc;
 
@@ -206,7 +206,13 @@ impl Board {
             let mut white_coords = vec![0; self.dimension];
             white_coords[1] = file_y;
 
+            // White Pawns
             white_coords[0] = 1;
+            // For dimensions > 2, pawns are pushed 1 step "in"
+            for d in 2..self.dimension {
+                white_coords[d] = 1;
+            }
+
             if let Some(idx) = self.coords_to_index(&white_coords) {
                 self.place_piece_at_index(
                     idx,
@@ -217,7 +223,12 @@ impl Board {
                 );
             }
 
+            // White Pieces
             white_coords[0] = 0;
+            // White pieces stay at 0 for d > 2
+            for d in 2..self.dimension {
+                white_coords[d] = 0;
+            }
             if let Some(idx) = self.coords_to_index(&white_coords) {
                 let piece_type = self.determine_backrank_piece(file_y, self.side);
                 self.place_piece_at_index(
@@ -230,11 +241,16 @@ impl Board {
             }
 
             let mut black_coords = vec![self.side - 1; self.dimension];
-
             black_coords[1] = file_y;
 
             if self.side > 3 {
+                // Black Pawns
                 black_coords[0] = self.side - 2;
+                // For dimensions > 2, black pawns are pushed 1 step "in" from their side
+                for d in 2..self.dimension {
+                    black_coords[d] = self.side - 2;
+                }
+
                 if let Some(idx) = self.coords_to_index(&black_coords) {
                     self.place_piece_at_index(
                         idx,
@@ -246,7 +262,13 @@ impl Board {
                 }
             }
 
+            // Black Pieces
             black_coords[0] = self.side - 1;
+            // Black pieces stay at side-1 for d > 2
+            for d in 2..self.dimension {
+                black_coords[d] = self.side - 1;
+            }
+
             if let Some(idx) = self.coords_to_index(&black_coords) {
                 let piece_type = self.determine_backrank_piece(file_y, self.side);
                 self.place_piece_at_index(
