@@ -1,8 +1,21 @@
 .game-wrapper {
     display: flex;
     flex-direction: column;
-    align-items: center;
+    align-items: flex-start;
+    /* Prevent clipping on left side */
     gap: 1rem;
+    width: 100vw;
+    height: 100vh;
+    overflow: auto;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.game-wrapper>* {
+    margin: 0 auto;
+    /* Center content when it fits, align left when it overflows */
+    flex-shrink: 0;
+    /* Prevent shrinking */
 }
 
 .turn-info {
@@ -140,11 +153,25 @@
     filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
 }
 
-.piece.black {
-    /* filter: drop-shadow(0 1px 2px rgba(255,255,255,0.5)); */
+
+
+
+
+
+.game-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    width: 100vw;
+    height: 100vh;
+    overflow: auto;
+    /* Enable panning */
+    padding: 20px;
+    box-sizing: border-box;
 }
 
-
+/* ... existing styles ... */
 
 .recursive-grid {
     display: flex;
@@ -152,18 +179,23 @@
     border: 1px solid #444;
     padding: 10px;
     background: rgba(255, 255, 255, 0.05);
+    /* Prevent shrinking/wrapping issues */
+    width: max-content;
+    max-width: none;
 }
 
 .recursive-grid.row-layout {
     flex-direction: row;
-    flex-wrap: wrap;
-    /* Allow wrapping if too wide */
+    flex-wrap: nowrap;
+    /* Disable wrapping */
     align-items: flex-start;
 }
 
 .recursive-grid.col-layout {
     flex-direction: column;
-    align-items: flex-start;
+    /* align-items: flex-start; */
+    /* Ensure columns don't stretch weirdly */
+    width: max-content;
 }
 
 .dimension-slice {

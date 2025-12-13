@@ -41,7 +41,6 @@ const Home = () => {
                     type="number" 
                     value={dim} 
                     min={2} 
-                    max={4} 
                     onChange={e => setDim(parseInt(e.target.value))} 
                 />
             </div>

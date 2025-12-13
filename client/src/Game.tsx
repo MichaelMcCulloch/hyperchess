@@ -49,7 +49,12 @@ const RecursiveGrid = ({ state, selected, onSquareClick, currentDim, fixedCoords
         slices.push(
             <div key={`slice-${targetIndex}-${i}`} className="dimension-slice">
                 <div className="slice-label">
-                    {targetIndex === 2 ? `Z=${i + 1}` : targetIndex === 3 ? `W=${i + 1}` : `D${targetIndex}=${i + 1}`}
+                    {(() => {
+                        // Dim 2 (Index 2) -> Z. Dim 3 (Index 3) -> W. Dim 4+ -> D{Index+1}
+                        if (targetIndex === 2) return `Z=${i + 1}`;
+                        if (targetIndex === 3) return `W=${i + 1}`;
+                        return `D${targetIndex + 1}=${i + 1}`;
+                    })()}
                 </div>
                 <RecursiveGrid 
                     state={state} 
