@@ -312,7 +312,7 @@ fn draw_recursive(
 
             if i < side - 1 {
                 let sep_y = current_y + child_h;
-                for k in 0..child_w {
+                for k in this_off_x..child_w {
                     canvas.put(
                         x + label_w + align_x + k,
                         sep_y,

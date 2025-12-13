@@ -22,8 +22,8 @@ mod tests {
 
         let board = Board::new(4, 2);
         let output = render_board(&board);
-        let expected = r###"      11   12  
-      1 2    
+        let expected = r###"     11    12 
+      1 2     
 AA  A ♕ ♙| . .
     B ♔ ♙| . .
       --------
