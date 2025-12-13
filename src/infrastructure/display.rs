@@ -24,12 +24,10 @@ impl Canvas {
 
     fn put(&mut self, x: usize, y: usize, s: &str) {
         if s.contains('\x1b') {
-            // ANSI strings are treated as atomic (length 1 visual)
             if x < self.width && y < self.height {
                 self.buffer[y * self.width + x] = s.to_string();
             }
         } else {
-            // Non-ANSI strings are split into chars
             for (i, c) in s.chars().enumerate() {
                 let curr_x = x + i;
                 if curr_x < self.width && y < self.height {
@@ -55,7 +53,7 @@ impl fmt::Display for Canvas {
 pub fn render_board(board: &Board) -> String {
     let dim = board.dimension();
     let side = board.side();
-    // Pre-calculate size to allocate canvas
+
     let (w, h, _, _) = calculate_metrics(dim, side, true, true);
     let mut canvas = Canvas::new(w, h);
 
@@ -64,7 +62,6 @@ pub fn render_board(board: &Board) -> String {
     canvas.to_string()
 }
 
-// Returns (width, height, content_offset_x, content_offset_y)
 fn calculate_metrics(
     dim: usize,
     side: usize,
@@ -87,14 +84,12 @@ fn calculate_metrics(
 
         (body_w + label_w, body_h + label_h, label_w, label_h)
     } else if dim % 2 != 0 {
-        // Odd dimension (Horizontal stack)
-        // Labels (Top): "11", "12"...
         let has_labels = is_top;
         let label_h = if has_labels { 1 } else { 0 };
         let gap = 2;
 
         let (c0_w, c0_h, c0_off_x, c0_off_y) = calculate_metrics(dim - 1, side, is_top, is_left);
-        // We calculate 'other' metrics assuming suppression of headers to get correct spacing
+
         let (other_w, _, _, _) =
             calculate_metrics(dim - 1, side, is_top && false, is_left && false);
 
@@ -106,10 +101,8 @@ fn calculate_metrics(
 
         (total_w, total_h, content_off_x, content_off_y)
     } else {
-        // Even dimension (Vertical stack)
-        // Labels (Left): "AA", "AB"...
         let has_labels = is_left;
-        // Adjusted from 5 to 4 to match expected padding "AA  " vs "AA   "
+
         let label_w = if has_labels { 4 } else { 0 };
         let actual_gap = 1;
 
@@ -161,7 +154,7 @@ fn draw_recursive(
             if has_row_labels {
                 let row_char = (b'A' + dy as u8) as char;
                 let label_str = format!("{}", row_char);
-                // "A "
+
                 canvas.put(x, y + col_label_h + dy, &label_str);
             }
 
@@ -208,7 +201,6 @@ fn draw_recursive(
     let stride = side.pow((current_dim - 1) as u32);
 
     if current_dim % 2 != 0 {
-        // Odd (Horizontal)
         let has_labels = is_top;
         let label_h = if has_labels { 1 } else { 0 };
         let gap = 2;
@@ -256,8 +248,7 @@ fn draw_recursive(
 
             if i < side - 1 {
                 let sep_x = current_x + child_w + gap / 2 - 1;
-                // Important: Start drawing the separator from the content offset,
-                // skipping the header row (e.g. "1 2") to match expected output.
+
                 for k in this_off_y..child_h {
                     canvas.put(
                         sep_x,
@@ -269,7 +260,6 @@ fn draw_recursive(
             }
         }
     } else {
-        // Even (Vertical)
         let has_labels = is_left;
         let label_w = if has_labels { 4 } else { 0 };
         let gap = 1;

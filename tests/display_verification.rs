@@ -5,21 +5,6 @@ mod tests {
 
     #[test]
     fn test_label_rendering_4d() {
-        // Create a 4D board with small side length to keep output manageable
-        // Dim 4, Side 2
-        // Structure:
-        // Vertical (Dim 4): AA, AB
-        //   Horizontal (Dim 3): 11, 12
-        //     Board (Dim 2)
-
-        // We expect:
-        // AA (Top):
-        //   11 (Left): Should have Top Labels (1,2) and Left Labels (A,B)
-        //   12 (Right): Should have Top Labels (1,2) but NO Left Labels
-        // AB (Bottom):
-        //   11 (Left): Should have NO Top Labels but HAVE Left Labels (A,B)
-        //   12 (Right): Should have NO Top Labels and NO Left Labels
-
         let board = Board::new(4, 2);
         let output = render_board(&board);
         let expected = r###"     11    12 

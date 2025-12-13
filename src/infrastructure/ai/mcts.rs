@@ -67,8 +67,7 @@ impl MCTS {
         }
 
         let num_threads = rayon::current_num_threads();
-        // User requested strategy: "chunk work, maybe 5 iterations a thread".
-        // We ensure at least 5 iterations per task to amortize the setup cost (Board clone).
+
         const MIN_ITERATIONS_PER_TASK: usize = 5;
 
         let num_tasks = if self.serial {

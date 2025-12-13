@@ -102,21 +102,21 @@ Run the game via `cargo`:
 
 ```bash
 cargo run --release -- [dimension] [player_mode] [depth]
-```
+````
 
 **Arguments:**
 
 1.  **dimension** (Optional): The number of spatial dimensions for the board.
-    *   **Default:** `2` (Standard Chess)
-    *   **Values:** `2`, `3`, `4`, etc.
-2.  **player_mode** (Optional): Specifies the types of the two players (White and Black).
-    *   **Default:** `hc` (Human vs Computer)
-    *   **Format:** A two-character string (e.g., `cc`, `hh`).
-        *   First character: White player (`h` = Human, `c` = Computer).
-        *   Second character: Black player.
+      * **Default:** `2` (Standard Chess)
+      * **Values:** `2`, `3`, `4`, etc.
+2.  **player\_mode** (Optional): Specifies the types of the two players (White and Black).
+      * **Default:** `hc` (Human vs Computer)
+      * **Format:** A two-character string (e.g., `cc`, `hh`).
+          * First character: White player (`h` = Human, `c` = Computer).
+          * Second character: Black player.
 3.  **depth** (Optional): The search depth for the Computer AI.
-    *   **Default:** `4`
-    *   **Note:** Higher depth significantly increases calculation time.
+      * **Default:** `4`
+      * **Note:** Higher depth significantly increases calculation time.
 
 **Examples:**
 
@@ -135,57 +135,48 @@ cargo run --release -- 2 hc 6
 ```
 
 ### Move Input Format (Console)
-When playing as a human, enter moves using **Linear Indices**.
 
-Format: `FromIndex ToIndex [Promotion]`
+When playing as a human, enter moves using **Coordinate Notation**.
 
-*   **FromIndex**: The linear index of the piece you want to move.
-*   **ToIndex**: The linear index of the destination square.
-*   **Promotion** (Optional): If promoting a pawn, specify the piece type: `Q` (Queen), `R` (Rook), `B` (Bishop), `N` (Knight).
+Format: `FromCoord ToCoord [Promotion]`
 
-#### Coordinate System & Indices
-The board is flattened into a linear array.
-*   **Index Formula:** $Index = \sum_{i=0}^{N-1} (c_i \cdot S^i)$
-    *   $c_i$: Coordinate on Axis $i$.
-    *   $S$: Side length of the board.
+  * **FromCoord**: The coordinate of the piece you want to move.
+  * **ToCoord**: The coordinate of the destination square.
+  * **Promotion** (Optional): If promoting a pawn, specify the piece type: `Q` (Queen), `R` (Rook), `B` (Bishop), `N` (Knight).
 
-**Axis Roles:**
-*   **Axis 0 (Rank):** Increments by $1$.
-*   **Axis 1 (File):** Increments by $S$.
-*   **Axis 2 (Height):** Increments by $S^2$.
-*   **Axis $k$:** Increments by $S^k$.
+#### Coordinate Notation System
 
----
+Coordinates are entered as a single string per square. The format is parsed from the **highest dimension** inward to the **lowest dimension**. The type of character expected alternates by dimension:
+
+  * **Odd Dimensions (1, 3, 5...)**: Represented by **Letters** (A-Z).
+      * *Axis 1 (File/Col) is Dimension 1.*
+  * **Even Dimensions (0, 2, 4...)**: Represented by **Numbers** (1-8...).
+      * *Axis 0 (Rank/Row) is Dimension 0.*
+
+**Format Pattern:** `... [Dim 3 Letter] [Dim 2 Number] [Dim 1 Letter] [Dim 0 Number]`
 
 #### Examples
 
-**1. 2D Board ($8 \times 8$)**
-*   **Side $S = 8$**
-*   Formula: $Index = c_0 + 8c_1$
-*   **Pos (0, 0):** $0$
-*   **Pos (3, 4):** $3 + (4 \times 8) = 35$
-*   **Pos (7, 7):** $7 + (7 \times 8) = 63$
+| Dimension | Pattern | Format | Example | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| **2D** | D1 -\> D0 | `[Letter][Number]` | **e4** | File 'e', Rank '4' |
+| **3D** | D2 -\> D1 -\> D0 | `[Number][Letter][Number]` | **1e4** | Height '1', File 'e', Rank '4' |
+| **4D** | D3 -\> D2 -\> D1 -\> D0 | `[Letter][Number][Letter][Number]` | **A1e4** | Hyper 'A', Height '1', File 'e', Rank '4' |
 
-**2. 3D Board ($8 \times 8 \times 8$)**
-*   **Side $S = 8$**
-*   Formula: $Index = c_0 + 8c_1 + 64c_2$
-*   **Pos (0, 0, 0):** $0$
-*   **Pos (4, 4, 4):** $4 + 32 + (4 \times 64) = 292$
-*   **Pos (7, 7, 7):** $7 + 56 + 448 = 511$
+-----
 
-**3. 5D Board ($4 \times 4 \times 4 \times 4 \times 4$)**
-*   **Side $S = 4$**
-*   Formula: $Index = c_0 + 4c_1 + 16c_2 + 64c_3 + 256c_4$
-*   **Pos (1, 2, 0, 3, 1):**
-    *   $c_0=1$
-    *   $c_1=2 \to 8$
-    *   $c_2=0$
-    *   $c_3=3 \to 192$
-    *   $c_4=1 \to 256$
-    *   **Total:** $1 + 8 + 0 + 192 + 256 = 457$
+**Move Input Examples:**
 
----
+**1. 2D Game (Standard)**
 
-**Move Example:**
-*   `8 16` : Move piece from index 8 to index 16.
-*   `50 58 Q` : Move pawn from 50 to 58 and promote to Queen.
+  * `e2 e4` : Move pawn from e2 to e4.
+  * `a7 a8 Q` : Move pawn from a7 to a8 and promote to Queen.
+
+**2. 3D Game**
+
+  * `1e2 1e4` : Move pawn at Height 1, e2 to Height 1, e4.
+  * `2a2 2b3` : Move from Height 2, a2 to Height 2, b3.
+
+**3. 4D Game**
+
+  * `A1e4 B1e4` : Move piece from Hyper-layer A to Hyper-layer B.

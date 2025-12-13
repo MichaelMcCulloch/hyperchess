@@ -1820,8 +1820,7 @@ impl MCTS {
         }
 
         let num_threads = rayon::current_num_threads();
-        // User requested strategy: "chunk work, maybe 5 iterations a thread".
-        // We ensure at least 5 iterations per task to amortize the setup cost (Board clone).
+
         const MIN_ITERATIONS_PER_TASK: usize = 5;
 
         let num_tasks = if self.serial {
@@ -2084,8 +2083,8 @@ use crate::domain::rules::Rules;
 use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::ai::transposition::{Flag, LockFreeTT};
 use rayon::prelude::*;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const CHECKMATE_SCORE: i32 = 30000;
@@ -2118,7 +2117,7 @@ impl MinimaxBot {
         Self {
             depth,
             time_limit: Duration::from_millis(time_limit_ms),
-            tt: Arc::new(LockFreeTT::new(256)), // Increased TT size for parallel access
+            tt: Arc::new(LockFreeTT::new(256)),
             stop_flag: Arc::new(AtomicBool::new(false)),
             nodes_searched: std::sync::atomic::AtomicUsize::new(0),
             use_mcts: false,
@@ -2130,7 +2129,7 @@ impl MinimaxBot {
     pub fn with_mcts(mut self, iterations: usize) -> Self {
         self.use_mcts = true;
         self.mcts_iterations = iterations;
-        // Adjust depth for hybrid approach
+
         self.depth = if self.use_mcts { 3 } else { self.depth };
         self
     }
@@ -2138,8 +2137,6 @@ impl MinimaxBot {
     fn evaluate(&self, board: &Board, player_at_leaf: Option<Player>) -> i32 {
         if self.use_mcts {
             if let Some(player) = player_at_leaf {
-                // Critical: Run MCTS serially here!
-                // We are already inside a parallel Minimax thread.
                 let mut mcts = MCTS::new(board, player, None).with_serial();
                 let win_rate = mcts.run(board, self.mcts_iterations);
 
@@ -2199,7 +2196,6 @@ impl MinimaxBot {
 
         let hash = board.hash;
 
-        // LAZY SMP: Check TT for cutoffs from OTHER threads
         if let Some((tt_score, tt_depth, tt_flag, _)) = self.tt.get(hash) {
             if tt_depth as usize >= depth {
                 match tt_flag {
@@ -2230,11 +2226,6 @@ impl MinimaxBot {
             return 0;
         }
 
-        // MOVE ORDERING (Basic for now)
-        // Ideally we would prioritize captures, etc.
-        // For now, relies on TT updates from other threads to narrow the window.
-
-        // Local variable for Best Score
         let mut best_score = -i32::MAX;
         let original_alpha = alpha;
 
@@ -2264,11 +2255,10 @@ impl MinimaxBot {
             }
             alpha = alpha.max(score);
             if alpha >= beta {
-                break; // Beta Cutoff
+                break;
             }
         }
 
-        // Store result in shared TT
         let flag = if best_score <= original_alpha {
             Flag::UpperBound
         } else if best_score >= beta {
@@ -2289,15 +2279,11 @@ impl PlayerStrategy for MinimaxBot {
 
         let start_time = Instant::now();
 
-        // Generate Root Moves
         let root_moves = Rules::generate_legal_moves(&mut board.clone(), player);
         if root_moves.is_empty() {
             return None;
         }
 
-        // LAZY SMP ENTRY POINT
-        // We launch N threads. They all run the search (Iterative Deepening).
-        // To ensure they don't do identical work, we shuffle root moves differently for each thread.
         let results: Vec<(Move, i32)> = (0..self.num_threads)
             .into_par_iter()
             .map(|thread_idx| {
@@ -2305,8 +2291,6 @@ impl PlayerStrategy for MinimaxBot {
                 let mut local_best_move = None;
                 let mut local_best_score = -i32::MAX;
 
-                // Optional: Shuffle root moves differently per thread to encourage
-                // different traversal orders (Lazy SMP diversity)
                 let mut my_moves = root_moves.clone();
                 if thread_idx > 0 {
                     use rand::seq::SliceRandom;
@@ -2314,7 +2298,6 @@ impl PlayerStrategy for MinimaxBot {
                     my_moves.shuffle(&mut rng);
                 }
 
-                // Iterative Deepening
                 for d in 1..=self.depth {
                     let mut alpha = -i32::MAX;
                     let beta = i32::MAX;
@@ -2361,9 +2344,6 @@ impl PlayerStrategy for MinimaxBot {
             })
             .collect();
 
-        // Aggregate results: Pick the move with the highest score found by ANY thread.
-        // Lazy SMP works because threads share the TT. If one finds a good move, others see it.
-        // We take the max score from all threads.
         let best = results.into_iter().max_by_key(|r| r.1);
 
         best.map(|(m, _)| m)
@@ -2500,21 +2480,76 @@ impl HumanConsolePlayer {
         Self
     }
 
-    fn parse_index(input: &str) -> Result<usize, String> {
-        input
-            .trim()
-            .parse::<usize>()
-            .map_err(|_| "Invalid number".to_string())
-    }
-
-    fn index_to_coord(idx: usize, dim: usize, side: usize) -> Coordinate {
+    fn parse_coordinate(input: &str, dim: usize, side: usize) -> Result<Coordinate, String> {
+        let mut remaining = input.trim();
         let mut coords = vec![0; dim];
-        let mut temp = idx;
-        for i in 0..dim {
-            coords[i] = temp % side;
-            temp /= side;
+
+        for d in (0..dim).rev() {
+            if remaining.is_empty() {
+                return Err(format!(
+                    "Insufficient parts for {}-dimensional coordinate",
+                    dim
+                ));
+            }
+
+            if d % 2 != 0 {
+                let end_idx = remaining
+                    .find(|c: char| !c.is_ascii_alphabetic())
+                    .unwrap_or(remaining.len());
+
+                if end_idx == 0 {
+                    return Err(format!(
+                        "Expected Letter for Dimension {}, found number/symbol",
+                        d + 1
+                    ));
+                }
+
+                let letter_part = &remaining[..end_idx];
+                remaining = &remaining[end_idx..];
+
+                let val = if letter_part.len() == 1 {
+                    let c = letter_part.chars().next().unwrap().to_ascii_uppercase();
+                    (c as u8).saturating_sub(b'A') as usize
+                } else {
+                    let c = letter_part.chars().last().unwrap().to_ascii_uppercase();
+                    (c as u8).saturating_sub(b'A') as usize
+                };
+
+                if val >= side {
+                    return Err(format!(
+                        "Coordinate letter '{}' out of bounds (Max {})",
+                        letter_part,
+                        (b'A' + (side - 1) as u8) as char
+                    ));
+                }
+                coords[d] = val;
+            } else {
+                let end_idx = remaining
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(remaining.len());
+
+                if end_idx == 0 {
+                    return Err(format!(
+                        "Expected Number for Dimension {}, found letter",
+                        d + 1
+                    ));
+                }
+
+                let number_part = &remaining[..end_idx];
+                remaining = &remaining[end_idx..];
+
+                let val: usize = number_part.parse().map_err(|_| "Invalid number")?;
+                if val == 0 || val > side {
+                    return Err(format!(
+                        "Coordinate number '{}' out of bounds (1-{})",
+                        val, side
+                    ));
+                }
+                coords[d] = val - 1;
+            }
         }
-        Coordinate::new(coords)
+
+        Ok(Coordinate::new(coords))
     }
 }
 
@@ -2522,12 +2557,18 @@ impl PlayerStrategy for HumanConsolePlayer {
     fn get_move(&mut self, board: &Board, _player: Player) -> Option<Move> {
         let dim = board.dimension();
         let side = board.side();
-        let total = board.total_cells();
 
         loop {
+            let example = match dim {
+                2 => "e4 e5",
+                3 => "1e4 1e5",
+                4 => "A1e4 A1e5",
+                _ => "coord1 coord2",
+            };
+
             println!(
-                "Enter Move (From Index -> To Index, e.g. '0 10'). Max Index: {}",
-                total - 1
+                "Enter Move (Format: From To). Alternating Letter/Number. Example: '{}'",
+                example
             );
             print!("> ");
             io::stdout().flush().unwrap();
@@ -2537,29 +2578,21 @@ impl PlayerStrategy for HumanConsolePlayer {
 
             let parts: Vec<&str> = input.trim().split_whitespace().collect();
             if parts.len() < 2 {
-                println!("Please provide two indices: From To");
+                println!("Please provide two coordinates: From To");
                 continue;
             }
 
-            let from_res = Self::parse_index(parts[0]);
-            let to_res = Self::parse_index(parts[1]);
+            let from_res = Self::parse_coordinate(parts[0], dim, side);
+            let to_res = Self::parse_coordinate(parts[1], dim, side);
 
             match (from_res, to_res) {
-                (Ok(from_idx), Ok(to_idx)) => {
-                    if from_idx >= total || to_idx >= total {
-                        println!("Index out of bounds!");
-                        continue;
-                    }
-
-                    let from_coord = Self::index_to_coord(from_idx, dim, side);
-                    let to_coord = Self::index_to_coord(to_idx, dim, side);
-
+                (Ok(from_coord), Ok(to_coord)) => {
                     let promotion = if parts.len() > 2 {
-                        match parts[2] {
-                            "Q" | "q" | "4" => Some(crate::domain::models::PieceType::Queen),
-                            "R" | "r" | "3" => Some(crate::domain::models::PieceType::Rook),
-                            "B" | "b" | "2" => Some(crate::domain::models::PieceType::Bishop),
-                            "N" | "n" | "1" => Some(crate::domain::models::PieceType::Knight),
+                        match parts[2].to_lowercase().as_str() {
+                            "q" | "queen" | "4" => Some(crate::domain::models::PieceType::Queen),
+                            "r" | "rook" | "3" => Some(crate::domain::models::PieceType::Rook),
+                            "b" | "bishop" | "2" => Some(crate::domain::models::PieceType::Bishop),
+                            "n" | "knight" | "1" => Some(crate::domain::models::PieceType::Knight),
                             _ => None,
                         }
                     } else {
@@ -2572,7 +2605,8 @@ impl PlayerStrategy for HumanConsolePlayer {
                         promotion,
                     });
                 }
-                _ => println!("Invalid indices."),
+                (Err(e), _) => println!("Invalid 'From': {}", e),
+                (_, Err(e)) => println!("Invalid 'To': {}", e),
             }
         }
     }
@@ -2605,12 +2639,10 @@ impl Canvas {
 
     fn put(&mut self, x: usize, y: usize, s: &str) {
         if s.contains('\x1b') {
-            // ANSI strings are treated as atomic (length 1 visual)
             if x < self.width && y < self.height {
                 self.buffer[y * self.width + x] = s.to_string();
             }
         } else {
-            // Non-ANSI strings are split into chars
             for (i, c) in s.chars().enumerate() {
                 let curr_x = x + i;
                 if curr_x < self.width && y < self.height {
@@ -2636,7 +2668,7 @@ impl fmt::Display for Canvas {
 pub fn render_board(board: &Board) -> String {
     let dim = board.dimension();
     let side = board.side();
-    // Pre-calculate size to allocate canvas
+
     let (w, h, _, _) = calculate_metrics(dim, side, true, true);
     let mut canvas = Canvas::new(w, h);
 
@@ -2645,7 +2677,6 @@ pub fn render_board(board: &Board) -> String {
     canvas.to_string()
 }
 
-// Returns (width, height, content_offset_x, content_offset_y)
 fn calculate_metrics(
     dim: usize,
     side: usize,
@@ -2668,14 +2699,12 @@ fn calculate_metrics(
 
         (body_w + label_w, body_h + label_h, label_w, label_h)
     } else if dim % 2 != 0 {
-        // Odd dimension (Horizontal stack)
-        // Labels (Top): "11", "12"...
         let has_labels = is_top;
         let label_h = if has_labels { 1 } else { 0 };
         let gap = 2;
 
         let (c0_w, c0_h, c0_off_x, c0_off_y) = calculate_metrics(dim - 1, side, is_top, is_left);
-        // We calculate 'other' metrics assuming suppression of headers to get correct spacing
+
         let (other_w, _, _, _) =
             calculate_metrics(dim - 1, side, is_top && false, is_left && false);
 
@@ -2687,10 +2716,8 @@ fn calculate_metrics(
 
         (total_w, total_h, content_off_x, content_off_y)
     } else {
-        // Even dimension (Vertical stack)
-        // Labels (Left): "AA", "AB"...
         let has_labels = is_left;
-        // Adjusted from 5 to 4 to match expected padding "AA  " vs "AA   "
+
         let label_w = if has_labels { 4 } else { 0 };
         let actual_gap = 1;
 
@@ -2742,7 +2769,7 @@ fn draw_recursive(
             if has_row_labels {
                 let row_char = (b'A' + dy as u8) as char;
                 let label_str = format!("{}", row_char);
-                // "A "
+
                 canvas.put(x, y + col_label_h + dy, &label_str);
             }
 
@@ -2789,7 +2816,6 @@ fn draw_recursive(
     let stride = side.pow((current_dim - 1) as u32);
 
     if current_dim % 2 != 0 {
-        // Odd (Horizontal)
         let has_labels = is_top;
         let label_h = if has_labels { 1 } else { 0 };
         let gap = 2;
@@ -2837,8 +2863,7 @@ fn draw_recursive(
 
             if i < side - 1 {
                 let sep_x = current_x + child_w + gap / 2 - 1;
-                // Important: Start drawing the separator from the content offset,
-                // skipping the header row (e.g. "1 2") to match expected output.
+
                 for k in this_off_y..child_h {
                     canvas.put(
                         sep_x,
@@ -2850,7 +2875,6 @@ fn draw_recursive(
             }
         }
     } else {
-        // Even (Vertical)
         let has_labels = is_left;
         let label_w = if has_labels { 4 } else { 0 };
         let gap = 1;
@@ -3332,12 +3356,10 @@ fn test_display_labels_2d() {
     let output = render_board(&board);
     println!("{}", output);
 
-    // Check Column Labels
     assert!(output.contains("1"));
     assert!(output.contains("2"));
     assert!(output.contains("3"));
 
-    // Check Row Labels
     assert!(output.contains("A"));
     assert!(output.contains("B"));
     assert!(output.contains("C"));
@@ -3349,13 +3371,10 @@ fn test_display_labels_3d() {
     let output = render_board(&board);
     println!("{}", output);
 
-    // Check Dimension Labels (Horizontal: 11, 12, 13)
-    // "1" prefix + index 1..3
     assert!(output.contains("11"));
     assert!(output.contains("12"));
     assert!(output.contains("13"));
 
-    // Check internal 2D labels
     assert!(output.contains("A"));
     assert!(output.contains("1"));
 }
@@ -3366,8 +3385,6 @@ fn test_display_labels_4d() {
     let output = render_board(&board);
     println!("{}", output);
 
-    // Check Dimension Labels (Vertical: AA, AB, AC)
-    // "A" prefix + char A..C
     assert!(output.contains("AA"));
     assert!(output.contains("AB"));
     assert!(output.contains("AC"));
@@ -3381,21 +3398,6 @@ mod tests {
 
     #[test]
     fn test_label_rendering_4d() {
-        // Create a 4D board with small side length to keep output manageable
-        // Dim 4, Side 2
-        // Structure:
-        // Vertical (Dim 4): AA, AB
-        //   Horizontal (Dim 3): 11, 12
-        //     Board (Dim 2)
-
-        // We expect:
-        // AA (Top):
-        //   11 (Left): Should have Top Labels (1,2) and Left Labels (A,B)
-        //   12 (Right): Should have Top Labels (1,2) but NO Left Labels
-        // AB (Bottom):
-        //   11 (Left): Should have NO Top Labels but HAVE Left Labels (A,B)
-        //   12 (Right): Should have NO Top Labels and NO Left Labels
-
         let board = Board::new(4, 2);
         let output = render_board(&board);
         let expected = r###"     11    12 

@@ -11,21 +11,76 @@ impl HumanConsolePlayer {
         Self
     }
 
-    fn parse_index(input: &str) -> Result<usize, String> {
-        input
-            .trim()
-            .parse::<usize>()
-            .map_err(|_| "Invalid number".to_string())
-    }
-
-    fn index_to_coord(idx: usize, dim: usize, side: usize) -> Coordinate {
+    fn parse_coordinate(input: &str, dim: usize, side: usize) -> Result<Coordinate, String> {
+        let mut remaining = input.trim();
         let mut coords = vec![0; dim];
-        let mut temp = idx;
-        for i in 0..dim {
-            coords[i] = temp % side;
-            temp /= side;
+
+        for d in (0..dim).rev() {
+            if remaining.is_empty() {
+                return Err(format!(
+                    "Insufficient parts for {}-dimensional coordinate",
+                    dim
+                ));
+            }
+
+            if d % 2 != 0 {
+                let end_idx = remaining
+                    .find(|c: char| !c.is_ascii_alphabetic())
+                    .unwrap_or(remaining.len());
+
+                if end_idx == 0 {
+                    return Err(format!(
+                        "Expected Letter for Dimension {}, found number/symbol",
+                        d + 1
+                    ));
+                }
+
+                let letter_part = &remaining[..end_idx];
+                remaining = &remaining[end_idx..];
+
+                let val = if letter_part.len() == 1 {
+                    let c = letter_part.chars().next().unwrap().to_ascii_uppercase();
+                    (c as u8).saturating_sub(b'A') as usize
+                } else {
+                    let c = letter_part.chars().last().unwrap().to_ascii_uppercase();
+                    (c as u8).saturating_sub(b'A') as usize
+                };
+
+                if val >= side {
+                    return Err(format!(
+                        "Coordinate letter '{}' out of bounds (Max {})",
+                        letter_part,
+                        (b'A' + (side - 1) as u8) as char
+                    ));
+                }
+                coords[d] = val;
+            } else {
+                let end_idx = remaining
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(remaining.len());
+
+                if end_idx == 0 {
+                    return Err(format!(
+                        "Expected Number for Dimension {}, found letter",
+                        d + 1
+                    ));
+                }
+
+                let number_part = &remaining[..end_idx];
+                remaining = &remaining[end_idx..];
+
+                let val: usize = number_part.parse().map_err(|_| "Invalid number")?;
+                if val == 0 || val > side {
+                    return Err(format!(
+                        "Coordinate number '{}' out of bounds (1-{})",
+                        val, side
+                    ));
+                }
+                coords[d] = val - 1;
+            }
         }
-        Coordinate::new(coords)
+
+        Ok(Coordinate::new(coords))
     }
 }
 
@@ -33,12 +88,18 @@ impl PlayerStrategy for HumanConsolePlayer {
     fn get_move(&mut self, board: &Board, _player: Player) -> Option<Move> {
         let dim = board.dimension();
         let side = board.side();
-        let total = board.total_cells();
 
         loop {
+            let example = match dim {
+                2 => "e4 e5",
+                3 => "1e4 1e5",
+                4 => "A1e4 A1e5",
+                _ => "coord1 coord2",
+            };
+
             println!(
-                "Enter Move (From Index -> To Index, e.g. '0 10'). Max Index: {}",
-                total - 1
+                "Enter Move (Format: From To). Alternating Letter/Number. Example: '{}'",
+                example
             );
             print!("> ");
             io::stdout().flush().unwrap();
@@ -48,29 +109,21 @@ impl PlayerStrategy for HumanConsolePlayer {
 
             let parts: Vec<&str> = input.trim().split_whitespace().collect();
             if parts.len() < 2 {
-                println!("Please provide two indices: From To");
+                println!("Please provide two coordinates: From To");
                 continue;
             }
 
-            let from_res = Self::parse_index(parts[0]);
-            let to_res = Self::parse_index(parts[1]);
+            let from_res = Self::parse_coordinate(parts[0], dim, side);
+            let to_res = Self::parse_coordinate(parts[1], dim, side);
 
             match (from_res, to_res) {
-                (Ok(from_idx), Ok(to_idx)) => {
-                    if from_idx >= total || to_idx >= total {
-                        println!("Index out of bounds!");
-                        continue;
-                    }
-
-                    let from_coord = Self::index_to_coord(from_idx, dim, side);
-                    let to_coord = Self::index_to_coord(to_idx, dim, side);
-
+                (Ok(from_coord), Ok(to_coord)) => {
                     let promotion = if parts.len() > 2 {
-                        match parts[2] {
-                            "Q" | "q" | "4" => Some(crate::domain::models::PieceType::Queen),
-                            "R" | "r" | "3" => Some(crate::domain::models::PieceType::Rook),
-                            "B" | "b" | "2" => Some(crate::domain::models::PieceType::Bishop),
-                            "N" | "n" | "1" => Some(crate::domain::models::PieceType::Knight),
+                        match parts[2].to_lowercase().as_str() {
+                            "q" | "queen" | "4" => Some(crate::domain::models::PieceType::Queen),
+                            "r" | "rook" | "3" => Some(crate::domain::models::PieceType::Rook),
+                            "b" | "bishop" | "2" => Some(crate::domain::models::PieceType::Bishop),
+                            "n" | "knight" | "1" => Some(crate::domain::models::PieceType::Knight),
                             _ => None,
                         }
                     } else {
@@ -83,7 +136,8 @@ impl PlayerStrategy for HumanConsolePlayer {
                         promotion,
                     });
                 }
-                _ => println!("Invalid indices."),
+                (Err(e), _) => println!("Invalid 'From': {}", e),
+                (_, Err(e)) => println!("Invalid 'To': {}", e),
             }
         }
     }
