@@ -97,8 +97,25 @@ All pieces capture by landing on a square occupied by an enemy piece, replacing 
 ### Prerequisites
 - Rust (latest stable)
 
-### Running the Game
-Run the game via `cargo`:
+### Running the Web Client
+HyperChess includes a React-based web frontend for 2D and N-Dimensional gameplay.
+
+1.  **Start the API Server:**
+    ```bash
+    cargo run --release --features api
+    ```
+    The server will start at `http://localhost:3123`.
+
+2.  **Start the Frontend:**
+    Open a new terminal window:
+    ```bash
+    cd client
+    npm run dev
+    ```
+    access the game at `http://localhost:5173`.
+
+### Running the CLI Game
+Run the CLI version via `cargo`:
 
 ```bash
 cargo run --release -- [dimension] [player_mode] [depth]
