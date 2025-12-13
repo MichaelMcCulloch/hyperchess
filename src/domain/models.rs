@@ -1,7 +1,8 @@
 use crate::domain::coordinate::Coordinate;
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Player {
     White,
     Black,
@@ -16,7 +17,7 @@ impl Player {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PieceType {
     Pawn,
     Rook,
@@ -26,20 +27,20 @@ pub enum PieceType {
     King,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Piece {
     pub piece_type: PieceType,
     pub owner: Player,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Move {
     pub from: Coordinate,
     pub to: Coordinate,
     pub promotion: Option<PieceType>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GameResult {
     Checkmate(Player),
     Stalemate,

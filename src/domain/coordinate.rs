@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::fmt;
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Coordinate {
     pub values: SmallVec<[usize; 4]>,
 }

@@ -5,7 +5,20 @@ use hyperchess::infrastructure::ai::MinimaxBot;
 use hyperchess::infrastructure::console::HumanConsolePlayer;
 use std::env;
 
+#[cfg(feature = "api")]
+#[tokio::main]
+async fn main() {
+    println!("Starting HyperChess API Server...");
+    hyperchess::api::start_server().await;
+}
+
+#[cfg(not(feature = "api"))]
 fn main() {
+    run_cli();
+}
+
+#[allow(dead_code)]
+fn run_cli() {
     let args: Vec<String> = env::args().collect();
 
     let mut dimension = 2;

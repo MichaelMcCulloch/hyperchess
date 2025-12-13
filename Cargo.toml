@@ -3,6 +3,11 @@ name = "hyperchess"
 version = "0.1.0"
 edition = "2024"
 
+
+[features]
+default = []
+api = ["dep:axum", "dep:tokio", "dep:serde_json", "dep:uuid", "dep:tower-http"]
+
 [dependencies]
 dashmap = "6.1.0"
 rayon = "1.11.0"
@@ -10,4 +15,11 @@ rustc-hash = "2"
 serde = { version = "1.0", features = ["derive"] }
 bincode = "1.3"
 rand = "0.8"
-smallvec = { version = "1.11", features = ["union", "const_generics"] }
+smallvec = { version = "1.11", features = ["union", "const_generics", "serde"] }
+
+# API dependencies
+axum = { version = "0.7", optional = true }
+tokio = { version = "1.0", features = ["full"], optional = true }
+serde_json = { version = "1.0", optional = true }
+uuid = { version = "1.0", features = ["v4", "serde"], optional = true }
+tower-http = { version = "0.5", features = ["cors", "trace"], optional = true }
