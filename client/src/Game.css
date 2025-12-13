@@ -1,0 +1,180 @@
+.game-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+}
+
+.turn-info {
+    font-size: 1.2rem;
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+}
+
+.turn-info span.white {
+    color: #fff;
+    text-shadow: 0 0 5px #fff;
+}
+
+.turn-info span.black {
+    color: #aaa;
+}
+
+.check-badge {
+    background: red;
+    color: white;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: bold;
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.1);
+    }
+
+    100% {
+        transform: scale(1);
+    }
+}
+
+.game-over {
+    background: var(--secondary);
+    color: black;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+.chess-board {
+    display: grid;
+    width: 80vmin;
+    height: 80vmin;
+    max-width: 600px;
+    max-height: 600px;
+    border: 5px solid #333;
+    user-select: none;
+
+    /* Define default variables */
+    --square-light: #eeeed2;
+    --square-dark: #769656;
+    --highlight: rgba(255, 255, 0, 0.5);
+    --capture: rgba(255, 0, 0, 0.4);
+}
+
+
+.square {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    position: relative;
+    box-sizing: border-box;
+    /* Ensure padding/border doesn't break grid */
+}
+
+.square.light {
+    background-color: var(--square-light);
+}
+
+.square.dark {
+    background-color: var(--square-dark);
+}
+
+.square.selected {
+    background-color: var(--highlight) !important;
+}
+
+.square.target::after {
+    content: '';
+    position: absolute;
+    width: 30%;
+    height: 30%;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 50%;
+}
+
+.square.capture {
+    background: var(--capture) !important;
+}
+
+.square.capture::after {
+    background: transparent;
+    border: 4px solid rgba(0, 0, 0, 0.3);
+    width: 80%;
+    height: 80%;
+}
+
+.dot {
+    width: 25%;
+    height: 25%;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 50%;
+}
+
+.piece {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 2;
+    cursor: grab;
+}
+
+.piece img {
+    width: 90%;
+    height: 90%;
+    object-fit: contain;
+}
+
+.piece.white {
+    /* No text shadow needed for IMG, but can add filter if desired */
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+}
+
+.piece.black {
+    /* filter: drop-shadow(0 1px 2px rgba(255,255,255,0.5)); */
+}
+
+
+
+.recursive-grid {
+    display: flex;
+    gap: 1rem;
+    border: 1px solid #444;
+    padding: 10px;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.recursive-grid.row-layout {
+    flex-direction: row;
+    flex-wrap: wrap;
+    /* Allow wrapping if too wide */
+    align-items: flex-start;
+}
+
+.recursive-grid.col-layout {
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.dimension-slice {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.slice-label {
+    font-size: 0.9rem;
+    color: #888;
+    font-weight: bold;
+}
