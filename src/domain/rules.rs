@@ -22,6 +22,52 @@ impl Rules {
         moves
     }
 
+    pub fn generate_loud_moves(board: &mut Board, player: Player) -> MoveList {
+        let mut moves = MoveList::new();
+        let pseudo_legal = Self::generate_pseudo_legal_moves(board, player);
+
+        for mv in pseudo_legal {
+            let is_loud = {
+                let enemy_occupancy = match player {
+                    Player::White => &board.black_occupancy,
+                    Player::Black => &board.white_occupancy,
+                };
+
+                let to_idx = board.coords_to_index(&mv.to.values);
+
+                let is_capture = if let Some(idx) = to_idx {
+                    enemy_occupancy.get_bit(idx)
+                } else {
+                    false
+                };
+
+                let is_ep_capture = if let Some((ep_idx, _)) = board.en_passant_target {
+                    if let Some(idx) = to_idx {
+                        idx == ep_idx
+                            && board.pawns.get_bit(
+                                board.coords_to_index(&mv.from.values).unwrap_or(usize::MAX),
+                            )
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                let is_promotion = mv.promotion.is_some();
+                is_capture || is_promotion || is_ep_capture
+            };
+
+            if is_loud {
+                if !Self::leaves_king_in_check(board, player, &mv) {
+                    moves.push(mv);
+                }
+            }
+        }
+        // Castling is not a loud move
+        moves
+    }
+
     pub fn is_square_attacked(board: &Board, square: &Coordinate, by_player: Player) -> bool {
         let _index = if let Some(idx) = board.coords_to_index(&square.values) {
             idx

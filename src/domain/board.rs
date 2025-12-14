@@ -1,7 +1,7 @@
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{GameResult, Move, Piece, PieceType, Player};
 use crate::domain::zobrist::ZobristKeys;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use std::fmt;
 use std::sync::Arc;
 
@@ -613,6 +613,31 @@ impl Board {
         if let Some((idx, piece)) = info.captured {
             self.place_piece_at_index(idx, piece);
         }
+    }
+
+    pub fn make_null_move(&mut self, player: Player) -> UnmakeInfo {
+        let saved_ep = self.en_passant_target;
+        let saved_castling = self.castling_rights;
+
+        self.history.push(self.hash);
+        self.en_passant_target = None;
+
+        // Switch turn hash
+        self.hash = self.zobrist.get_hash(self, player.opponent());
+
+        UnmakeInfo {
+            captured: None,
+            en_passant_target: saved_ep,
+            castling_rights: saved_castling,
+        }
+    }
+
+    pub fn unmake_null_move(&mut self, info: UnmakeInfo) {
+        if let Some(h) = self.history.pop() {
+            self.hash = h;
+        }
+        self.en_passant_target = info.en_passant_target;
+        self.castling_rights = info.castling_rights;
     }
 
     pub fn get_king_coordinate(&self, player: Player) -> Option<Coordinate> {
