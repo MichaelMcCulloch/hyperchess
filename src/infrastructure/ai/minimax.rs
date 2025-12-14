@@ -10,6 +10,7 @@ use crate::infrastructure::ai::transposition::{Flag, LockFreeTT, PackedMove};
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 const CHECKMATE_SCORE: i32 = 30000;
@@ -29,7 +30,7 @@ pub struct MinimaxBot {
     time_limit: Duration,
     tt: Arc<LockFreeTT>,
     stop_flag: Arc<AtomicBool>,
-    nodes_searched: AtomicUsize,
+    nodes_searched: Arc<AtomicUsize>,
     mcts_config: Option<MctsConfig>,
     num_threads: usize,
 }
@@ -50,7 +51,7 @@ impl MinimaxBot {
             time_limit: Duration::from_millis(time_limit_ms),
             tt: Arc::new(LockFreeTT::new(256)),
             stop_flag: Arc::new(AtomicBool::new(false)),
-            nodes_searched: AtomicUsize::new(0),
+            nodes_searched: Arc::new(AtomicUsize::new(0)),
             mcts_config: None,
             num_threads,
         }
@@ -502,6 +503,50 @@ impl PlayerStrategy for MinimaxBot {
             return None;
         }
 
+        let nodes_counter = self.nodes_searched.clone();
+        let stop_flag = self.stop_flag.clone();
+
+        let search_active = Arc::new(AtomicBool::new(true));
+        let search_active_clone = search_active.clone();
+
+        thread::spawn(move || {
+            let mut last_nodes = 0;
+            let mut last_time = Instant::now();
+
+            while search_active_clone.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(500));
+
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let current_nodes = nodes_counter.load(Ordering::Relaxed);
+                let now = Instant::now();
+                let duration = now.duration_since(last_time).as_secs_f64();
+
+                if duration > 0.0 {
+                    let nps = (current_nodes - last_nodes) as f64 / duration;
+                    let nps_fmt = if nps > 1_000_000.0 {
+                        format!("{:.2} MN/s", nps / 1_000_000.0)
+                    } else {
+                        format!("{:.2} kN/s", nps / 1_000.0)
+                    };
+
+                    print!(
+                        "\rinfo nodes {} nps {} time {:.1}s  ",
+                        current_nodes,
+                        nps_fmt,
+                        start_time.elapsed().as_secs_f32()
+                    );
+                    use std::io::Write;
+                    std::io::stdout().flush().unwrap();
+                }
+
+                last_nodes = current_nodes;
+                last_time = now;
+            }
+        });
+
         let results: Vec<(Move, i32)> = (0..self.num_threads)
             .into_par_iter()
             .map(|thread_idx| {
@@ -613,6 +658,10 @@ impl PlayerStrategy for MinimaxBot {
                 )
             })
             .collect();
+
+        search_active.store(false, Ordering::Relaxed);
+
+        println!();
 
         let best = results.into_iter().max_by_key(|r| r.1);
 
