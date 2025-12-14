@@ -55,6 +55,24 @@ impl AppConfig {
         };
 
         config.merge_env();
+
+        eprintln!("----------------------------------------");
+        eprintln!("HyperChess Configuration:");
+        eprintln!("  Minimax Depth: {}", config.minimax.depth);
+        match &config.mcts {
+            Some(mcts) => eprintln!(
+                "  MCTS: ENABLED (Depth: {}, Iterations: {}, Iter/Thread: {})",
+                mcts.depth, mcts.iterations, mcts.iter_per_thread
+            ),
+            None => eprintln!("  MCTS: DISABLED"),
+        }
+        eprintln!(
+            "  Compute: {:.1} min, {} threads",
+            config.compute.minutes, config.compute.concurrency
+        );
+        eprintln!("  API Port: {}", config.api.port);
+        eprintln!("----------------------------------------");
+
         config
     }
 
@@ -193,5 +211,12 @@ mod tests {
         config.merge_env();
 
         assert_eq!(config.minimax.depth, 4); // Should remain default
+    }
+
+    #[test]
+    fn test_load_prints_config() {
+        // This test primarily ensures that calling load() doesn't panic.
+        // It will try to read Config.toml from the current directory.
+        let _config = AppConfig::load();
     }
 }
