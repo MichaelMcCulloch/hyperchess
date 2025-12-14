@@ -1,4 +1,4 @@
-use crate::domain::board::Board;
+use crate::domain::board::{BitBoard, Board};
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{Move, PieceType, Player};
 use smallvec::SmallVec;
@@ -237,14 +237,14 @@ impl Rules {
                     &Self::get_king_offsets(board.dimension),
                     &mut moves,
                 ),
-                PieceType::Rook => Self::generate_slider_moves(
+                PieceType::Rook => Self::generate_slider_moves_bitwise(
                     board,
                     &coord,
                     player,
                     &Self::get_rook_directions(board.dimension),
                     &mut moves,
                 ),
-                PieceType::Bishop => Self::generate_slider_moves(
+                PieceType::Bishop => Self::generate_slider_moves_bitwise(
                     board,
                     &coord,
                     player,
@@ -252,14 +252,14 @@ impl Rules {
                     &mut moves,
                 ),
                 PieceType::Queen => {
-                    Self::generate_slider_moves(
+                    Self::generate_slider_moves_bitwise(
                         board,
                         &coord,
                         player,
                         &Self::get_rook_directions(board.dimension),
                         &mut moves,
                     );
-                    Self::generate_slider_moves(
+                    Self::generate_slider_moves_bitwise(
                         board,
                         &coord,
                         player,
@@ -559,50 +559,143 @@ impl Rules {
         }
     }
 
-    fn generate_slider_moves(
+    fn generate_slider_moves_bitwise(
         board: &Board,
         origin: &Coordinate,
         player: Player,
         directions: &[Vec<isize>],
         moves: &mut MoveList,
     ) {
-        let own_occupancy = match player {
-            Player::White => &board.white_occupancy,
-            Player::Black => &board.black_occupancy,
-        };
-        let enemy_occupancy = match player.opponent() {
-            Player::White => &board.white_occupancy,
-            Player::Black => &board.black_occupancy,
+        let origin_idx = board.coords_to_index(&origin.values).unwrap();
+
+        let mut generator = board.white_occupancy.zero_like();
+        generator.set_bit(origin_idx);
+
+        let empty = (!board.white_occupancy.clone()) & (!board.black_occupancy.clone());
+
+        let enemy_occupancy = match player {
+            Player::White => &board.black_occupancy,
+            Player::Black => &board.white_occupancy,
         };
 
         for dir in directions {
-            let mut current = origin.values.clone();
-            loop {
-                if let Some(next) = Self::apply_offset(&current, dir, board.side) {
-                    if let Some(idx) = board.coords_to_index(&next) {
-                        if own_occupancy.get_bit(idx) {
-                            break;
-                        }
+            let stride = Self::calculate_stride(board, dir);
 
-                        moves.push(Move {
-                            from: origin.clone(),
-                            to: Coordinate::new(next.clone()),
-                            promotion: None,
-                        });
+            if stride == 0 {
+                continue;
+            }
 
-                        if enemy_occupancy.get_bit(idx) {
-                            break;
-                        }
+            let attacks = Self::kogge_stone_fill(&generator, &empty, stride, board, dir);
 
-                        current = next;
-                    } else {
-                        break;
-                    }
-                } else {
+            let friendly_occupancy = match player {
+                Player::White => &board.white_occupancy,
+                Player::Black => &board.black_occupancy,
+            };
+            let valid_attacks = attacks & (!friendly_occupancy.clone());
+
+            for to_idx in valid_attacks.iter_indices() {
+                let to_coords = board.index_to_coords(to_idx);
+                moves.push(Move {
+                    from: origin.clone(),
+                    to: Coordinate::new(to_coords),
+                    promotion: None,
+                });
+            }
+        }
+    }
+
+    fn kogge_stone_fill(
+        generator: &BitBoard,
+        prop: &BitBoard,
+        stride: isize,
+        board: &Board,
+        dir: &[isize],
+    ) -> BitBoard {
+        let mut g = generator.clone();
+
+        let steps = (board.side as f64).log2().ceil() as usize;
+
+        let mut shift_amt = 1;
+        for _ in 0..steps {
+            let shifted_g = if stride > 0 {
+                Self::safe_shl(&g, (stride * shift_amt) as usize, board, dir, shift_amt)
+            } else {
+                Self::safe_shr(
+                    &g,
+                    (stride.abs() * shift_amt) as usize,
+                    board,
+                    dir,
+                    shift_amt,
+                )
+            };
+
+            g = g | (shifted_g & prop.clone());
+            shift_amt *= 2;
+        }
+
+        let attacks = if stride > 0 {
+            Self::safe_shl(&g, stride as usize, board, dir, 1)
+        } else {
+            Self::safe_shr(&g, stride.abs() as usize, board, dir, 1)
+        };
+
+        attacks
+    }
+
+    fn calculate_stride(board: &Board, dir: &[isize]) -> isize {
+        let mut stride = 0;
+        let mut multiplier = 1;
+        for i in 0..board.dimension {
+            stride += dir[i] * multiplier as isize;
+            multiplier *= board.side;
+        }
+        stride
+    }
+
+    fn safe_shl(
+        b: &BitBoard,
+        amount: usize,
+        board: &Board,
+        dir: &[isize],
+        shift_steps: isize,
+    ) -> BitBoard {
+        let mask = Self::get_shift_mask(board, dir, shift_steps);
+        (b.clone() & mask) << amount
+    }
+
+    fn safe_shr(
+        b: &BitBoard,
+        amount: usize,
+        board: &Board,
+        dir: &[isize],
+        shift_steps: isize,
+    ) -> BitBoard {
+        let mask = Self::get_shift_mask(board, dir, shift_steps);
+        (b.clone() & mask) >> amount
+    }
+
+    fn get_shift_mask(board: &Board, dir: &[isize], steps: isize) -> BitBoard {
+        let mut mask = board.white_occupancy.zero_like();
+        let steps = steps as isize;
+
+        for i in 0..board.total_cells() {
+            let coords = board.index_to_coords(i);
+            let mut valid = true;
+            for (d, &val) in coords.iter().enumerate() {
+                if d >= dir.len() {
+                    break;
+                }
+                let next_val = val as isize + dir[d] * steps;
+                if next_val < 0 || next_val >= board.side as isize {
+                    valid = false;
                     break;
                 }
             }
+            if valid {
+                mask.set_bit(i);
+            }
         }
+        mask
     }
 
     fn generate_pawn_moves(

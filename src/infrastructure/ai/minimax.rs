@@ -6,8 +6,8 @@ use crate::domain::rules::Rules;
 use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::ai::transposition::{Flag, LockFreeTT, PackedMove};
 use rayon::prelude::*;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const CHECKMATE_SCORE: i32 = 30000;
@@ -20,7 +20,6 @@ const VAL_ROOK: i32 = 500;
 const VAL_QUEEN: i32 = 900;
 const VAL_KING: i32 = 20000;
 
-// Max history score cap to prevent overflow
 const MAX_HISTORY: i32 = 2000;
 
 pub struct MinimaxBot {
@@ -31,11 +30,6 @@ pub struct MinimaxBot {
     nodes_searched: AtomicUsize,
     mcts_config: Option<MctsConfig>,
     num_threads: usize,
-    // History Table: [player][from_idx][to_idx]
-    // Mapped linearly: table[player_idx * total_cells^2 + from * total_cells + to]
-    // Since total_cells varies, we use a flattened Vec and dynamic sizing.
-    // We will allocate it per search session or keep it dynamic.
-    // To allow thread sharing without locks, we use thread-local history in get_move.
 }
 
 impl MinimaxBot {
@@ -68,9 +62,6 @@ impl MinimaxBot {
     fn evaluate(&self, board: &Board, player_at_leaf: Option<Player>) -> i32 {
         if let Some(mcts_config) = &self.mcts_config {
             if let Some(player) = player_at_leaf {
-                // If using MCTS hybrid, we do a mini-rollout here.
-                // This is expensive, usually we want a static eval + MCTS only at root.
-                // Keeping original logic for now.
                 let mut mcts =
                     MCTS::new(board, player, None, Some(mcts_config.clone())).with_serial();
                 let win_rate = mcts.run(board, mcts_config.iterations);
@@ -81,10 +72,6 @@ impl MinimaxBot {
                 return if player == Player::Black { -val } else { val };
             }
         }
-
-        // --- Stockfish Trick: Tapered Eval & PST Concept (Simplified) ---
-        // For true N-dim PST, we'd need distance metrics.
-        // For now, let's just keep material, but mobility is the next step.
 
         let mut score = 0;
         for i in board.white_occupancy.iter_indices() {
@@ -130,18 +117,8 @@ impl MinimaxBot {
             return beta;
         }
 
-        // --- Stockfish Trick: Delta Pruning ---
-        // If we are down by a Queen (900), and we capture a Pawn (100), we are still down.
-        // Don't search if: stand_pat + fudge + max_gain < alpha
-        const DELTA_MARGIN: i32 = 200; // Safety margin
-        if stand_pat + VAL_QUEEN + DELTA_MARGIN < alpha {
-            // Even a massive capture might not save us.
-            // Exception: If we are promoting, we might gain a Queen.
-            // To be safe, we only prune if NOT promoting logic is complex here,
-            // so we skip simple delta pruning if the side to move has promotion potential.
-            // For this implementation, we simply allow the search to continue if
-            // stand_pat is extremely low to be safe, or implement full SEE later.
-        }
+        const DELTA_MARGIN: i32 = 200;
+        if stand_pat + VAL_QUEEN + DELTA_MARGIN < alpha {}
 
         if stand_pat > alpha {
             alpha = stand_pat;
@@ -150,10 +127,6 @@ impl MinimaxBot {
         let moves = Rules::generate_loud_moves(board, player);
 
         for mv in moves {
-            // --- Stockfish Trick: SEE (Simplified) ---
-            // If the capture is losing material (e.g. Queen takes defended Pawn), skip it.
-            // (Implementation of full SEE omitted for brevity, but this is the place for it)
-
             let info = match board.apply_move(&mv) {
                 Ok(i) => i,
                 Err(_) => continue,
@@ -173,28 +146,25 @@ impl MinimaxBot {
         alpha
     }
 
-    // Updated sort_moves to use History Heuristic
     fn sort_moves(
         &self,
         board: &Board,
         moves: &mut [Move],
         tt_move: Option<PackedMove>,
         killers: Option<&[Option<Move>; 2]>,
-        history: &[Vec<i32>], // Passed in per-thread
+        history: &[Vec<i32>],
         player: Player,
     ) {
         moves.sort_by_cached_key(|mv| {
             let from_idx = board.coords_to_index(&mv.from.values).unwrap_or(0);
             let to_idx = board.coords_to_index(&mv.to.values).unwrap_or(0);
 
-            // 1. Hash Move (TT) - Massive priority
             if let Some(tm) = tt_move {
                 if tm.from_idx as usize == from_idx && tm.to_idx as usize == to_idx {
                     return -2_000_000_000;
                 }
             }
 
-            // 2. Captures (MVV-LVA)
             let enemy_occupancy = match player {
                 Player::White => &board.black_occupancy,
                 Player::Black => &board.white_occupancy,
@@ -203,11 +173,10 @@ impl MinimaxBot {
             if enemy_occupancy.get_bit(to_idx) {
                 let victim_val = self.get_piece_value(board, to_idx);
                 let attacker_val = self.get_piece_value(board, from_idx);
-                // MVV-LVA: High victim value, Low attacker value is best
+
                 return -(1_000_000 + 10 * victim_val - attacker_val);
             }
 
-            // 3. Promotions
             if let Some(p) = mv.promotion {
                 let val = match p {
                     PieceType::Queen => VAL_QUEEN,
@@ -219,7 +188,6 @@ impl MinimaxBot {
                 return -(800_000 + val);
             }
 
-            // 4. Killers
             if let Some(ks) = killers {
                 if let Some(k) = &ks[0] {
                     if k == mv {
@@ -233,16 +201,11 @@ impl MinimaxBot {
                 }
             }
 
-            // 5. History Heuristic
-            // Map the move to a history index.
-            // We use simple [from] lookup here for demo, but [from][to] is standard.
-            // Since we passed a flattened history vector, we need valid indexing.
-            // Using board.total_cells() method access
             if from_idx < history[0].len() && to_idx < history[0].len() {
                 let hist_idx = from_idx * board.total_cells() + to_idx;
                 if hist_idx < history[0].len() {
                     let score = history[player as usize][hist_idx];
-                    return -score; // Higher history score -> lower sort key (better)
+                    return -score;
                 }
             }
 
@@ -261,7 +224,7 @@ impl MinimaxBot {
         start_time: Instant,
         allow_null: bool,
         killers: &mut [[Option<Move>; 2]],
-        history: &mut [Vec<i32>], // Mutable reference to history table
+        history: &mut [Vec<i32>],
     ) -> i32 {
         if self.nodes_searched.fetch_add(1, Ordering::Relaxed) % TIMEOUT_CHECK_INTERVAL == 0 {
             if start_time.elapsed() > self.time_limit {
@@ -275,7 +238,6 @@ impl MinimaxBot {
 
         let hash = board.hash;
 
-        // --- Transposition Table Lookup ---
         let mut tt_move = None;
         if let Some((tt_score, tt_depth, tt_flag, best_m)) = self.tt.get(hash) {
             tt_move = best_m;
@@ -295,7 +257,6 @@ impl MinimaxBot {
             return self.q_search(board, alpha, beta, player);
         }
 
-        // --- Null Move Pruning ---
         if allow_null && depth >= 3 {
             let static_eval = self.evaluate(board, None);
             if static_eval >= beta {
@@ -334,10 +295,9 @@ impl MinimaxBot {
                     return -CHECKMATE_SCORE + (self.depth - depth) as i32;
                 }
             }
-            return 0; // Stalemate
+            return 0;
         }
 
-        // Futility Pruning Pre-check (Depth 1)
         let mut do_futility = false;
         if depth == 1 {
             let eval = self.evaluate(board, None);
@@ -352,14 +312,12 @@ impl MinimaxBot {
             None
         };
 
-        // Pass history to sort
         self.sort_moves(board, &mut moves, tt_move, my_killers, history, player);
 
         let mut best_score = -i32::MAX;
         let original_alpha = alpha;
         let mut best_move_obj: Option<Move> = None;
 
-        // Cache check status
         let in_check = if let Some(king_pos) = board.get_king_coordinate(player) {
             Rules::is_square_attacked(board, &king_pos, player.opponent())
         } else {
@@ -375,7 +333,6 @@ impl MinimaxBot {
             let is_capture = info.captured.is_some();
             let is_promotion = mv.promotion.is_some();
 
-            // Futility Pruning
             if do_futility && !is_capture && !is_promotion && !in_check {
                 board.unmake_move(mv, info);
                 continue;
@@ -384,7 +341,6 @@ impl MinimaxBot {
             let mut score;
             let mut reduction = 0;
 
-            // Late Move Reduction (LMR)
             if i >= 4 && depth >= 3 && !is_capture && !is_promotion && !in_check {
                 reduction = if depth > 6 { 2 } else { 1 };
                 if depth - 1 < reduction {
@@ -392,7 +348,6 @@ impl MinimaxBot {
                 }
             }
 
-            // PVS Logic
             if i == 0 {
                 score = -self.minimax(
                     board,
@@ -461,9 +416,7 @@ impl MinimaxBot {
             if score > alpha {
                 alpha = score;
 
-                // Update History Heuristic for good quiet moves
                 if !is_capture && !is_promotion {
-                    // Update History
                     let from_idx = board.coords_to_index(&mv.from.values).unwrap_or(0);
                     let to_idx = board.coords_to_index(&mv.to.values).unwrap_or(0);
                     let hist_idx = from_idx * board.total_cells() + to_idx;
@@ -479,8 +432,6 @@ impl MinimaxBot {
             }
 
             if alpha >= beta {
-                // Beta Cutoff
-                // Update Killers
                 if !is_capture && !is_promotion && depth < killers.len() {
                     killers[depth][1] = killers[depth][0].clone();
                     killers[depth][0] = Some(mv.clone());
@@ -549,7 +500,6 @@ impl PlayerStrategy for MinimaxBot {
                 let mut prev_score = 0;
                 let mut killers = (0..=self.depth).map(|_| [None, None]).collect::<Vec<_>>();
 
-                // Initialize Thread-Local History Table [Player][Cells^2]
                 let hist_size = local_board.total_cells() * local_board.total_cells();
                 let mut history = vec![vec![0; hist_size], vec![0; hist_size]];
 

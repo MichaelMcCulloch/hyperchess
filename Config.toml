@@ -4,7 +4,7 @@ depth = 4
 [mcts]
 depth = 50
 iterations = 50
-iter_per_thread = 5
+iter_per_thread = 10
 
 [time]
 minutes = 2
