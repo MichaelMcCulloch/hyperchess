@@ -253,9 +253,7 @@ fn build_api_state(game: &Game) -> ApiGameState {
 }
 
 async fn trigger_bot_move(session_arc: Arc<tokio::sync::RwLock<GameSession>>) {
-    // Loop to handle potential "bot vs bot" or chained moves
     loop {
-        // Short delay to allow UI to catch up or just to not insta-move
         sleep(Duration::from_millis(500)).await;
 
         let session = session_arc.write().await;
@@ -277,43 +275,15 @@ async fn trigger_bot_move(session_arc: Arc<tokio::sync::RwLock<GameSession>>) {
 
         let board_clone = session.game.board().clone();
 
-        // Release lock while thinking
         drop(session);
 
-        // Re-acquire read lock just to get the bot if needed, or we might need to restructure wrappers
-        // Actually we need to hold the bot. But we can't clone the bot easily.
-        // We'll have to hold the write lock if we want to mutate the bot (for caching etc)
-        // usage of `get_move` might mutate the bot.
-        // So we re-acquire write lock.
-        // Wait, we dropped it to not block readers (like UI polling).
-
-        // Optimally:
-        // 1. Get board state.
-        // 2. Drop lock.
-        // 3. Compute move (CPU heavy).
-        // 4. Re-acquire lock.
-        // 5. Apply move.
-        // BUT `get_move` is on the bot struct which is inside the session.
-        // If we want to compute without holding the session lock, we need to extract the bot or sync it.
-        // For now, let's keep it simple: HOLD the lock.
-        // If it blocks the UI for 100ms it's fine. If it blocks for 5s it's bad.
-        // The user said "asynchronously catch the computer move".
-        // If we hold the lock, `get_game` will hang until we release.
-
-        // Current implementation holds the lock inside the loop in the `spawn` block I replaced?
-        // No, the original code held the lock for the duration of `get_move`.
-        // "MinimaxBot" probably has internal state (transposition table).
-        // If we want to allow UI reads, we need to split the bot from the session or use a finer lock.
-        // Given constraints, I will hold the lock but maybe rely on `sleep` allowing some interleaving.
-
         let mut session = session_arc.write().await;
-        // Re-check state after re-acquiring
+
         if session.game.status() != GameResult::InProgress {
             break;
         }
         let current_now = session.game.current_turn();
         if current_now != current {
-            // State changed from under us?
             break;
         }
 
@@ -337,11 +307,9 @@ async fn trigger_bot_move(session_arc: Arc<tokio::sync::RwLock<GameSession>>) {
         if let Some(mv) = best_move_opt {
             let _ = session.game.play_turn(mv);
         } else {
-            // No move found or error?
             break;
         }
 
-        // Check if next player is also a bot
         let next = session.game.current_turn();
         let next_is_bot = match next {
             Player::White => session.white_bot.is_some(),
@@ -351,7 +319,5 @@ async fn trigger_bot_move(session_arc: Arc<tokio::sync::RwLock<GameSession>>) {
         if session.game.status() != GameResult::InProgress || !next_is_bot {
             break;
         }
-
-        // If next is bot, we continue the loop
     }
 }
