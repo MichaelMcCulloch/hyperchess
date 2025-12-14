@@ -57,6 +57,11 @@ impl MinimaxBot {
         }
     }
 
+    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
+        self.num_threads = concurrency;
+        self
+    }
+
     pub fn with_mcts(mut self, config: Option<MctsConfig>) -> Self {
         self.mcts_config = config;
         self

@@ -29,7 +29,7 @@ pub async fn create_game(
 
     let board = Board::new(dimension, side);
     let game = Game::new(board);
-    let time_limit = (state.config.time.minutes * 60.0 * 1000.0) as u64;
+    let time_limit = (state.config.compute.minutes * 60.0 * 1000.0) as u64;
 
     let mut white_bot = None;
     let mut black_bot = None;

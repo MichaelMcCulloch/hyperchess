@@ -27,7 +27,7 @@ fn run_cli() {
     let side = 8;
     let mut player_white_type = "h";
     let mut player_black_type = "c";
-    let time_limit = (config.time.minutes * 60.0 * 1000.0) as u64;
+    let time_limit = (config.compute.minutes * 60.0 * 1000.0) as u64;
 
     if args.len() > 1 {
         if let Ok(d) = args[1].parse::<usize>() {
@@ -51,7 +51,8 @@ fn run_cli() {
         "h" => Box::new(HumanConsolePlayer::new()),
         "c" => Box::new(
             MinimaxBot::new(&config.minimax, time_limit, dimension, side)
-                .with_mcts(config.mcts.clone()),
+                .with_mcts(config.mcts.clone())
+                .with_concurrency(config.compute.concurrency),
         ),
         _ => Box::new(HumanConsolePlayer::new()),
     };
@@ -60,11 +61,13 @@ fn run_cli() {
         "h" => Box::new(HumanConsolePlayer::new()),
         "c" => Box::new(
             MinimaxBot::new(&config.minimax, time_limit, dimension, side)
-                .with_mcts(config.mcts.clone()),
+                .with_mcts(config.mcts.clone())
+                .with_concurrency(config.compute.concurrency),
         ),
         _ => Box::new(
             MinimaxBot::new(&config.minimax, time_limit, dimension, side)
-                .with_mcts(config.mcts.clone()),
+                .with_mcts(config.mcts.clone())
+                .with_concurrency(config.compute.concurrency),
         ),
     };
 

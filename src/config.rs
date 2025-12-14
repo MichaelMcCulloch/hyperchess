@@ -6,7 +6,8 @@ use std::path::Path;
 pub struct AppConfig {
     pub minimax: MinimaxConfig,
     pub mcts: Option<MctsConfig>,
-    pub time: TimeConfig,
+    pub compute: ComputeConfig,
+    pub api: ApiConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -22,8 +23,14 @@ pub struct MctsConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct TimeConfig {
+pub struct ComputeConfig {
     pub minutes: f64,
+    pub concurrency: usize,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ApiConfig {
+    pub port: u16,
 }
 
 impl AppConfig {
@@ -48,7 +55,11 @@ impl Default for AppConfig {
                 iterations: 50,
                 iter_per_thread: 5.0,
             }),
-            time: TimeConfig { minutes: 2.0 },
+            compute: ComputeConfig {
+                minutes: 2.0,
+                concurrency: 2,
+            },
+            api: ApiConfig { port: 3123 },
         }
     }
 }
