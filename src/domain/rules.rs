@@ -37,7 +37,6 @@ impl Rules {
                 return 0;
             }
             PieceType::Knight => {
-                // Use Cache
                 return Self::count_leaper_moves(
                     board,
                     &coord,
@@ -46,11 +45,9 @@ impl Rules {
                 );
             }
             PieceType::King => {
-                // Use Cache
                 return Self::count_leaper_moves(board, &coord, player, &board.cache.king_offsets);
             }
             PieceType::Rook => {
-                // Use Cache
                 return Self::count_slider_moves(
                     board,
                     &coord,
@@ -59,7 +56,6 @@ impl Rules {
                 );
             }
             PieceType::Bishop => {
-                // Use Cache
                 return Self::count_slider_moves(
                     board,
                     &coord,
@@ -68,7 +64,6 @@ impl Rules {
                 );
             }
             PieceType::Queen => {
-                // Use Cache
                 count +=
                     Self::count_slider_moves(board, &coord, player, &board.cache.rook_directions);
                 count +=
@@ -117,7 +112,7 @@ impl Rules {
             Player::White => &board.white_occupancy,
             Player::Black => &board.black_occupancy,
         };
-        // (Optimized empty mask generation - assumes BitBoard logic matches)
+
         let empty = match all_occupancy {
             BitBoard::Small(b) => {
                 let mask =
@@ -146,15 +141,35 @@ impl Rules {
             }
         };
 
+        let mut g = generator.zero_like();
+        let mut p = generator.zero_like();
+        let mut shifted_g = generator.zero_like();
+        let mut shifted_p = generator.zero_like();
+        let mut temp = generator.zero_like();
+
         for dir in directions {
             let stride = Self::calculate_stride(board, dir);
             if stride == 0 {
                 continue;
             }
-            let attacks = Self::kogge_stone_fill(&generator, &empty, stride, board, dir);
-            let valid_moves = &attacks & &(!own_occupancy);
-            count += valid_moves.count_ones() as i32;
-            if valid_moves.get_bit(origin_idx) {
+
+            g.copy_from(&generator);
+            p.copy_from(&empty);
+
+            Self::kogge_stone_fill_inplace(
+                &mut g,
+                &mut p,
+                stride,
+                board,
+                dir,
+                &mut shifted_g,
+                &mut shifted_p,
+                &mut temp,
+            );
+
+            g &= &(!own_occupancy);
+            count += g.count_ones() as i32;
+            if g.get_bit(origin_idx) {
                 count -= 1;
             }
         }
@@ -203,13 +218,11 @@ impl Rules {
     }
 
     pub fn is_square_attacked(board: &Board, square: &Coordinate, by_player: Player) -> bool {
-        // --- OPTIMIZED to use CACHE ---
         let enemy_occupancy = match by_player {
             Player::White => &board.white_occupancy,
             Player::Black => &board.black_occupancy,
         };
 
-        // 1. Knight Attacks (from cache)
         for offset in &board.cache.knight_offsets {
             if let Some(target_coord) = Self::apply_offset(&square.values, offset, board.side) {
                 if let Some(target_idx) = board.coords_to_index(&target_coord) {
@@ -220,7 +233,6 @@ impl Rules {
             }
         }
 
-        // 2. King Attacks (from cache)
         for offset in &board.cache.king_offsets {
             if let Some(target_coord) = Self::apply_offset(&square.values, offset, board.side) {
                 if let Some(target_idx) = board.coords_to_index(&target_coord) {
@@ -231,7 +243,6 @@ impl Rules {
             }
         }
 
-        // 3. Rook/Queen Rays (from cache)
         for dir in &board.cache.rook_directions {
             if Self::scan_ray_for_threat(
                 board,
@@ -244,7 +255,6 @@ impl Rules {
             }
         }
 
-        // 4. Bishop/Queen Rays (from cache)
         for dir in &board.cache.bishop_directions {
             if Self::scan_ray_for_threat(
                 board,
@@ -257,9 +267,6 @@ impl Rules {
             }
         }
 
-        // 5. Pawn Attacks (from cache)
-        // Note: We check if a pawn *at target* can capture *square*.
-        // This is equivalent to "pawn capture offsets relative to target".
         let pawn_attack_offsets = match by_player {
             Player::White => &board.cache.white_pawn_capture_offsets,
             Player::Black => &board.cache.black_pawn_capture_offsets,
@@ -290,10 +297,8 @@ impl Rules {
             Player::White => &board.white_occupancy,
             Player::Black => &board.black_occupancy,
         };
-        let all_occupancy = board
-            .white_occupancy
-            .clone()
-            .or_with(&board.black_occupancy);
+
+        let all_occupancy = &board.white_occupancy | &board.black_occupancy;
 
         loop {
             if let Some(next) = Self::apply_offset(&current, direction, board.side) {
@@ -334,6 +339,13 @@ impl Rules {
             Player::Black => &board.black_occupancy,
         };
 
+        let mut generator = board.white_occupancy.zero_like();
+        let mut g = board.white_occupancy.zero_like();
+        let mut p = board.white_occupancy.zero_like();
+        let mut shifted_g = board.white_occupancy.zero_like();
+        let mut shifted_p = board.white_occupancy.zero_like();
+        let mut temp = board.white_occupancy.zero_like();
+
         for i in occupancy.iter_indices() {
             let coord_vals = board.index_to_coords(i);
             let coord = Coordinate::new(coord_vals.clone());
@@ -354,7 +366,6 @@ impl Rules {
                 continue;
             };
 
-            // --- OPTIMIZED to use CACHE ---
             match piece_type {
                 PieceType::Pawn => Self::generate_pawn_moves(board, &coord, player, &mut moves),
                 PieceType::Knight => Self::generate_leaper_moves(
@@ -373,32 +384,60 @@ impl Rules {
                 ),
                 PieceType::Rook => Self::generate_slider_moves_bitwise(
                     board,
+                    i,
                     &coord,
                     player,
                     &board.cache.rook_directions,
                     &mut moves,
+                    &mut generator,
+                    &mut g,
+                    &mut p,
+                    &mut shifted_g,
+                    &mut shifted_p,
+                    &mut temp,
                 ),
                 PieceType::Bishop => Self::generate_slider_moves_bitwise(
                     board,
+                    i,
                     &coord,
                     player,
                     &board.cache.bishop_directions,
                     &mut moves,
+                    &mut generator,
+                    &mut g,
+                    &mut p,
+                    &mut shifted_g,
+                    &mut shifted_p,
+                    &mut temp,
                 ),
                 PieceType::Queen => {
                     Self::generate_slider_moves_bitwise(
                         board,
+                        i,
                         &coord,
                         player,
                         &board.cache.rook_directions,
                         &mut moves,
+                        &mut generator,
+                        &mut g,
+                        &mut p,
+                        &mut shifted_g,
+                        &mut shifted_p,
+                        &mut temp,
                     );
                     Self::generate_slider_moves_bitwise(
                         board,
+                        i,
                         &coord,
                         player,
                         &board.cache.bishop_directions,
                         &mut moves,
+                        &mut generator,
+                        &mut g,
+                        &mut p,
+                        &mut shifted_g,
+                        &mut shifted_p,
+                        &mut temp,
                     );
                 }
             }
@@ -406,19 +445,34 @@ impl Rules {
         moves
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn generate_slider_moves_bitwise(
         board: &Board,
-        origin: &Coordinate,
+        origin_idx: usize,
+        origin_coord: &Coordinate,
         player: Player,
         directions: &[Vec<isize>],
         moves: &mut MoveList,
-    ) {
-        let origin_idx = board.coords_to_index(&origin.values).unwrap();
-        let mut generator = board.white_occupancy.zero_like();
-        generator.set_bit(origin_idx);
-        let all_occupancy = &board.white_occupancy | &board.black_occupancy;
 
-        // (Same bitmask logic as count_slider_moves)
+        generator: &mut BitBoard,
+        g: &mut BitBoard,
+        p: &mut BitBoard,
+        shifted_g: &mut BitBoard,
+        shifted_p: &mut BitBoard,
+        temp: &mut BitBoard,
+    ) {
+        match generator {
+            BitBoard::Small(b) => *b = 0,
+            BitBoard::Medium(b) => *b = 0,
+            BitBoard::Large { data } => {
+                for x in data.iter_mut() {
+                    *x = 0;
+                }
+            }
+        }
+        generator.set_bit(origin_idx);
+
+        let all_occupancy = &board.white_occupancy | &board.black_occupancy;
         let empty = match all_occupancy {
             BitBoard::Small(b) => {
                 let mask =
@@ -457,16 +511,23 @@ impl Rules {
             if stride == 0 {
                 continue;
             }
-            let attacks = Self::kogge_stone_fill(&generator, &empty, stride, board, dir);
-            let valid_moves_bb = &attacks & &(!own_occupancy);
 
-            for to_idx in valid_moves_bb.iter_indices() {
+            g.copy_from(generator);
+            p.copy_from(&empty);
+
+            Self::kogge_stone_fill_inplace(g, p, stride, board, dir, shifted_g, shifted_p, temp);
+
+            for to_idx in g.iter_indices() {
                 if to_idx == origin_idx {
                     continue;
                 }
+                if own_occupancy.get_bit(to_idx) {
+                    continue;
+                }
+
                 let to_coords = board.index_to_coords(to_idx);
                 moves.push(Move {
-                    from: origin.clone(),
+                    from: origin_coord.clone(),
                     to: Coordinate::new(to_coords),
                     promotion: None,
                 });
@@ -474,64 +535,54 @@ impl Rules {
         }
     }
 
-    fn kogge_stone_fill(
-        generator: &BitBoard,
-        prop: &BitBoard,
+    #[allow(clippy::too_many_arguments)]
+    fn kogge_stone_fill_inplace(
+        g: &mut BitBoard,
+        p: &mut BitBoard,
         stride: isize,
         board: &Board,
         direction: &[isize],
-    ) -> BitBoard {
-        let mut g = generator.clone();
-        let mut p = prop.clone();
 
-        // Reusable buffers
-        let mut shifted_g = generator.zero_like();
-        let mut shifted_p = generator.zero_like();
-        let mut temp_g = generator.zero_like();
-
+        shifted_g: &mut BitBoard,
+        shifted_p: &mut BitBoard,
+        temp: &mut BitBoard,
+    ) {
         let mut shift_amt = 1;
 
+        let dir_vec = direction.to_vec();
+
         while shift_amt < board.side {
-            // NOTE: validity_masks is in cache, accessible via board
             let mask = if let Some(m) = board
                 .cache
                 .validity_masks
-                .get(&(direction.to_vec(), shift_amt))
+                .get(&(dir_vec.clone(), shift_amt))
             {
                 m
             } else {
-                panic!(
-                    "Validity mask not found for direction {:?} and step {}",
-                    direction, shift_amt
-                );
+                panic!("Validity mask missing");
             };
 
-            // 1. Calculate shifted_g = (g & mask) << shift
-            // reuse shifted_g buffer
-            shifted_g.clone_from(&g);
-            shifted_g &= mask;
+            shifted_g.copy_from(g);
+            *shifted_g &= mask;
             if stride > 0 {
-                shifted_g = &shifted_g << (stride.abs() as usize * shift_amt);
+                *shifted_g <<= stride.abs() as usize * shift_amt;
             } else {
-                shifted_g = &shifted_g >> (stride.abs() as usize * shift_amt);
+                *shifted_g >>= stride.abs() as usize * shift_amt;
             }
 
-            // 2. Calculate shifted_p = (p & mask) << shift
-            shifted_p.clone_from(&p);
-            shifted_p &= mask;
+            shifted_p.copy_from(p);
+            *shifted_p &= mask;
             if stride > 0 {
-                shifted_p = &shifted_p << (stride.abs() as usize * shift_amt);
+                *shifted_p <<= stride.abs() as usize * shift_amt;
             } else {
-                shifted_p = &shifted_p >> (stride.abs() as usize * shift_amt);
+                *shifted_p >>= stride.abs() as usize * shift_amt;
             }
 
-            // 3. g = g | (shifted_g & p)
-            temp_g.clone_from(&shifted_g);
-            temp_g &= &p;
-            g |= &temp_g;
+            temp.copy_from(shifted_g);
+            *temp &= p;
+            *g |= temp;
 
-            // 4. p = p & shifted_p
-            p &= &shifted_p;
+            *p &= shifted_p;
 
             shift_amt *= 2;
         }
@@ -539,14 +590,14 @@ impl Rules {
         let mask = board
             .cache
             .validity_masks
-            .get(&(direction.to_vec(), 1))
+            .get(&(dir_vec, 1))
             .expect("Validity mask for step 1 missing");
 
-        g &= mask;
+        *g &= mask;
         if stride > 0 {
-            &g << stride.abs() as usize
+            *g <<= stride.abs() as usize;
         } else {
-            &g >> stride.abs() as usize
+            *g >>= stride.abs() as usize;
         }
     }
 
@@ -595,10 +646,7 @@ impl Rules {
             return;
         }
 
-        let all_occupancy = board
-            .white_occupancy
-            .clone()
-            .or_with(&board.black_occupancy);
+        let all_occupancy = &board.white_occupancy | &board.black_occupancy;
         let ks_mask = match player {
             Player::White => 0x1,
             Player::Black => 0x4,
@@ -678,9 +726,6 @@ impl Rules {
         }
     }
 
-    // --- RENAMED GENERATORS (Used by BoardCache::new) ---
-    // These functions simply perform the calculations. They are called once during initialization.
-
     pub fn get_rook_directions_calc(dimension: usize) -> Vec<Vec<isize>> {
         let mut dirs = Vec::new();
         for i in 0..dimension {
@@ -692,7 +737,6 @@ impl Rules {
         }
         dirs
     }
-
     pub fn get_bishop_directions_calc(dimension: usize) -> Vec<Vec<isize>> {
         let mut dirs = Vec::new();
         let num_dirs = 3_usize.pow(dimension as u32);
@@ -722,7 +766,6 @@ impl Rules {
         }
         dirs
     }
-
     pub fn get_knight_offsets_calc(dimension: usize) -> Vec<Vec<isize>> {
         let mut offsets = Vec::new();
         for i in 0..dimension {
@@ -742,7 +785,6 @@ impl Rules {
         }
         offsets
     }
-
     pub fn get_king_offsets_calc(dimension: usize) -> Vec<Vec<isize>> {
         let mut offsets = Vec::new();
         let num_dirs = 3_usize.pow(dimension as u32);
@@ -769,7 +811,6 @@ impl Rules {
         }
         offsets
     }
-
     pub fn get_pawn_capture_offsets_calc(dimension: usize, attacker: Player) -> Vec<Vec<isize>> {
         let direction = match attacker {
             Player::White => -1,
@@ -786,9 +827,6 @@ impl Rules {
         }
         offsets
     }
-
-    // --- UTILITIES ---
-
     pub fn apply_offset(
         coords: &[usize],
         offset: &[isize],
@@ -804,7 +842,6 @@ impl Rules {
         }
         Some(new_coords)
     }
-
     fn generate_leaper_moves(
         board: &Board,
         origin: &Coordinate,
@@ -816,7 +853,6 @@ impl Rules {
             Player::White => &board.white_occupancy,
             Player::Black => &board.black_occupancy,
         };
-
         for offset in offsets {
             if let Some(target_coords) = Self::apply_offset(&origin.values, offset, board.side) {
                 if let Some(target_idx) = board.coords_to_index(&target_coords) {
@@ -831,33 +867,27 @@ impl Rules {
             }
         }
     }
-
     fn generate_pawn_moves(
         board: &Board,
         origin: &Coordinate,
         player: Player,
         moves: &mut MoveList,
     ) {
-        let all_occupancy = board
-            .white_occupancy
-            .clone()
-            .or_with(&board.black_occupancy);
+        let all_occupancy = &board.white_occupancy | &board.black_occupancy;
         let enemy_occupancy = match player.opponent() {
             Player::White => &board.white_occupancy,
             Player::Black => &board.black_occupancy,
         };
-
         for movement_axis in 0..board.dimension {
             if movement_axis == 1 {
                 continue;
-            } // Files are axis 1
+            }
             let forward_dir = match player {
                 Player::White => 1,
                 Player::Black => -1,
             };
             let mut forward_step = vec![0; board.dimension];
             forward_step[movement_axis] = forward_dir;
-
             if let Some(target) = Self::apply_offset(&origin.values, &forward_step, board.side) {
                 if let Some(idx) = board.coords_to_index(&target) {
                     if !all_occupancy.get_bit(idx) {
@@ -882,7 +912,6 @@ impl Rules {
                     }
                 }
             }
-
             for capture_axis in 0..board.dimension {
                 if capture_axis == movement_axis {
                     continue;
@@ -910,7 +939,6 @@ impl Rules {
             }
         }
     }
-
     fn add_pawn_move(
         from: &Coordinate,
         to_vals: &[usize],
@@ -928,7 +956,6 @@ impl Rules {
                 }
             }
         });
-
         let to = Coordinate::new(to_vals.to_vec());
         if is_promotion {
             for t in [

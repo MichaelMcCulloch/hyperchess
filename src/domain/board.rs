@@ -1,10 +1,10 @@
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{GameResult, Move, Piece, PieceType, Player};
 use crate::domain::zobrist::ZobristKeys;
-use smallvec::{SmallVec, smallvec};
+use smallvec::{smallvec, SmallVec};
 use std::collections::HashMap;
 use std::fmt;
-use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not, Shl, Shr};
+use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not, Shl, ShlAssign, Shr, ShrAssign};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -12,12 +12,11 @@ pub struct BoardCache {
     pub index_to_coords: Vec<SmallVec<[usize; 4]>>,
     pub validity_masks: HashMap<(Vec<isize>, usize), BitBoard>,
 
-    // Cached Move Offsets for Arbitrary Dimensions
     pub knight_offsets: Vec<Vec<isize>>,
     pub king_offsets: Vec<Vec<isize>>,
     pub rook_directions: Vec<Vec<isize>>,
     pub bishop_directions: Vec<Vec<isize>>,
-    // Pre-computed pawn capture offsets relative to the *target* (for is_square_attacked)
+
     pub white_pawn_capture_offsets: Vec<Vec<isize>>,
     pub black_pawn_capture_offsets: Vec<Vec<isize>>,
 }
@@ -40,8 +39,6 @@ impl BoardCache {
 
         let mut validity_masks = HashMap::new();
 
-        // Use the calculation helpers from Rules to generate cached geometry
-        // This ensures strictly identical behavior to the previous implementation
         let rook_directions = crate::domain::rules::Rules::get_rook_directions_calc(dimension);
         let bishop_directions = crate::domain::rules::Rules::get_bishop_directions_calc(dimension);
         let knight_offsets = crate::domain::rules::Rules::get_knight_offsets_calc(dimension);
@@ -52,8 +49,6 @@ impl BoardCache {
         let black_pawn_capture_offsets =
             crate::domain::rules::Rules::get_pawn_capture_offsets_calc(dimension, Player::Black);
 
-        // Precompute validity masks for sliding pieces (unchanged logic)
-        // We combine Rook and Bishop directions to cover all sliding axes
         let all_dirs = rook_directions.iter().chain(bishop_directions.iter());
 
         for dir in all_dirs {
@@ -101,26 +96,48 @@ pub enum BitBoard {
     Large { data: SmallVec<[u64; 8]> },
 }
 
+impl BitBoard {
+    pub fn copy_from(&mut self, other: &Self) {
+        match (self, other) {
+            (BitBoard::Small(a), BitBoard::Small(b)) => *a = *b,
+            (BitBoard::Medium(a), BitBoard::Medium(b)) => *a = *b,
+            (BitBoard::Large { data: a }, BitBoard::Large { data: b }) => {
+                if a.len() != b.len() {
+                    a.resize(b.len(), 0);
+                }
+                a.copy_from_slice(b);
+            }
+
+            (this, that) => *this = that.clone(),
+        }
+    }
+}
+
 impl BitAndAssign<&BitBoard> for BitBoard {
     fn bitand_assign(&mut self, rhs: &BitBoard) {
         match (&mut *self, rhs) {
             (BitBoard::Small(a), BitBoard::Small(b)) => {
                 *a &= b;
-                return;
             }
             (BitBoard::Medium(a), BitBoard::Medium(b)) => {
                 *a &= b;
-                return;
             }
             (BitBoard::Large { data: a }, BitBoard::Large { data: b }) => {
-                for (l, r) in a.iter_mut().zip(b.iter()) {
+                let len = std::cmp::min(a.len(), b.len());
+                for (l, r) in a.iter_mut().zip(b.iter()).take(len) {
                     *l &= *r;
                 }
-                return;
+
+                if a.len() > len {
+                    for l in a.iter_mut().skip(len) {
+                        *l = 0;
+                    }
+                }
             }
-            _ => {}
+            _ => {
+                *self = &*self & rhs;
+            }
         }
-        *self = &*self & rhs;
     }
 }
 
@@ -129,21 +146,104 @@ impl BitOrAssign<&BitBoard> for BitBoard {
         match (&mut *self, rhs) {
             (BitBoard::Small(a), BitBoard::Small(b)) => {
                 *a |= b;
-                return;
             }
             (BitBoard::Medium(a), BitBoard::Medium(b)) => {
                 *a |= b;
-                return;
             }
             (BitBoard::Large { data: a }, BitBoard::Large { data: b }) => {
-                for (l, r) in a.iter_mut().zip(b.iter()) {
+                let len = std::cmp::min(a.len(), b.len());
+                for (l, r) in a.iter_mut().zip(b.iter()).take(len) {
                     *l |= *r;
                 }
-                return;
+
+                if b.len() > a.len() {
+                    a.extend_from_slice(&b[len..]);
+                }
             }
-            _ => {}
+            _ => {
+                *self = &*self | rhs;
+            }
         }
-        *self = &*self | rhs;
+    }
+}
+
+impl ShlAssign<usize> for BitBoard {
+    fn shl_assign(&mut self, shift: usize) {
+        if shift == 0 {
+            return;
+        }
+        match self {
+            BitBoard::Small(b) => *b = b.wrapping_shl(shift as u32),
+            BitBoard::Medium(b) => *b = b.wrapping_shl(shift as u32),
+            BitBoard::Large { data } => {
+                let chunks_shift = shift / 64;
+                let bits_shift = shift % 64;
+
+                if chunks_shift > 0 {
+                    if chunks_shift >= data.len() {
+                        for x in data.iter_mut() {
+                            *x = 0;
+                        }
+                    } else {
+                        for i in (chunks_shift..data.len()).rev() {
+                            data[i] = data[i - chunks_shift];
+                        }
+
+                        for i in 0..chunks_shift {
+                            data[i] = 0;
+                        }
+                    }
+                }
+
+                if bits_shift > 0 {
+                    let inv_shift = 64 - bits_shift;
+                    for i in (0..data.len()).rev() {
+                        let prev = if i > 0 { data[i - 1] } else { 0 };
+                        data[i] = (data[i] << bits_shift) | (prev >> inv_shift);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl ShrAssign<usize> for BitBoard {
+    fn shr_assign(&mut self, shift: usize) {
+        if shift == 0 {
+            return;
+        }
+        match self {
+            BitBoard::Small(b) => *b = b.wrapping_shr(shift as u32),
+            BitBoard::Medium(b) => *b = b.wrapping_shr(shift as u32),
+            BitBoard::Large { data } => {
+                let chunks_shift = shift / 64;
+                let bits_shift = shift % 64;
+
+                if chunks_shift > 0 {
+                    if chunks_shift >= data.len() {
+                        for x in data.iter_mut() {
+                            *x = 0;
+                        }
+                    } else {
+                        for i in 0..(data.len() - chunks_shift) {
+                            data[i] = data[i + chunks_shift];
+                        }
+
+                        for i in (data.len() - chunks_shift)..data.len() {
+                            data[i] = 0;
+                        }
+                    }
+                }
+
+                if bits_shift > 0 {
+                    let inv_shift = 64 - bits_shift;
+                    for i in 0..data.len() {
+                        let next = if i + 1 < data.len() { data[i + 1] } else { 0 };
+                        data[i] = (data[i] >> bits_shift) | (next << inv_shift);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -213,53 +313,19 @@ impl<'a> Not for &'a BitBoard {
 
 impl<'a> Shl<usize> for &'a BitBoard {
     type Output = BitBoard;
-
     fn shl(self, shift: usize) -> BitBoard {
-        match self {
-            BitBoard::Small(b) => BitBoard::Small(b.wrapping_shl(shift as u32)),
-            BitBoard::Medium(b) => BitBoard::Medium(b.wrapping_shl(shift as u32)),
-            BitBoard::Large { data } => {
-                let chunks_shift = shift / 64;
-                let bits_shift = shift % 64;
-                let mut new_data = SmallVec::from_vec(vec![0; data.len()]);
-
-                for i in 0..data.len() {
-                    if i + chunks_shift < data.len() {
-                        new_data[i + chunks_shift] |= data[i] << bits_shift;
-                    }
-                    if bits_shift > 0 && i + chunks_shift + 1 < data.len() {
-                        new_data[i + chunks_shift + 1] |= data[i] >> (64 - bits_shift);
-                    }
-                }
-                BitBoard::Large { data: new_data }
-            }
-        }
+        let mut res = self.clone();
+        res <<= shift;
+        res
     }
 }
 
 impl<'a> Shr<usize> for &'a BitBoard {
     type Output = BitBoard;
-
     fn shr(self, shift: usize) -> BitBoard {
-        match self {
-            BitBoard::Small(b) => BitBoard::Small(b.wrapping_shr(shift as u32)),
-            BitBoard::Medium(b) => BitBoard::Medium(b.wrapping_shr(shift as u32)),
-            BitBoard::Large { data } => {
-                let chunks_shift = shift / 64;
-                let bits_shift = shift % 64;
-                let mut new_data = SmallVec::from_vec(vec![0; data.len()]);
-
-                for i in 0..data.len() {
-                    if i >= chunks_shift {
-                        new_data[i - chunks_shift] |= data[i] >> bits_shift;
-                        if bits_shift > 0 && i > chunks_shift {
-                            new_data[i - chunks_shift - 1] |= data[i] << (64 - bits_shift);
-                        }
-                    }
-                }
-                BitBoard::Large { data: new_data }
-            }
-        }
+        let mut res = self.clone();
+        res >>= shift;
+        res
     }
 }
 
@@ -639,32 +705,7 @@ impl Board {
 
     pub fn get_piece(&self, coord: &Coordinate) -> Option<Piece> {
         let index = self.coords_to_index(&coord.values)?;
-
-        let owner = if self.white_occupancy.get_bit(index) {
-            Some(Player::White)
-        } else if self.black_occupancy.get_bit(index) {
-            Some(Player::Black)
-        } else {
-            None
-        }?;
-
-        let piece_type = if self.pawns.get_bit(index) {
-            PieceType::Pawn
-        } else if self.rooks.get_bit(index) {
-            PieceType::Rook
-        } else if self.knights.get_bit(index) {
-            PieceType::Knight
-        } else if self.bishops.get_bit(index) {
-            PieceType::Bishop
-        } else if self.queens.get_bit(index) {
-            PieceType::Queen
-        } else if self.kings.get_bit(index) {
-            PieceType::King
-        } else {
-            return None;
-        };
-
-        Some(Piece { piece_type, owner })
+        self.get_piece_at_index(index)
     }
 
     pub fn get_piece_at_index(&self, index: usize) -> Option<Piece> {
@@ -727,7 +768,6 @@ impl Board {
 
         if let Some(target_p) = self.get_piece_at_index(to_idx) {
             captured = Some((to_idx, target_p));
-
             self.hash_xor_piece(to_idx, target_p);
         }
 
@@ -736,7 +776,6 @@ impl Board {
                 if to_idx == target {
                     if let Some(victim_p) = self.get_piece_at_index(victim) {
                         captured = Some((victim, victim_p));
-
                         self.hash_xor_piece(victim, victim_p);
                     }
                     self.remove_piece_at_index(victim);
@@ -770,7 +809,6 @@ impl Board {
                     target_vals[axis] = (target_vals[axis] as isize + dir) as usize;
                     if let Some(target_idx) = self.coords_to_index(&target_vals) {
                         self.en_passant_target = Some((target_idx, to_idx));
-
                         if target_idx < self.zobrist.en_passant_keys.len() {
                             self.hash ^= self.zobrist.en_passant_keys[target_idx];
                         }
@@ -1017,7 +1055,6 @@ impl Board {
             Player::Black => &self.black_occupancy,
         };
 
-        // 1. Pawn Attacks (Cached)
         let pawn_attacker_offsets = match attacker.opponent() {
             Player::White => &self.cache.white_pawn_capture_offsets,
             Player::Black => &self.cache.black_pawn_capture_offsets,
@@ -1035,7 +1072,6 @@ impl Board {
             }
         }
 
-        // 2. Knight Attacks (Cached)
         for offset in &self.cache.knight_offsets {
             if let Some(src) =
                 crate::domain::rules::Rules::apply_offset(&target_sq.values, &offset, self.side)
@@ -1048,7 +1084,6 @@ impl Board {
             }
         }
 
-        // 3. Bishop Attacks (Cached Directions)
         for dir in &self.cache.bishop_directions {
             if crate::domain::rules::Rules::scan_ray_for_threat(
                 self,
@@ -1065,7 +1100,6 @@ impl Board {
             }
         }
 
-        // 4. Rook Attacks (Cached Directions)
         for dir in &self.cache.rook_directions {
             if crate::domain::rules::Rules::scan_ray_for_threat(
                 self,
@@ -1082,7 +1116,6 @@ impl Board {
             }
         }
 
-        // 5. Queen Attacks (Cached Directions - reuse Bishop/Rook)
         for dir in &self.cache.bishop_directions {
             if let Some(idx) = self.trace_ray_for_piece(target_sq, dir, attacker, PieceType::Queen)
             {
@@ -1096,7 +1129,6 @@ impl Board {
             }
         }
 
-        // 6. King Attacks (Cached)
         for offset in &self.cache.king_offsets {
             if let Some(src) =
                 crate::domain::rules::Rules::apply_offset(&target_sq.values, &offset, self.side)
@@ -1232,26 +1264,11 @@ impl BitBoard {
         }
     }
 
-    pub fn or_with(self, other: &Self) -> Self {
-        match (self, other) {
-            (BitBoard::Small(a), BitBoard::Small(b)) => BitBoard::Small(a | b),
-            (BitBoard::Medium(a), BitBoard::Medium(b)) => BitBoard::Medium(a | b),
-            (BitBoard::Large { mut data }, BitBoard::Large { data: other_data }) => {
-                let len = std::cmp::min(data.len(), other_data.len());
-
-                for (d, o) in data[0..len].iter_mut().zip(&other_data[0..len]) {
-                    *d |= *o;
-                }
-
-                if other_data.len() > data.len() {
-                    data.extend_from_slice(&other_data[len..]);
-                }
-
-                BitBoard::Large { data }
-            }
-            _ => panic!("Mismatched BitBoard types"),
-        }
+    pub fn or_with(mut self, other: &Self) -> Self {
+        self |= other;
+        self
     }
+
     pub fn iter_indices(&self) -> BitIterator<'_> {
         BitIterator::new(self)
     }
