@@ -48,6 +48,6 @@ COPY Config.toml ./
 # Copy binary from builder
 COPY --from=builder /app/target/release/hyperchess .
 
-EXPOSE 3000
+EXPOSE 3123
 
 CMD ["./hyperchess"]
