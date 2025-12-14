@@ -1,30 +1,23 @@
 pub mod handlers;
 pub mod models;
+pub mod routes;
 pub mod state;
 
-pub use handlers::app_router;
-
-use crate::api::state::AppState;
-use dashmap::DashMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::net::TcpListener;
-use tower_http::cors::CorsLayer;
+use tokio::sync::RwLock;
 
 use crate::config::AppConfig;
+use dashmap::DashMap;
 
 pub async fn start_server() {
     let config = AppConfig::load();
-    let state = AppState {
-        games: Arc::new(DashMap::new()),
-        config,
-    };
+    let games = Arc::new(DashMap::new());
 
-    let cors = CorsLayer::permissive();
+    let app_state = state::AppState { games, config };
 
-    let app = app_router(state).layer(cors);
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3123));
-    println!("Listening on {}", addr);
-    let listener = TcpListener::bind(addr).await.unwrap();
+    let app = routes::app_router(app_state);
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, app).await.unwrap();
 }

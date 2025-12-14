@@ -1,15 +1,13 @@
 use axum::{
-    Router,
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Json},
-    routing::{get, post},
 };
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
+use crate::api::handlers::bot::trigger_bot_move;
 use crate::api::models::{
     ApiGameState, ApiPiece, ApiValidMove, MoveConsequence, NewGameRequest, NewGameResponse,
     TurnRequest,
@@ -20,18 +18,9 @@ use crate::domain::coordinate::Coordinate;
 use crate::domain::game::Game;
 use crate::domain::models::{GameResult, PieceType, Player};
 use crate::domain::rules::Rules;
-use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::ai::minimax::MinimaxBot;
 
-pub fn app_router(state: AppState) -> Router {
-    Router::new()
-        .route("/new_game", post(create_game))
-        .route("/game/:uuid", get(get_game))
-        .route("/take_turn", post(take_turn))
-        .with_state(state)
-}
-
-async fn create_game(
+pub async fn create_game(
     State(state): State<AppState>,
     Json(payload): Json<NewGameRequest>,
 ) -> impl IntoResponse {
@@ -93,7 +82,10 @@ async fn create_game(
     (StatusCode::CREATED, Json(NewGameResponse { uuid })).into_response()
 }
 
-async fn get_game(State(state): State<AppState>, Path(uuid): Path<String>) -> impl IntoResponse {
+pub async fn get_game(
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+) -> impl IntoResponse {
     if let Some(session_arc) = state.games.get(&uuid) {
         let session = session_arc.read().await;
         let response = build_api_state(&session.game);
@@ -103,7 +95,7 @@ async fn get_game(State(state): State<AppState>, Path(uuid): Path<String>) -> im
     }
 }
 
-async fn take_turn(
+pub async fn take_turn(
     State(state): State<AppState>,
     Json(payload): Json<TurnRequest>,
 ) -> impl IntoResponse {
@@ -249,75 +241,5 @@ fn build_api_state(game: &Game) -> ApiGameState {
         side: board.side(),
         in_check: false,
         sequence: game.move_history().len(),
-    }
-}
-
-async fn trigger_bot_move(session_arc: Arc<tokio::sync::RwLock<GameSession>>) {
-    loop {
-        sleep(Duration::from_millis(500)).await;
-
-        let session = session_arc.write().await;
-
-        if session.game.status() != GameResult::InProgress {
-            break;
-        }
-
-        let current = session.game.current_turn();
-
-        let is_bot_turn = match current {
-            Player::White => session.white_bot.is_some(),
-            Player::Black => session.black_bot.is_some(),
-        };
-
-        if !is_bot_turn {
-            break;
-        }
-
-        let board_clone = session.game.board().clone();
-
-        drop(session);
-
-        let mut session = session_arc.write().await;
-
-        if session.game.status() != GameResult::InProgress {
-            break;
-        }
-        let current_now = session.game.current_turn();
-        if current_now != current {
-            break;
-        }
-
-        let best_move_opt = match current {
-            Player::White => {
-                if let Some(bot) = &mut session.white_bot {
-                    bot.get_move(&board_clone, current)
-                } else {
-                    None
-                }
-            }
-            Player::Black => {
-                if let Some(bot) = &mut session.black_bot {
-                    bot.get_move(&board_clone, current)
-                } else {
-                    None
-                }
-            }
-        };
-
-        if let Some(mv) = best_move_opt {
-            let _ = session.game.play_turn(mv);
-        } else {
-            break;
-        }
-
-        let next = session.game.current_turn();
-        let next_is_bot = match next {
-            Player::White => session.white_bot.is_some(),
-            Player::Black => session.black_bot.is_some(),
-        };
-
-        if session.game.status() != GameResult::InProgress || !next_is_bot {
-            break;
-        }
     }
 }
