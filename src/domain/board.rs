@@ -254,6 +254,24 @@ impl Board {
         board
     }
 
+    fn hash_xor_piece(&mut self, index: usize, piece: Piece) {
+        let offset = match (piece.owner, piece.piece_type) {
+            (Player::White, PieceType::Pawn) => 0,
+            (Player::White, PieceType::Knight) => 1,
+            (Player::White, PieceType::Bishop) => 2,
+            (Player::White, PieceType::Rook) => 3,
+            (Player::White, PieceType::Queen) => 4,
+            (Player::White, PieceType::King) => 5,
+            (Player::Black, PieceType::Pawn) => 6,
+            (Player::Black, PieceType::Knight) => 7,
+            (Player::Black, PieceType::Bishop) => 8,
+            (Player::Black, PieceType::Rook) => 9,
+            (Player::Black, PieceType::Queen) => 10,
+            (Player::Black, PieceType::King) => 11,
+        };
+        self.hash ^= self.zobrist.piece_keys[offset * self.total_cells + index];
+    }
+
     pub fn coords_to_index(&self, coords: &[usize]) -> Option<usize> {
         let mut index = 0;
         let mut multiplier = 1;
@@ -507,17 +525,35 @@ impl Board {
         let saved_castling = self.castling_rights;
         let mut captured = None;
 
-        if let Some(target_p) = self.get_piece_at_index(to_idx) {
-            captured = Some((to_idx, target_p));
+        self.history.push(self.hash);
+
+        self.hash ^= self.zobrist.black_to_move;
+
+        if self.castling_rights > 0 {
+            self.hash ^= self.zobrist.castling_keys[self.castling_rights as usize];
         }
 
-        self.history.push(self.hash);
+        if let Some((ep, _)) = self.en_passant_target {
+            if ep < self.zobrist.en_passant_keys.len() {
+                self.hash ^= self.zobrist.en_passant_keys[ep];
+            }
+        }
+
+        self.hash_xor_piece(from_idx, moving_piece);
+
+        if let Some(target_p) = self.get_piece_at_index(to_idx) {
+            captured = Some((to_idx, target_p));
+
+            self.hash_xor_piece(to_idx, target_p);
+        }
 
         if moving_piece.piece_type == PieceType::Pawn {
             if let Some((target, victim)) = self.en_passant_target {
                 if to_idx == target {
                     if let Some(victim_p) = self.get_piece_at_index(victim) {
                         captured = Some((victim, victim_p));
+
+                        self.hash_xor_piece(victim, victim_p);
                     }
                     self.remove_piece_at_index(victim);
                 }
@@ -550,6 +586,10 @@ impl Board {
                     target_vals[axis] = (target_vals[axis] as isize + dir) as usize;
                     if let Some(target_idx) = self.coords_to_index(&target_vals) {
                         self.en_passant_target = Some((target_idx, to_idx));
+
+                        if target_idx < self.zobrist.en_passant_keys.len() {
+                            self.hash ^= self.zobrist.en_passant_keys[target_idx];
+                        }
                     }
                 }
             }
@@ -630,7 +670,6 @@ impl Board {
         }
 
         self.remove_piece_at_index(from_idx);
-
         self.remove_piece_at_index(to_idx);
 
         let piece_to_place = if let Some(promo_type) = mv.promotion {
@@ -644,12 +683,18 @@ impl Board {
 
         self.place_piece_at_index(to_idx, piece_to_place);
 
+        self.hash_xor_piece(to_idx, piece_to_place);
+
         if let Some((r_from, r_to, r_piece)) = castling_rook_move {
+            self.hash_xor_piece(r_from, r_piece);
             self.remove_piece_at_index(r_from);
+            self.hash_xor_piece(r_to, r_piece);
             self.place_piece_at_index(r_to, r_piece);
         }
 
-        self.hash = self.zobrist.get_hash(self, moving_piece.owner.opponent());
+        if self.castling_rights > 0 {
+            self.hash ^= self.zobrist.castling_keys[self.castling_rights as usize];
+        }
 
         Ok(UnmakeInfo {
             captured,
@@ -720,14 +765,20 @@ impl Board {
         }
     }
 
-    pub fn make_null_move(&mut self, player: Player) -> UnmakeInfo {
+    pub fn make_null_move(&mut self) -> UnmakeInfo {
         let saved_ep = self.en_passant_target;
         let saved_castling = self.castling_rights;
 
         self.history.push(self.hash);
         self.en_passant_target = None;
 
-        self.hash = self.zobrist.get_hash(self, player.opponent());
+        self.hash ^= self.zobrist.black_to_move;
+
+        if let Some((ep, _)) = saved_ep {
+            if ep < self.zobrist.en_passant_keys.len() {
+                self.hash ^= self.zobrist.en_passant_keys[ep];
+            }
+        }
 
         UnmakeInfo {
             captured: None,

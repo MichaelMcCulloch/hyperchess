@@ -268,7 +268,7 @@ impl MinimaxBot {
 
                 if !in_check {
                     let r = if depth > 6 { 3 } else { 2 };
-                    let null_info = board.make_null_move(player);
+                    let null_info = board.make_null_move();
                     let score = -self.minimax(
                         board,
                         depth - 1 - r,
