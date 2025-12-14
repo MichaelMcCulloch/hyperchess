@@ -44,7 +44,7 @@ build_client:
     - docker build -t $CI_REGISTRY_IMAGE/client:latest client/
     - docker push $CI_REGISTRY_IMAGE/client:latest
   only:
-    - main
+    - master
 
 build_server:
   stage: build
@@ -54,4 +54,4 @@ build_server:
     - docker build -t $CI_REGISTRY_IMAGE/server:latest .
     - docker push $CI_REGISTRY_IMAGE/server:latest
   only:
-    - main
+    - master
