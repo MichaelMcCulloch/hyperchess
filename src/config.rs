@@ -22,6 +22,16 @@ pub struct MctsConfig {
     pub iter_per_thread: f64,
 }
 
+impl Default for MctsConfig {
+    fn default() -> Self {
+        Self {
+            depth: 50,
+            iterations: 50,
+            iter_per_thread: 5.0,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ComputeConfig {
     pub minutes: f64,
@@ -56,23 +66,20 @@ impl AppConfig {
         }
         if let Ok(val) = std::env::var("HYPERCHESS_MCTS_DEPTH") {
             if let Ok(parsed) = val.parse() {
-                if let Some(mcts) = &mut self.mcts {
-                    mcts.depth = parsed;
-                }
+                let mcts = self.mcts.get_or_insert(MctsConfig::default());
+                mcts.depth = parsed;
             }
         }
         if let Ok(val) = std::env::var("HYPERCHESS_MCTS_ITERATIONS") {
             if let Ok(parsed) = val.parse() {
-                if let Some(mcts) = &mut self.mcts {
-                    mcts.iterations = parsed;
-                }
+                let mcts = self.mcts.get_or_insert(MctsConfig::default());
+                mcts.iterations = parsed;
             }
         }
         if let Ok(val) = std::env::var("HYPERCHESS_MCTS_ITER_PER_THREAD") {
             if let Ok(parsed) = val.parse() {
-                if let Some(mcts) = &mut self.mcts {
-                    mcts.iter_per_thread = parsed;
-                }
+                let mcts = self.mcts.get_or_insert(MctsConfig::default());
+                mcts.iter_per_thread = parsed;
             }
         }
         if let Ok(val) = std::env::var("HYPERCHESS_COMPUTE_MINUTES") {
@@ -97,11 +104,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             minimax: MinimaxConfig { depth: 4 },
-            mcts: Some(MctsConfig {
-                depth: 50,
-                iterations: 50,
-                iter_per_thread: 5.0,
-            }),
+            mcts: None,
             compute: ComputeConfig {
                 minutes: 2.0,
                 concurrency: 2,
@@ -155,10 +158,12 @@ mod tests {
         );
         unsafe {
             env::remove_var("HYPERCHESS_MINIMAX_DEPTH");
+            env::remove_var("HYPERCHESS_MCTS_DEPTH");
         }
 
         let config = AppConfig::default();
         assert_eq!(config.minimax.depth, 4);
+        assert!(config.mcts.is_none());
     }
 
     #[test]
@@ -174,6 +179,7 @@ mod tests {
         config.merge_env();
 
         assert_eq!(config.minimax.depth, 99);
+        assert!(config.mcts.is_some());
         assert_eq!(config.mcts.unwrap().depth, 101);
         assert_eq!(config.compute.concurrency, 42);
         assert_eq!(config.api.port, 8888);
