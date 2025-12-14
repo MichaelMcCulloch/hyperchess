@@ -1,5 +1,5 @@
 
-export const BASE_URL = "http://127.0.0.1:3123";
+export const BASE_URL = "http://localhost:3000";
 
 export interface ApiGameState {
     pieces: ApiPiece[];

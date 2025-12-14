@@ -1,0 +1,14 @@
+services:
+  server:
+    build: .
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  client:
+    build: ./client
+    ports:
+      - "8080:80"
+    depends_on:
+      - server
+    restart: unless-stopped
