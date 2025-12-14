@@ -2,6 +2,7 @@ use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{GameResult, Move, Piece, PieceType, Player};
 use crate::domain::zobrist::ZobristKeys;
 use smallvec::{smallvec, SmallVec};
+use std::collections::HashMap;
 use std::fmt;
 use std::ops::{BitAnd, BitOr, Not, Shl, Shr};
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct BoardCache {
     pub index_to_coords: Vec<SmallVec<[usize; 4]>>,
+    pub validity_masks: HashMap<(Vec<isize>, usize), BitBoard>,
 }
 
 impl BoardCache {
@@ -27,7 +29,70 @@ impl BoardCache {
             index_to_coords.push(coords);
         }
 
-        Self { index_to_coords }
+        let mut validity_masks = HashMap::new();
+
+        let mut directions = Vec::new();
+
+        for i in 0..dimension {
+            let mut v = vec![0; dimension];
+            v[i] = 1;
+            directions.push(v.clone());
+            v[i] = -1;
+            directions.push(v);
+        }
+
+        let num_dirs = 3_usize.pow(dimension as u32);
+        for i in 0..num_dirs {
+            let mut dir = Vec::with_capacity(dimension);
+            let mut temp = i;
+            let mut nonzero_count = 0;
+            for _ in 0..dimension {
+                let val = match temp % 3 {
+                    0 => 0,
+                    1 => 1,
+                    2 => -1,
+                    _ => 0,
+                };
+                if val != 0 {
+                    nonzero_count += 1;
+                }
+                dir.push(val);
+                temp /= 3;
+            }
+            if nonzero_count > 0 && nonzero_count % 2 == 0 {
+                directions.push(dir);
+            }
+        }
+
+        for dir in directions {
+            let mut step = 1;
+            while step < side {
+                let mut mask_bb = BitBoard::new_empty(dimension, side);
+
+                for i in 0..total_cells {
+                    let coords = &index_to_coords[i];
+                    let mut valid = true;
+                    for (c, &d) in coords.iter().zip(dir.iter()) {
+                        let res = *c as isize + (d * step as isize);
+                        if res < 0 || res >= side as isize {
+                            valid = false;
+                            break;
+                        }
+                    }
+                    if valid {
+                        mask_bb.set_bit(i);
+                    }
+                }
+
+                validity_masks.insert((dir.clone(), step), mask_bb);
+                step *= 2;
+            }
+        }
+
+        Self {
+            index_to_coords,
+            validity_masks,
+        }
     }
 }
 

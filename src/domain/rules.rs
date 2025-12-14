@@ -478,20 +478,30 @@ impl Rules {
         let mut g = generator.clone();
         let mut p = prop.clone();
 
-        let steps = 7;
-
         let mut shift_amt = 1;
-        for _ in 0..steps {
-            let mask = Self::get_validity_mask(board, direction, shift_amt);
 
-            let g_masked = &g & &mask;
+        while shift_amt < board.side {
+            let mask = if let Some(m) = board
+                .cache
+                .validity_masks
+                .get(&(direction.to_vec(), shift_amt))
+            {
+                m
+            } else {
+                panic!(
+                    "Validity mask not found for direction {:?} and step {}",
+                    direction, shift_amt
+                );
+            };
+
+            let g_masked = &g & mask;
             let shifted_g = if stride > 0 {
                 &g_masked << (stride.abs() as usize * shift_amt)
             } else {
                 &g_masked >> (stride.abs() as usize * shift_amt)
             };
 
-            let p_masked = &p & &mask;
+            let p_masked = &p & mask;
             let shifted_p = if stride > 0 {
                 &p_masked << (stride.abs() as usize * shift_amt)
             } else {
@@ -504,7 +514,11 @@ impl Rules {
             shift_amt *= 2;
         }
 
-        let mask = Self::get_validity_mask(board, direction, 1);
+        let mask = board
+            .cache
+            .validity_masks
+            .get(&(direction.to_vec(), 1))
+            .expect("Validity mask for step 1 missing");
         let g_masked = &g & &mask;
 
         let attacks = if stride > 0 {
@@ -524,28 +538,6 @@ impl Rules {
             multiplier *= board.side;
         }
         stride
-    }
-
-    fn get_validity_mask(board: &Board, dir: &[isize], steps: usize) -> BitBoard {
-        let mut mask = board.white_occupancy.zero_like();
-
-        for i in 0..board.total_cells() {
-            let coords = board.index_to_coords(i);
-
-            let mut valid = true;
-            for (c, &d) in coords.iter().zip(dir.iter()) {
-                let res = *c as isize + (d * steps as isize);
-                if res < 0 || res >= board.side as isize {
-                    valid = false;
-                    break;
-                }
-            }
-
-            if valid {
-                mask.set_bit(i);
-            }
-        }
-        mask
     }
 
     fn leaves_king_in_check(board: &mut Board, player: Player, mv: &Move) -> bool {
