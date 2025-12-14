@@ -1,3 +1,4 @@
+use crate::config::MctsConfig;
 use crate::domain::board::{Board, UnmakeInfo};
 use crate::domain::models::{Move, Player};
 use crate::domain::rules::{MoveList, Rules};
@@ -26,12 +27,18 @@ pub struct MCTS {
     root_player: Player,
     tt: Option<Arc<LockFreeTT>>,
     serial: bool,
+    config: Option<MctsConfig>,
 }
 
 use rayon::prelude::*;
 
 impl MCTS {
-    pub fn new(root_state: &Board, root_player: Player, tt: Option<Arc<LockFreeTT>>) -> Self {
+    pub fn new(
+        root_state: &Board,
+        root_player: Player,
+        tt: Option<Arc<LockFreeTT>>,
+        config: Option<MctsConfig>,
+    ) -> Self {
         let mut root_clone = root_state.clone();
         let mut moves = Rules::generate_legal_moves(&mut root_clone, root_player);
         let mut rng = rand::thread_rng();
@@ -53,6 +60,7 @@ impl MCTS {
             root_player,
             tt,
             serial: false,
+            config,
         }
     }
 
@@ -68,12 +76,15 @@ impl MCTS {
 
         let num_threads = rayon::current_num_threads();
 
-        const MIN_ITERATIONS_PER_TASK: usize = 5;
-
+        let min_iter = self
+            .config
+            .as_ref()
+            .map(|c| c.iter_per_thread as usize)
+            .unwrap_or(5);
         let num_tasks = if self.serial {
             1
         } else {
-            (iterations / MIN_ITERATIONS_PER_TASK).clamp(1, num_threads)
+            (iterations / min_iter).clamp(1, num_threads)
         };
 
         if num_tasks <= 1 {
@@ -101,7 +112,12 @@ impl MCTS {
                     return (0, 0.0);
                 }
 
-                let mut local_mcts = MCTS::new(root_state, self.root_player, self.tt.clone());
+                let mut local_mcts = MCTS::new(
+                    root_state,
+                    self.root_player,
+                    self.tt.clone(),
+                    self.config.clone(),
+                );
                 local_mcts.execute_iterations(root_state, count);
 
                 let root = &local_mcts.nodes[0];
@@ -232,10 +248,10 @@ impl MCTS {
         stack: &mut Vec<(Move, UnmakeInfo)>,
     ) -> f64 {
         let mut depth = 0;
-        const MAX_ROLLOUT_DEPTH: usize = 50;
+        let max_depth = self.config.as_ref().map(|c| c.depth).unwrap_or(50);
         const VAL_KING_F: f64 = 20000.0;
 
-        while depth < MAX_ROLLOUT_DEPTH {
+        while depth < max_depth {
             if let Some(tt) = &self.tt {
                 if let Some((score, _, flag, _)) = tt.get(state.hash) {
                     if flag == Flag::Exact {
@@ -307,7 +323,7 @@ mod tests {
     #[test]
     fn test_mcts_smoke() {
         let board = Board::new(2, 8);
-        let mut mcts = MCTS::new(&board, Player::White, None);
+        let mut mcts = MCTS::new(&board, Player::White, None, None);
         let score = mcts.run(&board, 10);
         assert!(score >= 0.0 && score <= 1.0);
     }
@@ -315,7 +331,7 @@ mod tests {
     #[test]
     fn test_mcts_parallel_execution() {
         let board = Board::new(2, 8);
-        let mut mcts = MCTS::new(&board, Player::White, None);
+        let mut mcts = MCTS::new(&board, Player::White, None, None);
 
         let score = mcts.run(&board, 100);
         assert!(score >= 0.0 && score <= 1.0);

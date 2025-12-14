@@ -48,8 +48,6 @@ D   . . . .| . . . .| . . . .| . . . ♜
         };
 
         let output_clean = strip_ansi(&output);
-        // println!("{}", expected);
-        // println!("{}", output_clean);
 
         assert_eq!(expected, output_clean,);
     }

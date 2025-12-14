@@ -1,4 +1,5 @@
 use hyperchess::application::game_service::GameService;
+use hyperchess::config::AppConfig;
 use hyperchess::domain::board::Board;
 use hyperchess::domain::services::PlayerStrategy;
 use hyperchess::infrastructure::ai::MinimaxBot;
@@ -21,12 +22,12 @@ fn main() {
 fn run_cli() {
     let args: Vec<String> = env::args().collect();
 
+    let mut config = AppConfig::load();
     let mut dimension = 2;
     let side = 8;
     let mut player_white_type = "h";
     let mut player_black_type = "c";
-    let mut depth = 4;
-    let time_limit = 1000;
+    let time_limit = (config.time.minutes * 60.0 * 1000.0) as u64;
 
     if args.len() > 1 {
         if let Ok(d) = args[1].parse::<usize>() {
@@ -42,20 +43,29 @@ fn run_cli() {
     }
     if args.len() > 3 {
         if let Ok(d) = args[3].parse::<usize>() {
-            depth = d;
+            config.minimax.depth = d;
         }
     }
 
     let player_white: Box<dyn PlayerStrategy> = match player_white_type {
         "h" => Box::new(HumanConsolePlayer::new()),
-        "c" => Box::new(MinimaxBot::new(depth, time_limit, dimension, side).with_mcts(50)),
+        "c" => Box::new(
+            MinimaxBot::new(&config.minimax, time_limit, dimension, side)
+                .with_mcts(Some(config.mcts.clone())),
+        ),
         _ => Box::new(HumanConsolePlayer::new()),
     };
 
     let player_black: Box<dyn PlayerStrategy> = match player_black_type {
         "h" => Box::new(HumanConsolePlayer::new()),
-        "c" => Box::new(MinimaxBot::new(depth, time_limit, dimension, side).with_mcts(50)),
-        _ => Box::new(MinimaxBot::new(depth, time_limit, dimension, side).with_mcts(50)),
+        "c" => Box::new(
+            MinimaxBot::new(&config.minimax, time_limit, dimension, side)
+                .with_mcts(Some(config.mcts.clone())),
+        ),
+        _ => Box::new(
+            MinimaxBot::new(&config.minimax, time_limit, dimension, side)
+                .with_mcts(Some(config.mcts.clone())),
+        ),
     };
 
     let board = Board::new(dimension, side);

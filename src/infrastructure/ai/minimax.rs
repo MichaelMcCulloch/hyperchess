@@ -1,4 +1,5 @@
 use super::mcts::MCTS;
+use crate::config::{MctsConfig, MinimaxConfig};
 use crate::domain::board::Board;
 use crate::domain::models::{Move, Player};
 use crate::domain::rules::Rules;
@@ -25,42 +26,43 @@ pub struct MinimaxBot {
     tt: Arc<LockFreeTT>,
     stop_flag: Arc<AtomicBool>,
     nodes_searched: std::sync::atomic::AtomicUsize,
-    use_mcts: bool,
-    mcts_iterations: usize,
+    mcts_config: Option<MctsConfig>,
     num_threads: usize,
 }
 
 impl MinimaxBot {
-    pub fn new(depth: usize, time_limit_ms: u64, _dimension: usize, _side: usize) -> Self {
+    pub fn new(
+        config: &MinimaxConfig,
+        time_limit_ms: u64,
+        _dimension: usize,
+        _side: usize,
+    ) -> Self {
         let num_threads = std::thread::available_parallelism()
             .map(|n| n.get().saturating_sub(2).max(1))
             .unwrap_or(1);
 
         Self {
-            depth,
+            depth: config.depth,
             time_limit: Duration::from_millis(time_limit_ms),
             tt: Arc::new(LockFreeTT::new(256)),
             stop_flag: Arc::new(AtomicBool::new(false)),
             nodes_searched: std::sync::atomic::AtomicUsize::new(0),
-            use_mcts: false,
-            mcts_iterations: 100,
+            mcts_config: None,
             num_threads,
         }
     }
 
-    pub fn with_mcts(mut self, iterations: usize) -> Self {
-        self.use_mcts = true;
-        self.mcts_iterations = iterations;
-
-        self.depth = if self.use_mcts { 3 } else { self.depth };
+    pub fn with_mcts(mut self, config: Option<MctsConfig>) -> Self {
+        self.mcts_config = config;
         self
     }
 
     fn evaluate(&self, board: &Board, player_at_leaf: Option<Player>) -> i32 {
-        if self.use_mcts {
+        if let Some(mcts_config) = &self.mcts_config {
             if let Some(player) = player_at_leaf {
-                let mut mcts = MCTS::new(board, player, None).with_serial();
-                let win_rate = mcts.run(board, self.mcts_iterations);
+                let mut mcts =
+                    MCTS::new(board, player, None, Some(mcts_config.clone())).with_serial();
+                let win_rate = mcts.run(board, mcts_config.iterations);
 
                 let val_f = (win_rate - 0.5) * 2.0 * (VAL_KING as f64);
                 let val = val_f as i32;

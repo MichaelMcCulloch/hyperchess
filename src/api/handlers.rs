@@ -39,20 +39,33 @@ async fn create_game(
 
     let board = Board::new(dimension, side);
     let game = Game::new(board);
+    let time_limit = (state.config.time.minutes * 60.0 * 1000.0) as u64;
 
     let mut white_bot = None;
     let mut black_bot = None;
 
     match payload.mode.to_lowercase().as_str() {
         "cc" => {
-            white_bot = Some(MinimaxBot::new(3, 1000, dimension, side));
-            black_bot = Some(MinimaxBot::new(3, 1000, dimension, side));
+            white_bot = Some(
+                MinimaxBot::new(&state.config.minimax, time_limit, dimension, side)
+                    .with_mcts(Some(state.config.mcts.clone())),
+            );
+            black_bot = Some(
+                MinimaxBot::new(&state.config.minimax, time_limit, dimension, side)
+                    .with_mcts(Some(state.config.mcts.clone())),
+            );
         }
         "hc" => {
-            black_bot = Some(MinimaxBot::new(3, 1000, dimension, side));
+            black_bot = Some(
+                MinimaxBot::new(&state.config.minimax, time_limit, dimension, side)
+                    .with_mcts(Some(state.config.mcts.clone())),
+            );
         }
         "ch" => {
-            white_bot = Some(MinimaxBot::new(3, 1000, dimension, side));
+            white_bot = Some(
+                MinimaxBot::new(&state.config.minimax, time_limit, dimension, side)
+                    .with_mcts(Some(state.config.mcts.clone())),
+            );
         }
         "hh" => {}
         _ => {
@@ -94,46 +107,27 @@ async fn take_turn(
         return (StatusCode::NOT_FOUND, "Game not found").into_response();
     };
 
-    // We need to apply the move.
-    // Lock for write.
     let mut session = session_arc.write().await;
 
-    // Check if it's human turn.
     let current_player = session.game.current_turn();
 
-    // Determine if current player is a bot
     let is_bot = match current_player {
         Player::White => session.white_bot.is_some(),
         Player::Black => session.black_bot.is_some(),
     };
 
     if is_bot {
-        // If it's a bot's turn, human cannot move.
-        // Wait, "only available for the human player. If cc, not available."
-        // If CC, both are bots, so is_bot is always true.
         return (StatusCode::FORBIDDEN, "Not human turn").into_response();
     }
 
-    // Validate and Apply move
     let coord_start = Coordinate::new(payload.start);
     let coord_end = Coordinate::new(payload.end);
 
-    // Check for promotion - API payload doesn't support promotion yet?
-    // User request doesn't specify promotion format in `take_turn(uuid, start, end)`.
-    // I should support auto-queen or fail if promotion needed. Or assume None for now.
-    // Or check if pawn move to last rank.
-    // The prompt `take_turn` sig is strict.
-    // I will assume Queen promotion if applicable for now to keep it simple, or None.
-    // `Rules` might generate moves with promotion, so strict matching requires correct promotion type.
-    // I will iterate legal moves, find one that matches start/end. If multiple (due to promotion), pick Queen.
-
-    // Validate move
     let mut chosen_move = None;
     let mut temp_board_valid = session.game.board().clone();
     let move_candidates = Rules::generate_legal_moves(&mut temp_board_valid, current_player);
     for mv in move_candidates {
         if mv.from == coord_start && mv.to == coord_end {
-            // If multiple (promotion), pick Queen or default.
             if let Some(p) = mv.promotion {
                 if p == PieceType::Queen {
                     chosen_move = Some(mv);
@@ -151,7 +145,6 @@ async fn take_turn(
         None => return (StatusCode::BAD_REQUEST, "Invalid move").into_response(),
     };
 
-    // Apply move
     let result = session.game.play_turn(mv_to_play);
 
     if let Err(e) = result {
@@ -161,7 +154,6 @@ async fn take_turn(
     let response_state = build_api_state(&session.game);
     let game_status = session.game.status();
 
-    // If next player is bot, spawn task
     let next_player = session.game.current_turn();
     let next_is_bot = match next_player {
         Player::White => session.white_bot.is_some(),
@@ -171,12 +163,10 @@ async fn take_turn(
     if next_is_bot && game_status == GameResult::InProgress {
         let session_clone = session_arc.clone();
         tokio::spawn(async move {
-            // Logic for bot
-            // Need to write lock.
             {
                 let mut session = session_clone.write().await;
                 let current = session.game.current_turn();
-                // Double check it is bot turn (race conditions?)
+
                 let is_bot_turn = match current {
                     Player::White => session.white_bot.is_some(),
                     Player::Black => session.black_bot.is_some(),
@@ -185,11 +175,6 @@ async fn take_turn(
                     return;
                 }
 
-                // Get bot
-                // We need to mutate bot to get move (get_move takes &mut self).
-                // We have mutable access to session, so we can get mutable ref to bot.
-                // We need a clone of board for the bot to think on?
-                // Bot strategy `get_move` takes `&Board`.
                 let board_clone = session.game.board().clone();
 
                 let best_move_opt = match current {
@@ -212,7 +197,6 @@ async fn take_turn(
         });
     }
 
-    // Return current state (Human moved)
     (StatusCode::OK, Json(response_state)).into_response()
 }
 
@@ -235,18 +219,14 @@ fn build_api_state(game: &Game) -> ApiGameState {
 
     let current_player = game.current_turn();
 
-    // We need board clone to generate moves
     let mut temp_board = board.clone();
     let moves = Rules::generate_legal_moves(&mut temp_board, current_player);
 
     let mut valid_moves_map: HashMap<String, Vec<ApiValidMove>> = HashMap::new();
 
     for mv in moves {
-        // Let's use Coordinate Debug impl: `format!("{:?}", mv.from)` which is `(x, y)`
-
         let from_str = format!("{:?}", mv.from);
 
-        // Determine consequence
         let mut consequence = MoveConsequence::NoEffect;
         let dest_piece = board.get_piece(&mv.to);
         if dest_piece.is_some() {
@@ -259,9 +239,7 @@ fn build_api_state(game: &Game) -> ApiGameState {
             }
 
             let opponent = current_player.opponent();
-            // Check victory (Checkmate)
-            // Optimization: Use a quick check or generating moves.
-            // Generating moves is correct.
+
             let opp_moves = Rules::generate_legal_moves(&mut temp_board, opponent);
 
             if opp_moves.is_empty() {
@@ -277,7 +255,7 @@ fn build_api_state(game: &Game) -> ApiGameState {
 
         let valid_move = ApiValidMove {
             to: mv.to.values.into_vec(),
-            consequence, // Convert Enum
+            consequence,
         };
 
         valid_moves_map
@@ -293,6 +271,6 @@ fn build_api_state(game: &Game) -> ApiGameState {
         status: game.status(),
         dimension: board.dimension(),
         side: board.side(),
-        in_check: false, // Calculate if needed: Rules::is_square_attacked
+        in_check: false,
     }
 }

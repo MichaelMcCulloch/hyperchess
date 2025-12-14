@@ -11,9 +11,13 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 
+use crate::config::AppConfig;
+
 pub async fn start_server() {
+    let config = AppConfig::load();
     let state = AppState {
         games: Arc::new(DashMap::new()),
+        config,
     };
 
     let cors = CorsLayer::permissive();

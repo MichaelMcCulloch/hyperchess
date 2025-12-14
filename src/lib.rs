@@ -5,3 +5,4 @@ pub mod interface;
 
 #[cfg(feature = "api")]
 pub mod api;
+pub mod config;
