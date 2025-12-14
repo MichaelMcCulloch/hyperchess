@@ -8,8 +8,8 @@ use crate::domain::rules::Rules;
 use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::ai::transposition::{Flag, LockFreeTT, PackedMove};
 use rayon::prelude::*;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -111,19 +111,11 @@ impl MinimaxBot {
             }
         }
 
-        let stand_pat = match player {
-            Player::White => self.evaluate(board, Some(Player::White)),
-            Player::Black => -self.evaluate(board, Some(Player::Black)),
-        };
+        let stand_pat = self.evaluate(board, Some(player));
 
         if stand_pat >= beta {
             return beta;
         }
-
-        /*
-        const DELTA_MARGIN: i32 = 200;
-        if stand_pat + VAL_QUEEN + DELTA_MARGIN < alpha {}
-        */
 
         if stand_pat > alpha {
             alpha = stand_pat;
@@ -278,7 +270,7 @@ impl MinimaxBot {
         }
 
         if allow_null && depth >= 3 {
-            let static_eval = self.evaluate(board, None);
+            let static_eval = self.evaluate(board, Some(player));
             if static_eval >= beta {
                 let in_check = if let Some(king_pos) = board.get_king_coordinate(player) {
                     Rules::is_square_attacked(board, &king_pos, player.opponent())
@@ -320,7 +312,7 @@ impl MinimaxBot {
 
         let mut do_futility = false;
         if depth == 1 {
-            let eval = self.evaluate(board, None);
+            let eval = self.evaluate(board, Some(player));
             if eval + 500 < alpha {
                 do_futility = true;
             }
