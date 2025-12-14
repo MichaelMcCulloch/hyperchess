@@ -4,7 +4,7 @@ use crate::domain::zobrist::ZobristKeys;
 use smallvec::{SmallVec, smallvec};
 use std::collections::HashMap;
 use std::fmt;
-use std::ops::{BitAnd, BitOr, Not, Shl, Shr};
+use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not, Shl, Shr};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -98,7 +98,53 @@ impl BoardCache {
 pub enum BitBoard {
     Small(u32),
     Medium(u128),
-    Large { data: Vec<u64> },
+    Large { data: SmallVec<[u64; 8]> },
+}
+
+impl BitAndAssign<&BitBoard> for BitBoard {
+    fn bitand_assign(&mut self, rhs: &BitBoard) {
+        match (&mut *self, rhs) {
+            (BitBoard::Small(a), BitBoard::Small(b)) => {
+                *a &= b;
+                return;
+            }
+            (BitBoard::Medium(a), BitBoard::Medium(b)) => {
+                *a &= b;
+                return;
+            }
+            (BitBoard::Large { data: a }, BitBoard::Large { data: b }) => {
+                for (l, r) in a.iter_mut().zip(b.iter()) {
+                    *l &= *r;
+                }
+                return;
+            }
+            _ => {}
+        }
+        *self = &*self & rhs;
+    }
+}
+
+impl BitOrAssign<&BitBoard> for BitBoard {
+    fn bitor_assign(&mut self, rhs: &BitBoard) {
+        match (&mut *self, rhs) {
+            (BitBoard::Small(a), BitBoard::Small(b)) => {
+                *a |= b;
+                return;
+            }
+            (BitBoard::Medium(a), BitBoard::Medium(b)) => {
+                *a |= b;
+                return;
+            }
+            (BitBoard::Large { data: a }, BitBoard::Large { data: b }) => {
+                for (l, r) in a.iter_mut().zip(b.iter()) {
+                    *l |= *r;
+                }
+                return;
+            }
+            _ => {}
+        }
+        *self = &*self | rhs;
+    }
 }
 
 impl<'a, 'b> BitAnd<&'b BitBoard> for &'a BitBoard {
@@ -110,7 +156,7 @@ impl<'a, 'b> BitAnd<&'b BitBoard> for &'a BitBoard {
             (BitBoard::Medium(a), BitBoard::Medium(b)) => BitBoard::Medium(a & b),
             (BitBoard::Large { data: a }, BitBoard::Large { data: b }) => {
                 let len = std::cmp::max(a.len(), b.len());
-                let mut new_data = Vec::with_capacity(len);
+                let mut new_data = SmallVec::with_capacity(len);
 
                 for i in 0..len {
                     let val_a = a.get(i).copied().unwrap_or(0);
@@ -134,7 +180,7 @@ impl<'a, 'b> BitOr<&'b BitBoard> for &'a BitBoard {
             (BitBoard::Large { data: a }, BitBoard::Large { data: b }) => {
                 let len = std::cmp::max(a.len(), b.len());
 
-                let mut new_data = Vec::with_capacity(len);
+                let mut new_data = SmallVec::with_capacity(len);
                 for i in 0..len {
                     let val_a = a.get(i).copied().unwrap_or(0);
                     let val_b = b.get(i).copied().unwrap_or(0);
@@ -155,7 +201,7 @@ impl<'a> Not for &'a BitBoard {
             BitBoard::Small(a) => BitBoard::Small(!a),
             BitBoard::Medium(a) => BitBoard::Medium(!a),
             BitBoard::Large { data } => {
-                let mut new_data = Vec::with_capacity(data.len());
+                let mut new_data = SmallVec::with_capacity(data.len());
                 for x in data {
                     new_data.push(!x);
                 }
@@ -175,7 +221,7 @@ impl<'a> Shl<usize> for &'a BitBoard {
             BitBoard::Large { data } => {
                 let chunks_shift = shift / 64;
                 let bits_shift = shift % 64;
-                let mut new_data = vec![0; data.len()];
+                let mut new_data = SmallVec::from_vec(vec![0; data.len()]);
 
                 for i in 0..data.len() {
                     if i + chunks_shift < data.len() {
@@ -201,7 +247,7 @@ impl<'a> Shr<usize> for &'a BitBoard {
             BitBoard::Large { data } => {
                 let chunks_shift = shift / 64;
                 let bits_shift = shift % 64;
-                let mut new_data = vec![0; data.len()];
+                let mut new_data = SmallVec::from_vec(vec![0; data.len()]);
 
                 for i in 0..data.len() {
                     if i >= chunks_shift {
@@ -254,7 +300,7 @@ impl BitBoard {
             BitBoard::Small(_) => BitBoard::Small(0),
             BitBoard::Medium(_) => BitBoard::Medium(0),
             BitBoard::Large { data } => BitBoard::Large {
-                data: vec![0; data.len()],
+                data: smallvec![0u64; data.len()],
             },
         }
     }
@@ -1129,7 +1175,9 @@ impl BitBoard {
             BitBoard::Medium(0)
         } else {
             let len = (total_cells + 63) / 64;
-            BitBoard::Large { data: vec![0; len] }
+            BitBoard::Large {
+                data: smallvec![0u64; len],
+            }
         }
     }
 

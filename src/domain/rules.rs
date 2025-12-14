@@ -130,7 +130,7 @@ impl Rules {
                 BitBoard::Medium((!b) & mask)
             }
             BitBoard::Large { data } => {
-                let mut new_data = Vec::with_capacity(data.len());
+                let mut new_data = SmallVec::with_capacity(data.len());
                 let mut remaining = board.total_cells;
                 for val in data {
                     let limit = std::cmp::min(64, remaining);
@@ -431,7 +431,7 @@ impl Rules {
                 BitBoard::Medium((!b) & mask)
             }
             BitBoard::Large { data } => {
-                let mut new_data = Vec::with_capacity(data.len());
+                let mut new_data = SmallVec::with_capacity(data.len());
                 let mut remaining = board.total_cells;
                 for val in data {
                     let limit = std::cmp::min(64, remaining);
@@ -483,6 +483,12 @@ impl Rules {
     ) -> BitBoard {
         let mut g = generator.clone();
         let mut p = prop.clone();
+
+        // Reusable buffers
+        let mut shifted_g = generator.zero_like();
+        let mut shifted_p = generator.zero_like();
+        let mut temp_g = generator.zero_like();
+
         let mut shift_amt = 1;
 
         while shift_amt < board.side {
@@ -500,21 +506,33 @@ impl Rules {
                 );
             };
 
-            let g_masked = &g & mask;
-            let shifted_g = if stride > 0 {
-                &g_masked << (stride.abs() as usize * shift_amt)
+            // 1. Calculate shifted_g = (g & mask) << shift
+            // reuse shifted_g buffer
+            shifted_g.clone_from(&g);
+            shifted_g &= mask;
+            if stride > 0 {
+                shifted_g = &shifted_g << (stride.abs() as usize * shift_amt);
             } else {
-                &g_masked >> (stride.abs() as usize * shift_amt)
-            };
-            let p_masked = &p & mask;
-            let shifted_p = if stride > 0 {
-                &p_masked << (stride.abs() as usize * shift_amt)
-            } else {
-                &p_masked >> (stride.abs() as usize * shift_amt)
-            };
+                shifted_g = &shifted_g >> (stride.abs() as usize * shift_amt);
+            }
 
-            g = &g | &(&shifted_g & &p);
-            p = &p & &shifted_p;
+            // 2. Calculate shifted_p = (p & mask) << shift
+            shifted_p.clone_from(&p);
+            shifted_p &= mask;
+            if stride > 0 {
+                shifted_p = &shifted_p << (stride.abs() as usize * shift_amt);
+            } else {
+                shifted_p = &shifted_p >> (stride.abs() as usize * shift_amt);
+            }
+
+            // 3. g = g | (shifted_g & p)
+            temp_g.clone_from(&shifted_g);
+            temp_g &= &p;
+            g |= &temp_g;
+
+            // 4. p = p & shifted_p
+            p &= &shifted_p;
+
             shift_amt *= 2;
         }
 
@@ -523,11 +541,12 @@ impl Rules {
             .validity_masks
             .get(&(direction.to_vec(), 1))
             .expect("Validity mask for step 1 missing");
-        let g_masked = &g & &mask;
+
+        g &= mask;
         if stride > 0 {
-            &g_masked << stride.abs() as usize
+            &g << stride.abs() as usize
         } else {
-            &g_masked >> stride.abs() as usize
+            &g >> stride.abs() as usize
         }
     }
 
