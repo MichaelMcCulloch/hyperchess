@@ -4,6 +4,10 @@ services:
   - docker:dind
 
 variables:
+  # 1. Disable TLS so the server listens on port 2375 (matching the client)
+  DOCKER_TLS_CERTDIR: ""
+  # 2. Explicitly set the host (optional but recommended for clarity)
+  DOCKER_HOST: tcp://docker:2375
   DOCKER_DRIVER: overlay2
 
 stages:
