@@ -13,7 +13,6 @@ mod tests {
     fn debug_validity_mask_2x4() {
         let mut board = Board::new_empty(2, 4);
 
-        // Setup from failing test case
         board
             .set_piece(
                 &coord(0, 0),
@@ -57,7 +56,6 @@ mod tests {
             }
         }
 
-        // Check validity mask for (0, -1) step 1 just in case
         let dir = vec![0, -1];
         if let Some(mask) = board.cache.validity_masks.get(&(dir.clone(), 1)) {
             if let BitBoard::Small(bits) = mask {
@@ -68,13 +66,11 @@ mod tests {
         assert!(found_02, "Should find move to (0,2)");
         assert!(found_mate, "Should find move to (0,1)");
 
-        // Simulate Move (0,3) -> (0,1)
         println!("--- Simulating Move Queen to (0,1) ---");
-        // Apply move manually
+
         let move_mate = moves.iter().find(|m| m.to == coord(0, 1)).unwrap();
         board.apply_move(move_mate).unwrap();
 
-        // Check if Black has moves
         let black_moves = Rules::generate_legal_moves(&mut board, Player::Black);
         println!("Black moves count: {}", black_moves.len());
         for bm in &black_moves {
