@@ -1,7 +1,7 @@
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{GameResult, Move, Piece, PieceType, Player};
 use crate::domain::zobrist::ZobristKeys;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::{BitAnd, BitOr, Not, Shl, Shr};
@@ -11,6 +11,15 @@ use std::sync::Arc;
 pub struct BoardCache {
     pub index_to_coords: Vec<SmallVec<[usize; 4]>>,
     pub validity_masks: HashMap<(Vec<isize>, usize), BitBoard>,
+
+    // Cached Move Offsets for Arbitrary Dimensions
+    pub knight_offsets: Vec<Vec<isize>>,
+    pub king_offsets: Vec<Vec<isize>>,
+    pub rook_directions: Vec<Vec<isize>>,
+    pub bishop_directions: Vec<Vec<isize>>,
+    // Pre-computed pawn capture offsets relative to the *target* (for is_square_attacked)
+    pub white_pawn_capture_offsets: Vec<Vec<isize>>,
+    pub black_pawn_capture_offsets: Vec<Vec<isize>>,
 }
 
 impl BoardCache {
@@ -31,40 +40,23 @@ impl BoardCache {
 
         let mut validity_masks = HashMap::new();
 
-        let mut directions = Vec::new();
+        // Use the calculation helpers from Rules to generate cached geometry
+        // This ensures strictly identical behavior to the previous implementation
+        let rook_directions = crate::domain::rules::Rules::get_rook_directions_calc(dimension);
+        let bishop_directions = crate::domain::rules::Rules::get_bishop_directions_calc(dimension);
+        let knight_offsets = crate::domain::rules::Rules::get_knight_offsets_calc(dimension);
+        let king_offsets = crate::domain::rules::Rules::get_king_offsets_calc(dimension);
 
-        for i in 0..dimension {
-            let mut v = vec![0; dimension];
-            v[i] = 1;
-            directions.push(v.clone());
-            v[i] = -1;
-            directions.push(v);
-        }
+        let white_pawn_capture_offsets =
+            crate::domain::rules::Rules::get_pawn_capture_offsets_calc(dimension, Player::White);
+        let black_pawn_capture_offsets =
+            crate::domain::rules::Rules::get_pawn_capture_offsets_calc(dimension, Player::Black);
 
-        let num_dirs = 3_usize.pow(dimension as u32);
-        for i in 0..num_dirs {
-            let mut dir = Vec::with_capacity(dimension);
-            let mut temp = i;
-            let mut nonzero_count = 0;
-            for _ in 0..dimension {
-                let val = match temp % 3 {
-                    0 => 0,
-                    1 => 1,
-                    2 => -1,
-                    _ => 0,
-                };
-                if val != 0 {
-                    nonzero_count += 1;
-                }
-                dir.push(val);
-                temp /= 3;
-            }
-            if nonzero_count > 0 && nonzero_count % 2 == 0 {
-                directions.push(dir);
-            }
-        }
+        // Precompute validity masks for sliding pieces (unchanged logic)
+        // We combine Rook and Bishop directions to cover all sliding axes
+        let all_dirs = rook_directions.iter().chain(bishop_directions.iter());
 
-        for dir in directions {
+        for dir in all_dirs {
             let mut step = 1;
             while step < side {
                 let mut mask_bb = BitBoard::new_empty(dimension, side);
@@ -92,6 +84,12 @@ impl BoardCache {
         Self {
             index_to_coords,
             validity_masks,
+            knight_offsets,
+            king_offsets,
+            rook_directions,
+            bishop_directions,
+            white_pawn_capture_offsets,
+            black_pawn_capture_offsets,
         }
     }
 }
@@ -973,13 +971,12 @@ impl Board {
             Player::Black => &self.black_occupancy,
         };
 
-        let _target_idx = self.coords_to_index(&target_sq.values)?;
+        // 1. Pawn Attacks (Cached)
+        let pawn_attacker_offsets = match attacker.opponent() {
+            Player::White => &self.cache.white_pawn_capture_offsets,
+            Player::Black => &self.cache.black_pawn_capture_offsets,
+        };
 
-        let pawn_attacker_offsets =
-            crate::domain::rules::Rules::get_pawn_capture_offsets_for_target(
-                self.dimension,
-                attacker.opponent(),
-            );
         for offset in pawn_attacker_offsets {
             if let Some(src) =
                 crate::domain::rules::Rules::apply_offset(&target_sq.values, &offset, self.side)
@@ -992,8 +989,8 @@ impl Board {
             }
         }
 
-        let knight_offsets = crate::domain::rules::Rules::get_knight_offsets(self.dimension);
-        for offset in knight_offsets {
+        // 2. Knight Attacks (Cached)
+        for offset in &self.cache.knight_offsets {
             if let Some(src) =
                 crate::domain::rules::Rules::apply_offset(&target_sq.values, &offset, self.side)
             {
@@ -1005,8 +1002,8 @@ impl Board {
             }
         }
 
-        let bishop_dirs = crate::domain::rules::Rules::get_bishop_directions(self.dimension);
-        for dir in &bishop_dirs {
+        // 3. Bishop Attacks (Cached Directions)
+        for dir in &self.cache.bishop_directions {
             if crate::domain::rules::Rules::scan_ray_for_threat(
                 self,
                 &target_sq.values,
@@ -1022,8 +1019,8 @@ impl Board {
             }
         }
 
-        let rook_dirs = crate::domain::rules::Rules::get_rook_directions(self.dimension);
-        for dir in &rook_dirs {
+        // 4. Rook Attacks (Cached Directions)
+        for dir in &self.cache.rook_directions {
             if crate::domain::rules::Rules::scan_ray_for_threat(
                 self,
                 &target_sq.values,
@@ -1039,21 +1036,22 @@ impl Board {
             }
         }
 
-        for dir in &bishop_dirs {
+        // 5. Queen Attacks (Cached Directions - reuse Bishop/Rook)
+        for dir in &self.cache.bishop_directions {
             if let Some(idx) = self.trace_ray_for_piece(target_sq, dir, attacker, PieceType::Queen)
             {
                 return Some((900, idx));
             }
         }
-        for dir in &rook_dirs {
+        for dir in &self.cache.rook_directions {
             if let Some(idx) = self.trace_ray_for_piece(target_sq, dir, attacker, PieceType::Queen)
             {
                 return Some((900, idx));
             }
         }
 
-        let king_offsets = crate::domain::rules::Rules::get_king_offsets(self.dimension);
-        for offset in king_offsets {
+        // 6. King Attacks (Cached)
+        for offset in &self.cache.king_offsets {
             if let Some(src) =
                 crate::domain::rules::Rules::apply_offset(&target_sq.values, &offset, self.side)
             {
