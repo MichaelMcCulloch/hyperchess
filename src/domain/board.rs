@@ -13,19 +13,21 @@ pub enum BitBoard {
     Large { data: Vec<u64> },
 }
 
-impl BitAnd for BitBoard {
-    type Output = Self;
-    fn bitand(self, rhs: Self) -> Self {
+impl<'a, 'b> BitAnd<&'b BitBoard> for &'a BitBoard {
+    type Output = BitBoard;
+
+    fn bitand(self, rhs: &'b BitBoard) -> BitBoard {
         match (self, rhs) {
             (BitBoard::Small(a), BitBoard::Small(b)) => BitBoard::Small(a & b),
             (BitBoard::Medium(a), BitBoard::Medium(b)) => BitBoard::Medium(a & b),
             (BitBoard::Large { data: a }, BitBoard::Large { data: b }) => {
                 let len = std::cmp::max(a.len(), b.len());
-                let mut new_data = vec![0; len];
+                let mut new_data = Vec::with_capacity(len);
+
                 for i in 0..len {
                     let val_a = a.get(i).copied().unwrap_or(0);
                     let val_b = b.get(i).copied().unwrap_or(0);
-                    new_data[i] = val_a & val_b;
+                    new_data.push(val_a & val_b);
                 }
                 BitBoard::Large { data: new_data }
             }
@@ -34,30 +36,51 @@ impl BitAnd for BitBoard {
     }
 }
 
-impl BitOr for BitBoard {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self {
-        self.or_with(&rhs)
+impl<'a, 'b> BitOr<&'b BitBoard> for &'a BitBoard {
+    type Output = BitBoard;
+
+    fn bitor(self, rhs: &'b BitBoard) -> BitBoard {
+        match (self, rhs) {
+            (BitBoard::Small(a), BitBoard::Small(b)) => BitBoard::Small(a | b),
+            (BitBoard::Medium(a), BitBoard::Medium(b)) => BitBoard::Medium(a | b),
+            (BitBoard::Large { data: a }, BitBoard::Large { data: b }) => {
+                let len = std::cmp::max(a.len(), b.len());
+
+                let mut new_data = Vec::with_capacity(len);
+                for i in 0..len {
+                    let val_a = a.get(i).copied().unwrap_or(0);
+                    let val_b = b.get(i).copied().unwrap_or(0);
+                    new_data.push(val_a | val_b);
+                }
+                BitBoard::Large { data: new_data }
+            }
+            _ => panic!("Mismatched BitBoard types in BitOr"),
+        }
     }
 }
 
-impl Not for BitBoard {
-    type Output = Self;
-    fn not(self) -> Self {
+impl<'a> Not for &'a BitBoard {
+    type Output = BitBoard;
+
+    fn not(self) -> BitBoard {
         match self {
             BitBoard::Small(a) => BitBoard::Small(!a),
             BitBoard::Medium(a) => BitBoard::Medium(!a),
             BitBoard::Large { data } => {
-                let new_data = data.iter().map(|&x| !x).collect();
+                let mut new_data = Vec::with_capacity(data.len());
+                for x in data {
+                    new_data.push(!x);
+                }
                 BitBoard::Large { data: new_data }
             }
         }
     }
 }
 
-impl Shl<usize> for BitBoard {
-    type Output = Self;
-    fn shl(self, shift: usize) -> Self {
+impl<'a> Shl<usize> for &'a BitBoard {
+    type Output = BitBoard;
+
+    fn shl(self, shift: usize) -> BitBoard {
         match self {
             BitBoard::Small(b) => BitBoard::Small(b.wrapping_shl(shift as u32)),
             BitBoard::Medium(b) => BitBoard::Medium(b.wrapping_shl(shift as u32)),
@@ -80,9 +103,10 @@ impl Shl<usize> for BitBoard {
     }
 }
 
-impl Shr<usize> for BitBoard {
-    type Output = Self;
-    fn shr(self, shift: usize) -> Self {
+impl<'a> Shr<usize> for &'a BitBoard {
+    type Output = BitBoard;
+
+    fn shr(self, shift: usize) -> BitBoard {
         match self {
             BitBoard::Small(b) => BitBoard::Small(b.wrapping_shr(shift as u32)),
             BitBoard::Medium(b) => BitBoard::Medium(b.wrapping_shr(shift as u32)),
@@ -102,6 +126,37 @@ impl Shr<usize> for BitBoard {
                 BitBoard::Large { data: new_data }
             }
         }
+    }
+}
+
+impl BitAnd for BitBoard {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self {
+        &self & &rhs
+    }
+}
+impl BitOr for BitBoard {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        &self | &rhs
+    }
+}
+impl Not for BitBoard {
+    type Output = Self;
+    fn not(self) -> Self {
+        !&self
+    }
+}
+impl Shl<usize> for BitBoard {
+    type Output = Self;
+    fn shl(self, rhs: usize) -> Self {
+        &self << rhs
+    }
+}
+impl Shr<usize> for BitBoard {
+    type Output = Self;
+    fn shr(self, rhs: usize) -> Self {
+        &self >> rhs
     }
 }
 

@@ -283,10 +283,7 @@ impl Rules {
         let mut generator = board.white_occupancy.zero_like();
         generator.set_bit(origin_idx);
 
-        let all_occupancy = board
-            .white_occupancy
-            .clone()
-            .or_with(&board.black_occupancy);
+        let all_occupancy = &board.white_occupancy | &board.black_occupancy;
 
         let empty = match all_occupancy {
             BitBoard::Small(b) => {
@@ -328,7 +325,8 @@ impl Rules {
             }
 
             let attacks = Self::kogge_stone_fill(&generator, &empty, stride, board, dir);
-            let valid_moves_bb = attacks & (!own_occupancy.clone());
+
+            let valid_moves_bb = &attacks & &(!own_occupancy);
 
             for to_idx in valid_moves_bb.iter_indices() {
                 if to_idx == origin_idx {
@@ -361,33 +359,33 @@ impl Rules {
         for _ in 0..steps {
             let mask = Self::get_validity_mask(board, direction, shift_amt);
 
-            let g_masked = g.clone() & mask.clone();
+            let g_masked = &g & &mask;
             let shifted_g = if stride > 0 {
-                g_masked << (stride.abs() as usize * shift_amt)
+                &g_masked << (stride.abs() as usize * shift_amt)
             } else {
-                g_masked >> (stride.abs() as usize * shift_amt)
+                &g_masked >> (stride.abs() as usize * shift_amt)
             };
 
-            let p_masked = p.clone() & mask;
+            let p_masked = &p & &mask;
             let shifted_p = if stride > 0 {
-                p_masked << (stride.abs() as usize * shift_amt)
+                &p_masked << (stride.abs() as usize * shift_amt)
             } else {
-                p_masked >> (stride.abs() as usize * shift_amt)
+                &p_masked >> (stride.abs() as usize * shift_amt)
             };
 
-            g = g | (shifted_g & p.clone());
-            p = p & shifted_p;
+            g = &g | &(&shifted_g & &p);
+            p = &p & &shifted_p;
 
             shift_amt *= 2;
         }
 
         let mask = Self::get_validity_mask(board, direction, 1);
-        let g_masked = g & mask;
+        let g_masked = &g & &mask;
 
         let attacks = if stride > 0 {
-            g_masked << stride.abs() as usize
+            &g_masked << stride.abs() as usize
         } else {
-            g_masked >> stride.abs() as usize
+            &g_masked >> stride.abs() as usize
         };
 
         attacks
