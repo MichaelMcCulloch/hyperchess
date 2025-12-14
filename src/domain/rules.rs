@@ -269,7 +269,7 @@ impl Rules {
         false
     }
 
-    fn scan_ray_for_threat(
+    pub fn scan_ray_for_threat(
         board: &Board,
         origin_vals: &[usize],
         direction: &[isize],
@@ -681,7 +681,7 @@ impl Rules {
         }
     }
 
-    fn get_rook_directions(dimension: usize) -> Vec<Vec<isize>> {
+    pub fn get_rook_directions(dimension: usize) -> Vec<Vec<isize>> {
         let mut dirs = Vec::new();
 
         for i in 0..dimension {
@@ -694,7 +694,7 @@ impl Rules {
         dirs
     }
 
-    fn get_bishop_directions(dimension: usize) -> Vec<Vec<isize>> {
+    pub fn get_bishop_directions(dimension: usize) -> Vec<Vec<isize>> {
         let mut dirs = Vec::new();
         let num_dirs = 3_usize.pow(dimension as u32);
         for i in 0..num_dirs {
@@ -724,7 +724,7 @@ impl Rules {
         dirs
     }
 
-    fn get_knight_offsets(dimension: usize) -> Vec<Vec<isize>> {
+    pub fn get_knight_offsets(dimension: usize) -> Vec<Vec<isize>> {
         let mut offsets = Vec::new();
 
         for i in 0..dimension {
@@ -746,7 +746,7 @@ impl Rules {
         offsets
     }
 
-    fn get_king_offsets(dimension: usize) -> Vec<Vec<isize>> {
+    pub fn get_king_offsets(dimension: usize) -> Vec<Vec<isize>> {
         let mut offsets = Vec::new();
         let num_dirs = 3_usize.pow(dimension as u32);
         for i in 0..num_dirs {
@@ -773,7 +773,10 @@ impl Rules {
         offsets
     }
 
-    fn get_pawn_capture_offsets_for_target(dimension: usize, attacker: Player) -> Vec<Vec<isize>> {
+    pub fn get_pawn_capture_offsets_for_target(
+        dimension: usize,
+        attacker: Player,
+    ) -> Vec<Vec<isize>> {
         let direction = match attacker {
             Player::White => -1,
             Player::Black => 1,
@@ -792,7 +795,7 @@ impl Rules {
         offsets
     }
 
-    fn apply_offset(
+    pub fn apply_offset(
         coords: &[usize],
         offset: &[isize],
         side: usize,

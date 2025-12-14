@@ -1,5 +1,6 @@
 use super::eval::Evaluator;
 use super::mcts::MCTS;
+use super::see::SEE;
 use crate::config::{MctsConfig, MinimaxConfig};
 use crate::domain::board::Board;
 use crate::domain::models::{Move, PieceType, Player};
@@ -118,8 +119,10 @@ impl MinimaxBot {
             return beta;
         }
 
+        /*
         const DELTA_MARGIN: i32 = 200;
         if stand_pat + VAL_QUEEN + DELTA_MARGIN < alpha {}
+        */
 
         if stand_pat > alpha {
             alpha = stand_pat;
@@ -127,7 +130,22 @@ impl MinimaxBot {
 
         let moves = Rules::generate_loud_moves(board, player);
 
-        for mv in moves {
+        let mut sorted_moves: Vec<(Move, i32)> = moves
+            .into_iter()
+            .map(|m| {
+                let to_idx = board.coords_to_index(&m.to.values).unwrap_or(0);
+                let victim = self.get_piece_value(board, to_idx);
+                (m, victim)
+            })
+            .collect();
+        sorted_moves.sort_by(|a, b| b.1.cmp(&a.1));
+
+        for (mv, _) in sorted_moves {
+            let see_val = SEE::static_exchange_evaluation(board, &mv);
+            if see_val < 0 {
+                continue;
+            }
+
             let info = match board.apply_move(&mv) {
                 Ok(i) => i,
                 Err(_) => continue,
@@ -509,7 +527,7 @@ impl PlayerStrategy for MinimaxBot {
                     let mut alpha;
                     let mut beta;
 
-                    if d > 1 {
+                    if d > 4 {
                         alpha = prev_score - delta;
                         beta = prev_score + delta;
                     } else {
@@ -522,6 +540,7 @@ impl PlayerStrategy for MinimaxBot {
                         let mut best_move_this_iter = None;
                         let mut alpha_inner = alpha;
                         let mut failed_high = false;
+                        let mut failed_low = false;
 
                         for mv in &my_moves {
                             let info = local_board.apply_move(mv).unwrap();
@@ -560,8 +579,12 @@ impl PlayerStrategy for MinimaxBot {
                             break;
                         }
 
-                        if d > 1 {
-                            if best_score_this_iter <= alpha {
+                        if best_score_this_iter <= alpha {
+                            failed_low = true;
+                        }
+
+                        if d > 4 {
+                            if failed_low {
                                 beta = (alpha + beta) / 2;
                                 alpha -= delta;
                                 delta += delta / 2;

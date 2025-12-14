@@ -875,8 +875,155 @@ impl Board {
     pub fn clear_cell(&mut self, coord: &Coordinate) {
         if let Some(index) = self.coords_to_index(&coord.values) {
             self.remove_piece_at_index(index);
-            self.hash = self.zobrist.get_hash(self, Player::White);
         }
+    }
+
+    pub fn get_smallest_attacker(
+        &self,
+        target_sq: &Coordinate,
+        attacker: Player,
+    ) -> Option<(i32, usize)> {
+        let occupancy = match attacker {
+            Player::White => &self.white_occupancy,
+            Player::Black => &self.black_occupancy,
+        };
+
+        let target_idx = self.coords_to_index(&target_sq.values)?;
+
+        let pawn_attacker_offsets =
+            crate::domain::rules::Rules::get_pawn_capture_offsets_for_target(
+                self.dimension,
+                attacker.opponent(),
+            );
+        for offset in pawn_attacker_offsets {
+            if let Some(src) =
+                crate::domain::rules::Rules::apply_offset(&target_sq.values, &offset, self.side)
+            {
+                if let Some(idx) = self.coords_to_index(&src) {
+                    if occupancy.get_bit(idx) && self.pawns.get_bit(idx) {
+                        return Some((100, idx));
+                    }
+                }
+            }
+        }
+
+        let knight_offsets = crate::domain::rules::Rules::get_knight_offsets(self.dimension);
+        for offset in knight_offsets {
+            if let Some(src) =
+                crate::domain::rules::Rules::apply_offset(&target_sq.values, &offset, self.side)
+            {
+                if let Some(idx) = self.coords_to_index(&src) {
+                    if occupancy.get_bit(idx) && self.knights.get_bit(idx) {
+                        return Some((320, idx));
+                    }
+                }
+            }
+        }
+
+        let bishop_dirs = crate::domain::rules::Rules::get_bishop_directions(self.dimension);
+        for dir in &bishop_dirs {
+            if crate::domain::rules::Rules::scan_ray_for_threat(
+                self,
+                &target_sq.values,
+                dir,
+                attacker,
+                &[PieceType::Bishop],
+            ) {
+                if let Some(idx) =
+                    self.trace_ray_for_piece(target_sq, dir, attacker, PieceType::Bishop)
+                {
+                    return Some((330, idx));
+                }
+            }
+        }
+
+        let rook_dirs = crate::domain::rules::Rules::get_rook_directions(self.dimension);
+        for dir in &rook_dirs {
+            if crate::domain::rules::Rules::scan_ray_for_threat(
+                self,
+                &target_sq.values,
+                dir,
+                attacker,
+                &[PieceType::Rook],
+            ) {
+                if let Some(idx) =
+                    self.trace_ray_for_piece(target_sq, dir, attacker, PieceType::Rook)
+                {
+                    return Some((500, idx));
+                }
+            }
+        }
+
+        for dir in &bishop_dirs {
+            if let Some(idx) = self.trace_ray_for_piece(target_sq, dir, attacker, PieceType::Queen)
+            {
+                return Some((900, idx));
+            }
+        }
+        for dir in &rook_dirs {
+            if let Some(idx) = self.trace_ray_for_piece(target_sq, dir, attacker, PieceType::Queen)
+            {
+                return Some((900, idx));
+            }
+        }
+
+        let king_offsets = crate::domain::rules::Rules::get_king_offsets(self.dimension);
+        for offset in king_offsets {
+            if let Some(src) =
+                crate::domain::rules::Rules::apply_offset(&target_sq.values, &offset, self.side)
+            {
+                if let Some(idx) = self.coords_to_index(&src) {
+                    if occupancy.get_bit(idx) && self.kings.get_bit(idx) {
+                        return Some((20000, idx));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn trace_ray_for_piece(
+        &self,
+        origin_coord: &Coordinate,
+        dir: &[isize],
+        owner: Player,
+        pt: PieceType,
+    ) -> Option<usize> {
+        let mut current = origin_coord.values.clone();
+        let occupancy = &self.white_occupancy | &self.black_occupancy;
+        let my_occ = match owner {
+            Player::White => &self.white_occupancy,
+            Player::Black => &self.black_occupancy,
+        };
+
+        loop {
+            if let Some(next) = crate::domain::rules::Rules::apply_offset(&current, dir, self.side)
+            {
+                if let Some(idx) = self.coords_to_index(&next) {
+                    if occupancy.get_bit(idx) {
+                        if my_occ.get_bit(idx) {
+                            let is_type = match pt {
+                                PieceType::Bishop => self.bishops.get_bit(idx),
+                                PieceType::Rook => self.rooks.get_bit(idx),
+                                PieceType::Queen => self.queens.get_bit(idx),
+                                _ => false,
+                            };
+                            if is_type {
+                                return Some(idx);
+                            }
+                        }
+                        break;
+                    }
+                    current = next;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        None
     }
 
     pub fn check_status(&self, _player_to_move: Player) -> GameResult {
