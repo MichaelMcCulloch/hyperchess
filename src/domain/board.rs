@@ -3,7 +3,7 @@ use crate::domain::models::{GameResult, Move, Piece, PieceType, Player};
 use crate::domain::zobrist::ZobristKeys;
 use smallvec::{smallvec, SmallVec};
 use std::fmt;
-use std::ops::{BitAnd, BitOr, Not, Shl, Shr, Sub};
+use std::ops::{BitAnd, BitOr, Not, Shl, Shr};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -11,6 +11,110 @@ pub enum BitBoard {
     Small(u32),
     Medium(u128),
     Large { data: Vec<u64> },
+}
+
+impl BitAnd for BitBoard {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self {
+        match (self, rhs) {
+            (BitBoard::Small(a), BitBoard::Small(b)) => BitBoard::Small(a & b),
+            (BitBoard::Medium(a), BitBoard::Medium(b)) => BitBoard::Medium(a & b),
+            (BitBoard::Large { data: a }, BitBoard::Large { data: b }) => {
+                let len = std::cmp::max(a.len(), b.len());
+                let mut new_data = vec![0; len];
+                for i in 0..len {
+                    let val_a = a.get(i).copied().unwrap_or(0);
+                    let val_b = b.get(i).copied().unwrap_or(0);
+                    new_data[i] = val_a & val_b;
+                }
+                BitBoard::Large { data: new_data }
+            }
+            _ => panic!("Mismatched BitBoard types in BitAnd"),
+        }
+    }
+}
+
+impl BitOr for BitBoard {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        self.or_with(&rhs)
+    }
+}
+
+impl Not for BitBoard {
+    type Output = Self;
+    fn not(self) -> Self {
+        match self {
+            BitBoard::Small(a) => BitBoard::Small(!a),
+            BitBoard::Medium(a) => BitBoard::Medium(!a),
+            BitBoard::Large { data } => {
+                let new_data = data.iter().map(|&x| !x).collect();
+                BitBoard::Large { data: new_data }
+            }
+        }
+    }
+}
+
+impl Shl<usize> for BitBoard {
+    type Output = Self;
+    fn shl(self, shift: usize) -> Self {
+        match self {
+            BitBoard::Small(b) => BitBoard::Small(b.wrapping_shl(shift as u32)),
+            BitBoard::Medium(b) => BitBoard::Medium(b.wrapping_shl(shift as u32)),
+            BitBoard::Large { data } => {
+                let chunks_shift = shift / 64;
+                let bits_shift = shift % 64;
+                let mut new_data = vec![0; data.len()];
+
+                for i in 0..data.len() {
+                    if i + chunks_shift < data.len() {
+                        new_data[i + chunks_shift] |= data[i] << bits_shift;
+                    }
+                    if bits_shift > 0 && i + chunks_shift + 1 < data.len() {
+                        new_data[i + chunks_shift + 1] |= data[i] >> (64 - bits_shift);
+                    }
+                }
+                BitBoard::Large { data: new_data }
+            }
+        }
+    }
+}
+
+impl Shr<usize> for BitBoard {
+    type Output = Self;
+    fn shr(self, shift: usize) -> Self {
+        match self {
+            BitBoard::Small(b) => BitBoard::Small(b.wrapping_shr(shift as u32)),
+            BitBoard::Medium(b) => BitBoard::Medium(b.wrapping_shr(shift as u32)),
+            BitBoard::Large { data } => {
+                let chunks_shift = shift / 64;
+                let bits_shift = shift % 64;
+                let mut new_data = vec![0; data.len()];
+
+                for i in 0..data.len() {
+                    if i >= chunks_shift {
+                        new_data[i - chunks_shift] |= data[i] >> bits_shift;
+                        if bits_shift > 0 && i > chunks_shift {
+                            new_data[i - chunks_shift - 1] |= data[i] << (64 - bits_shift);
+                        }
+                    }
+                }
+                BitBoard::Large { data: new_data }
+            }
+        }
+    }
+}
+
+impl BitBoard {
+    pub fn zero_like(&self) -> Self {
+        match self {
+            BitBoard::Small(_) => BitBoard::Small(0),
+            BitBoard::Medium(_) => BitBoard::Medium(0),
+            BitBoard::Large { data } => BitBoard::Large {
+                data: vec![0; data.len()],
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -726,10 +830,9 @@ impl BitBoard {
             BitBoard::Small(b) => (*b & (1 << index)) != 0,
             BitBoard::Medium(b) => (*b & (1 << index)) != 0,
             BitBoard::Large { data } => {
-                let chunk = index / 64;
-                let bit = index % 64;
-                if chunk < data.len() {
-                    (data[chunk] & (1 << bit)) != 0
+                let vec_idx = index / 64;
+                if let Some(chunk) = data.get(vec_idx) {
+                    (chunk & (1 << (index % 64))) != 0
                 } else {
                     false
                 }
@@ -737,110 +840,6 @@ impl BitBoard {
         }
     }
 
-    pub fn zero_like(&self) -> Self {
-        match self {
-            BitBoard::Small(_) => BitBoard::Small(0),
-            BitBoard::Medium(_) => BitBoard::Medium(0),
-            BitBoard::Large { data } => BitBoard::Large {
-                data: vec![0; data.len()],
-            },
-        }
-    }
-}
-
-impl BitAnd for BitBoard {
-    type Output = Self;
-    fn bitand(self, rhs: Self) -> Self {
-        match (self, rhs) {
-            (BitBoard::Small(a), BitBoard::Small(b)) => BitBoard::Small(a & b),
-            (BitBoard::Medium(a), BitBoard::Medium(b)) => BitBoard::Medium(a & b),
-            (BitBoard::Large { data: a }, BitBoard::Large { data: b }) => {
-                let len = std::cmp::max(a.len(), b.len());
-                let mut new_data = vec![0; len];
-                for i in 0..len {
-                    let val_a = a.get(i).copied().unwrap_or(0);
-                    let val_b = b.get(i).copied().unwrap_or(0);
-                    new_data[i] = val_a & val_b;
-                }
-                BitBoard::Large { data: new_data }
-            }
-            _ => panic!("Mismatched BitBoard types in BitAnd"),
-        }
-    }
-}
-
-impl BitOr for BitBoard {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self {
-        self.or_with(&rhs)
-    }
-}
-
-impl Not for BitBoard {
-    type Output = Self;
-    fn not(self) -> Self {
-        match self {
-            BitBoard::Small(a) => BitBoard::Small(!a),
-            BitBoard::Medium(a) => BitBoard::Medium(!a),
-            BitBoard::Large { data } => {
-                let new_data = data.iter().map(|&x| !x).collect();
-                BitBoard::Large { data: new_data }
-            }
-        }
-    }
-}
-
-impl Shl<usize> for BitBoard {
-    type Output = Self;
-    fn shl(self, shift: usize) -> Self {
-        match self {
-            BitBoard::Small(b) => BitBoard::Small(b.wrapping_shl(shift as u32)),
-            BitBoard::Medium(b) => BitBoard::Medium(b.wrapping_shl(shift as u32)),
-            BitBoard::Large { data } => {
-                let chunks_shift = shift / 64;
-                let bits_shift = shift % 64;
-                let mut new_data = vec![0; data.len()];
-
-                for i in 0..data.len() {
-                    if i + chunks_shift < data.len() {
-                        new_data[i + chunks_shift] |= data[i] << bits_shift;
-                    }
-                    if bits_shift > 0 && i + chunks_shift + 1 < data.len() {
-                        new_data[i + chunks_shift + 1] |= data[i] >> (64 - bits_shift);
-                    }
-                }
-                BitBoard::Large { data: new_data }
-            }
-        }
-    }
-}
-
-impl Shr<usize> for BitBoard {
-    type Output = Self;
-    fn shr(self, shift: usize) -> Self {
-        match self {
-            BitBoard::Small(b) => BitBoard::Small(b.wrapping_shr(shift as u32)),
-            BitBoard::Medium(b) => BitBoard::Medium(b.wrapping_shr(shift as u32)),
-            BitBoard::Large { data } => {
-                let chunks_shift = shift / 64;
-                let bits_shift = shift % 64;
-                let mut new_data = vec![0; data.len()];
-
-                for i in 0..data.len() {
-                    if i >= chunks_shift {
-                        new_data[i - chunks_shift] |= data[i] >> bits_shift;
-                        if bits_shift > 0 && i > chunks_shift {
-                            new_data[i - chunks_shift - 1] |= data[i] << (64 - bits_shift);
-                        }
-                    }
-                }
-                BitBoard::Large { data: new_data }
-            }
-        }
-    }
-}
-
-impl BitBoard {
     pub fn count_ones(&self) -> u32 {
         match self {
             BitBoard::Small(b) => b.count_ones(),
