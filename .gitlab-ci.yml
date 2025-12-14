@@ -1,0 +1,35 @@
+image: docker:latest
+
+services:
+  - docker:dind
+
+variables:
+  DOCKER_DRIVER: overlay2
+
+stages:
+  - test
+  - build
+
+test_server:
+  stage: test
+  script:
+    - docker build --target builder -t server-builder .
+    - docker run server-builder cargo test --release -- --test-threads=1
+
+build_client:
+  stage: build
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build -t $CI_REGISTRY_IMAGE/client:latest client/
+    - docker push $CI_REGISTRY_IMAGE/client:latest
+  only:
+    - main
+
+build_server:
+  stage: build
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build -t $CI_REGISTRY_IMAGE/server:latest .
+    - docker push $CI_REGISTRY_IMAGE/server:latest
+  only:
+    - main

@@ -25,6 +25,8 @@ RUN rm -rf src
 
 # Copy actual source code
 COPY . .
+# Update timestamps to force rebuild
+RUN touch src/main.rs src/lib.rs
 
 # Build the application
 RUN cargo build --release --features api
