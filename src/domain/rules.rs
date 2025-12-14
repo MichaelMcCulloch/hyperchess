@@ -22,6 +22,131 @@ impl Rules {
         moves
     }
 
+    pub fn count_piece_mobility(board: &Board, index: usize, piece_type: PieceType) -> i32 {
+        let coords = board.index_to_coords(index);
+        let coord = Coordinate::new(coords.clone());
+        let player = board
+            .get_piece_at_index(index)
+            .map(|p| p.owner)
+            .unwrap_or(Player::White);
+
+        let mut count = 0;
+
+        match piece_type {
+            PieceType::Pawn => {
+                return 0;
+            }
+            PieceType::Knight => {
+                let offsets = Self::get_knight_offsets(board.dimension);
+                return Self::count_leaper_moves(board, &coord, player, &offsets);
+            }
+            PieceType::King => {
+                let offsets = Self::get_king_offsets(board.dimension);
+                return Self::count_leaper_moves(board, &coord, player, &offsets);
+            }
+            PieceType::Rook => {
+                let dirs = Self::get_rook_directions(board.dimension);
+                return Self::count_slider_moves(board, &coord, player, &dirs);
+            }
+            PieceType::Bishop => {
+                let dirs = Self::get_bishop_directions(board.dimension);
+                return Self::count_slider_moves(board, &coord, player, &dirs);
+            }
+            PieceType::Queen => {
+                let r_dirs = Self::get_rook_directions(board.dimension);
+                let b_dirs = Self::get_bishop_directions(board.dimension);
+                count += Self::count_slider_moves(board, &coord, player, &r_dirs);
+                count += Self::count_slider_moves(board, &coord, player, &b_dirs);
+                return count;
+            }
+        }
+    }
+
+    fn count_leaper_moves(
+        board: &Board,
+        origin: &Coordinate,
+        player: Player,
+        offsets: &[Vec<isize>],
+    ) -> i32 {
+        let mut count = 0;
+        let same_occupancy = match player {
+            Player::White => &board.white_occupancy,
+            Player::Black => &board.black_occupancy,
+        };
+        for offset in offsets {
+            if let Some(target) = Self::apply_offset(&origin.values, offset, board.side) {
+                if let Some(idx) = board.coords_to_index(&target) {
+                    if !same_occupancy.get_bit(idx) {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    }
+
+    fn count_slider_moves(
+        board: &Board,
+        origin: &Coordinate,
+        player: Player,
+        directions: &[Vec<isize>],
+    ) -> i32 {
+        let origin_idx = board.coords_to_index(&origin.values).unwrap();
+        let mut count = 0;
+
+        let mut generator = board.white_occupancy.zero_like();
+        generator.set_bit(origin_idx);
+
+        let all_occupancy = &board.white_occupancy | &board.black_occupancy;
+        let own_occupancy = match player {
+            Player::White => &board.white_occupancy,
+            Player::Black => &board.black_occupancy,
+        };
+
+        let empty = match all_occupancy {
+            BitBoard::Small(b) => {
+                let mask =
+                    (1u32.checked_shl(board.total_cells as u32).unwrap_or(0)).wrapping_sub(1);
+                BitBoard::Small((!b) & mask)
+            }
+            BitBoard::Medium(b) => {
+                let mask =
+                    (1u128.checked_shl(board.total_cells as u32).unwrap_or(0)).wrapping_sub(1);
+                BitBoard::Medium((!b) & mask)
+            }
+            BitBoard::Large { data } => {
+                let mut new_data = Vec::with_capacity(data.len());
+                let mut remaining = board.total_cells;
+                for val in data {
+                    let limit = std::cmp::min(64, remaining);
+                    let mask = if limit == 64 {
+                        !0u64
+                    } else {
+                        (1u64 << limit) - 1
+                    };
+                    new_data.push((!val) & mask);
+                    remaining = remaining.saturating_sub(64);
+                }
+                BitBoard::Large { data: new_data }
+            }
+        };
+
+        for dir in directions {
+            let stride = Self::calculate_stride(board, dir);
+            if stride == 0 {
+                continue;
+            }
+            let attacks = Self::kogge_stone_fill(&generator, &empty, stride, board, dir);
+            let valid_moves = &attacks & &(!own_occupancy);
+            count += valid_moves.count_ones() as i32;
+
+            if valid_moves.get_bit(origin_idx) {
+                count -= 1;
+            }
+        }
+        count
+    }
+
     pub fn generate_loud_moves(board: &mut Board, player: Player) -> MoveList {
         let mut moves = MoveList::new();
         let pseudo_legal = Self::generate_pseudo_legal_moves(board, player);

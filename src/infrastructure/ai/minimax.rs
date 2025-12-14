@@ -1,3 +1,4 @@
+use super::eval::Evaluator;
 use super::mcts::MCTS;
 use crate::config::{MctsConfig, MinimaxConfig};
 use crate::domain::board::Board;
@@ -73,12 +74,12 @@ impl MinimaxBot {
             }
         }
 
-        let mut score = 0;
-        for i in board.white_occupancy.iter_indices() {
-            score += self.get_piece_value(board, i);
-        }
-        for i in board.black_occupancy.iter_indices() {
-            score -= self.get_piece_value(board, i);
+        let score = Evaluator::evaluate(board);
+
+        if let Some(p) = player_at_leaf {
+            if p == Player::Black {
+                return -score;
+            }
         }
         score
     }
