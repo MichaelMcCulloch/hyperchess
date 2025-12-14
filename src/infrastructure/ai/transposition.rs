@@ -35,7 +35,6 @@ pub struct LockFreeTT {
 
 impl LockFreeTT {
     pub fn new(size_mb: usize) -> Self {
-        // Entry size is 16 bytes (2 * u64)
         let size = size_mb * 1024 * 1024 / 16;
         let num_entries = size.next_power_of_two();
 
@@ -52,7 +51,7 @@ impl LockFreeTT {
 
     pub fn get(&self, hash: u64) -> Option<(i32, u8, Flag, Option<PackedMove>)> {
         let index = (hash as usize) & self.size_mask;
-        // Key is at 2*index, Data is at 2*index + 1
+
         let key_entry = self.table[index * 2].load(Ordering::Relaxed);
         let data_entry = self.table[index * 2 + 1].load(Ordering::Relaxed);
 
@@ -60,16 +59,6 @@ impl LockFreeTT {
             return None;
         }
 
-        // Decode data
-        // Layout:
-        // Score: 0-15 (16 bits)
-        // Depth: 16-23 (8 bits)
-        // Flag:  24-25 (2 bits)
-        // Promo: 26-29 (4 bits)
-        // From:  30-45 (16 bits)
-        // To:    46-61 (16 bits)
-
-        // Cast to i16 then i32 for sign extension
         let score = (data_entry & 0xFFFF) as i16 as i32;
         let depth = ((data_entry >> 16) & 0xFF) as u8;
         let flag_u8 = ((data_entry >> 24) & 0x3) as u8;
@@ -110,21 +99,15 @@ impl LockFreeTT {
         let key_idx = index * 2;
         let data_idx = index * 2 + 1;
 
-        // Optimistic replace: Always replace? Or depth-preferred?
-        // Stockfish uses depth-preferred or always-replace for new generation.
-        // For simple Lockless, always replace is fine, or check depth.
-        // Let's read current to check depth.
-
         let current_key = self.table[key_idx].load(Ordering::Relaxed);
         if current_key == hash {
             let current_data = self.table[data_idx].load(Ordering::Relaxed);
             let current_depth = ((current_data >> 16) & 0xFF) as u8;
             if current_depth > depth {
-                return; // Don't overwrite deeper search results
+                return;
             }
         }
 
-        // Encode data
         let score_part =
             (score.clamp(i16::MIN as i32 + 1, i16::MAX as i32 - 1) as i16) as u16 as u64;
         let depth_part = (depth as u64) << 16;
@@ -144,9 +127,6 @@ impl LockFreeTT {
 
         let new_data = score_part | depth_part | flag_part | move_part;
 
-        // Store data first then key? No, inconsistent.
-        // Ideally we XOR key with data, but here we have separate slots.
-        // Just store.
         self.table[data_idx].store(new_data, Ordering::Relaxed);
         self.table[key_idx].store(hash, Ordering::Relaxed);
     }

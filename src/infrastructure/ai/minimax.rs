@@ -156,7 +156,6 @@ impl MinimaxBot {
             if let (Some(f), Some(t)) = (from_idx, to_idx) {
                 if let Some(tm) = tt_move {
                     if tm.from_idx as usize == f && tm.to_idx as usize == t {
-                        // Hash move - highest priority
                         return -2_000_000_000;
                     }
                 }
@@ -225,7 +224,6 @@ impl MinimaxBot {
 
         let hash = board.hash;
 
-        // TT Read
         let mut tt_move = None;
         if let Some((tt_score, tt_depth, tt_flag, best_m)) = self.tt.get(hash) {
             tt_move = best_m;
@@ -245,12 +243,9 @@ impl MinimaxBot {
             return self.q_search(board, alpha, beta, player);
         }
 
-        // Null Move Pruning
-        // Only if depth >= 3, allow_null, and static eval suggests position seems good.
         if allow_null && depth >= 3 {
             let static_eval = self.evaluate(board, None);
             if static_eval >= beta {
-                // Only do expensive check check if static eval passed
                 let in_check = if let Some(king_pos) = board.get_king_coordinate(player) {
                     Rules::is_square_attacked(board, &king_pos, player.opponent())
                 } else {
@@ -260,24 +255,23 @@ impl MinimaxBot {
                 if !in_check {
                     let r = if depth > 6 { 3 } else { 2 };
 
-                    // Make null move
                     let null_info = board.make_null_move(player);
 
                     let score = -self.minimax(
                         board,
                         depth - 1 - r,
                         -beta,
-                        -beta + 1, // Null window around beta
+                        -beta + 1,
                         player.opponent(),
                         start_time,
-                        false, // Disable null move in recursive call
+                        false,
                         killers,
                     );
 
                     board.unmake_null_move(null_info);
 
                     if score >= beta {
-                        return beta; // Cutoff
+                        return beta;
                     }
                 }
             }
@@ -293,7 +287,6 @@ impl MinimaxBot {
             return 0;
         }
 
-        // Futility Pruning Pre-check
         let mut do_futility = false;
         if depth == 1 {
             let eval = self.evaluate(board, None);
@@ -323,7 +316,6 @@ impl MinimaxBot {
             let is_capture = info.captured.is_some();
             let is_promotion = mv.promotion.is_some();
 
-            // Futility Pruning check
             if do_futility && !is_capture && !is_promotion {
                 if in_check_cache.is_none() {
                     in_check_cache =
@@ -342,10 +334,7 @@ impl MinimaxBot {
             let mut score;
             let mut reduction = 0;
 
-            // Late Move Reduction (LMR)
             if i >= 4 && depth >= 3 {
-                // Check if move is quiet (no capture, no promotion)
-
                 if !is_capture && !is_promotion {
                     if in_check_cache.is_none() {
                         in_check_cache =
@@ -358,7 +347,7 @@ impl MinimaxBot {
 
                     if !in_check_cache.unwrap() {
                         reduction = if depth > 6 { 2 } else { 1 };
-                        // Don't reduce below depth 1
+
                         if depth - 1 < reduction {
                             reduction = 0;
                         }
@@ -378,7 +367,6 @@ impl MinimaxBot {
                     killers,
                 );
             } else {
-                // PVS: Null window search with LMR
                 score = -self.minimax(
                     board,
                     depth - 1 - reduction,
@@ -391,7 +379,6 @@ impl MinimaxBot {
                 );
 
                 if score > alpha && reduction > 0 {
-                    // LMR failed, re-search with full depth (still null window)
                     score = -self.minimax(
                         board,
                         depth - 1,
@@ -405,7 +392,6 @@ impl MinimaxBot {
                 }
 
                 if score > alpha && score < beta {
-                    // Fail high, re-search with full window
                     score = -self.minimax(
                         board,
                         depth - 1,
@@ -528,7 +514,7 @@ impl PlayerStrategy for MinimaxBot {
                             let score = -self.minimax(
                                 &mut local_board,
                                 d - 1,
-                                -beta, // Pass full beta? No, use window.
+                                -beta,
                                 -alpha_inner,
                                 player.opponent(),
                                 start_time,
@@ -553,26 +539,23 @@ impl PlayerStrategy for MinimaxBot {
 
                             if score >= beta {
                                 failed_high = true;
-                                break; // Fail high at root
+                                break;
                             }
                         }
 
                         if self.stop_flag.load(Ordering::Relaxed) {
-                            local_best_score = best_score_this_iter; // Partial result
+                            local_best_score = best_score_this_iter;
                             break;
                         }
 
-                        // Check aspiration results
                         if d > 1 {
                             if best_score_this_iter <= alpha {
-                                // Fail low
                                 beta = (alpha + beta) / 2;
                                 alpha -= delta;
                                 delta += delta / 2;
                                 continue;
                             }
                             if failed_high {
-                                // Fail high
                                 beta += delta;
                                 delta += delta / 2;
                                 continue;
@@ -582,7 +565,7 @@ impl PlayerStrategy for MinimaxBot {
                         local_best_score = best_score_this_iter;
                         local_best_move = best_move_this_iter;
                         prev_score = local_best_score;
-                        break; // Window OK
+                        break;
                     }
 
                     if self.stop_flag.load(Ordering::Relaxed) {

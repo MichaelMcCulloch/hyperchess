@@ -622,7 +622,6 @@ impl Board {
         self.history.push(self.hash);
         self.en_passant_target = None;
 
-        // Switch turn hash
         self.hash = self.zobrist.get_hash(self, player.opponent());
 
         UnmakeInfo {

@@ -64,7 +64,7 @@ impl Rules {
                 }
             }
         }
-        // Castling is not a loud move
+
         moves
     }
 
