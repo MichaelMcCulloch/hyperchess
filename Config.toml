@@ -1,10 +1,10 @@
 [minimax]
 depth = 4
 
-[mcts]
-depth = 50
-iterations = 50
-iter_per_thread = 10
+[mctsx]
+depth = 10
+iterations = 1
+iter_per_thread = 1
 
 [time]
 minutes = 2
