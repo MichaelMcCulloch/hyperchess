@@ -9,6 +9,7 @@ export interface ApiGameState {
     dimension: number;
     side: number;
     in_check: boolean;
+    sequence: number;
 }
 
 export interface ApiPiece {

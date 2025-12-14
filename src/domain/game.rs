@@ -58,4 +58,8 @@ impl Game {
     pub fn board(&self) -> &Board {
         &self.board
     }
+
+    pub fn move_history(&self) -> &Vec<(Player, Move)> {
+        &self.move_history
+    }
 }

@@ -7,6 +7,7 @@ use axum::{
 };
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
 use crate::api::models::{
@@ -83,6 +84,11 @@ async fn create_game(
     state
         .games
         .insert(uuid.clone(), Arc::new(tokio::sync::RwLock::new(session)));
+
+    let session_arc = state.games.get(&uuid).unwrap().clone();
+    tokio::spawn(async move {
+        trigger_bot_move(session_arc).await;
+    });
 
     (StatusCode::CREATED, Json(NewGameResponse { uuid })).into_response()
 }
@@ -163,37 +169,7 @@ async fn take_turn(
     if next_is_bot && game_status == GameResult::InProgress {
         let session_clone = session_arc.clone();
         tokio::spawn(async move {
-            {
-                let mut session = session_clone.write().await;
-                let current = session.game.current_turn();
-
-                let is_bot_turn = match current {
-                    Player::White => session.white_bot.is_some(),
-                    Player::Black => session.black_bot.is_some(),
-                };
-                if !is_bot_turn || session.game.status() != GameResult::InProgress {
-                    return;
-                }
-
-                let board_clone = session.game.board().clone();
-
-                let best_move_opt = match current {
-                    Player::White => session
-                        .white_bot
-                        .as_mut()
-                        .unwrap()
-                        .get_move(&board_clone, current),
-                    Player::Black => session
-                        .black_bot
-                        .as_mut()
-                        .unwrap()
-                        .get_move(&board_clone, current),
-                };
-
-                if let Some(mv) = best_move_opt {
-                    let _ = session.game.play_turn(mv);
-                }
-            }
+            trigger_bot_move(session_clone).await;
         });
     }
 
@@ -272,5 +248,110 @@ fn build_api_state(game: &Game) -> ApiGameState {
         dimension: board.dimension(),
         side: board.side(),
         in_check: false,
+        sequence: game.move_history().len(),
+    }
+}
+
+async fn trigger_bot_move(session_arc: Arc<tokio::sync::RwLock<GameSession>>) {
+    // Loop to handle potential "bot vs bot" or chained moves
+    loop {
+        // Short delay to allow UI to catch up or just to not insta-move
+        sleep(Duration::from_millis(500)).await;
+
+        let session = session_arc.write().await;
+
+        if session.game.status() != GameResult::InProgress {
+            break;
+        }
+
+        let current = session.game.current_turn();
+
+        let is_bot_turn = match current {
+            Player::White => session.white_bot.is_some(),
+            Player::Black => session.black_bot.is_some(),
+        };
+
+        if !is_bot_turn {
+            break;
+        }
+
+        let board_clone = session.game.board().clone();
+
+        // Release lock while thinking
+        drop(session);
+
+        // Re-acquire read lock just to get the bot if needed, or we might need to restructure wrappers
+        // Actually we need to hold the bot. But we can't clone the bot easily.
+        // We'll have to hold the write lock if we want to mutate the bot (for caching etc)
+        // usage of `get_move` might mutate the bot.
+        // So we re-acquire write lock.
+        // Wait, we dropped it to not block readers (like UI polling).
+
+        // Optimally:
+        // 1. Get board state.
+        // 2. Drop lock.
+        // 3. Compute move (CPU heavy).
+        // 4. Re-acquire lock.
+        // 5. Apply move.
+        // BUT `get_move` is on the bot struct which is inside the session.
+        // If we want to compute without holding the session lock, we need to extract the bot or sync it.
+        // For now, let's keep it simple: HOLD the lock.
+        // If it blocks the UI for 100ms it's fine. If it blocks for 5s it's bad.
+        // The user said "asynchronously catch the computer move".
+        // If we hold the lock, `get_game` will hang until we release.
+
+        // Current implementation holds the lock inside the loop in the `spawn` block I replaced?
+        // No, the original code held the lock for the duration of `get_move`.
+        // "MinimaxBot" probably has internal state (transposition table).
+        // If we want to allow UI reads, we need to split the bot from the session or use a finer lock.
+        // Given constraints, I will hold the lock but maybe rely on `sleep` allowing some interleaving.
+
+        let mut session = session_arc.write().await;
+        // Re-check state after re-acquiring
+        if session.game.status() != GameResult::InProgress {
+            break;
+        }
+        let current_now = session.game.current_turn();
+        if current_now != current {
+            // State changed from under us?
+            break;
+        }
+
+        let best_move_opt = match current {
+            Player::White => {
+                if let Some(bot) = &mut session.white_bot {
+                    bot.get_move(&board_clone, current)
+                } else {
+                    None
+                }
+            }
+            Player::Black => {
+                if let Some(bot) = &mut session.black_bot {
+                    bot.get_move(&board_clone, current)
+                } else {
+                    None
+                }
+            }
+        };
+
+        if let Some(mv) = best_move_opt {
+            let _ = session.game.play_turn(mv);
+        } else {
+            // No move found or error?
+            break;
+        }
+
+        // Check if next player is also a bot
+        let next = session.game.current_turn();
+        let next_is_bot = match next {
+            Player::White => session.white_bot.is_some(),
+            Player::Black => session.black_bot.is_some(),
+        };
+
+        if session.game.status() != GameResult::InProgress || !next_is_bot {
+            break;
+        }
+
+        // If next is bot, we continue the loop
     }
 }

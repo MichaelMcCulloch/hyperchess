@@ -176,7 +176,13 @@ const Game = () => {
         if (!uuid) return;
         try {
             const state = await getGame(uuid);
-            setGameState(state);
+            setGameState(prev => {
+                if (!prev || state.sequence >= prev.sequence) {
+                    return state;
+                }
+                console.log(`Ignoring stale state: new=${state.sequence}, current=${prev.sequence}`);
+                return prev;
+            });
         } catch (e) {
             console.error(e);
             setError("Failed to load game");
@@ -200,7 +206,12 @@ const Game = () => {
             if (isTarget) {
                 try {
                     const newState = await takeTurn(uuid!, selectedSquare, coord);
-                    setGameState(newState);
+                    setGameState(prev => {
+                        if (!prev || newState.sequence >= prev.sequence) {
+                             return newState;
+                        }
+                        return prev;
+                    });
                     setSelectedSquare(null);
                 } catch (e) {
                     console.error(e);

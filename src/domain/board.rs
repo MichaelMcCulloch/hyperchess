@@ -1,7 +1,7 @@
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{GameResult, Move, Piece, PieceType, Player};
 use crate::domain::zobrist::ZobristKeys;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not, Shl, ShlAssign, Shr, ShrAssign};

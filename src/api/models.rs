@@ -11,6 +11,7 @@ pub struct ApiGameState {
     pub dimension: usize,
     pub side: usize,
     pub in_check: bool,
+    pub sequence: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
