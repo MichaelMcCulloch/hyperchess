@@ -42,9 +42,6 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy config if exists
-COPY Config.toml ./
-
 # Copy binary from builder
 COPY --from=builder /app/target/release/hyperchess .
 
