@@ -5,7 +5,7 @@ use std::path::Path;
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
     pub minimax: MinimaxConfig,
-    pub mcts: MctsConfig,
+    pub mcts: Option<MctsConfig>,
     pub time: TimeConfig,
 }
 
@@ -43,11 +43,11 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             minimax: MinimaxConfig { depth: 4 },
-            mcts: MctsConfig {
+            mcts: Some(MctsConfig {
                 depth: 50,
                 iterations: 50,
                 iter_per_thread: 5.0,
-            },
+            }),
             time: TimeConfig { minutes: 2.0 },
         }
     }

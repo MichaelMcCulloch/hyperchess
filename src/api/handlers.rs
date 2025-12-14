@@ -48,23 +48,23 @@ async fn create_game(
         "cc" => {
             white_bot = Some(
                 MinimaxBot::new(&state.config.minimax, time_limit, dimension, side)
-                    .with_mcts(Some(state.config.mcts.clone())),
+                    .with_mcts(state.config.mcts.clone()),
             );
             black_bot = Some(
                 MinimaxBot::new(&state.config.minimax, time_limit, dimension, side)
-                    .with_mcts(Some(state.config.mcts.clone())),
+                    .with_mcts(state.config.mcts.clone()),
             );
         }
         "hc" => {
             black_bot = Some(
                 MinimaxBot::new(&state.config.minimax, time_limit, dimension, side)
-                    .with_mcts(Some(state.config.mcts.clone())),
+                    .with_mcts(state.config.mcts.clone()),
             );
         }
         "ch" => {
             white_bot = Some(
                 MinimaxBot::new(&state.config.minimax, time_limit, dimension, side)
-                    .with_mcts(Some(state.config.mcts.clone())),
+                    .with_mcts(state.config.mcts.clone()),
             );
         }
         "hh" => {}

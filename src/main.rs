@@ -51,7 +51,7 @@ fn run_cli() {
         "h" => Box::new(HumanConsolePlayer::new()),
         "c" => Box::new(
             MinimaxBot::new(&config.minimax, time_limit, dimension, side)
-                .with_mcts(Some(config.mcts.clone())),
+                .with_mcts(config.mcts.clone()),
         ),
         _ => Box::new(HumanConsolePlayer::new()),
     };
@@ -60,11 +60,11 @@ fn run_cli() {
         "h" => Box::new(HumanConsolePlayer::new()),
         "c" => Box::new(
             MinimaxBot::new(&config.minimax, time_limit, dimension, side)
-                .with_mcts(Some(config.mcts.clone())),
+                .with_mcts(config.mcts.clone()),
         ),
         _ => Box::new(
             MinimaxBot::new(&config.minimax, time_limit, dimension, side)
-                .with_mcts(Some(config.mcts.clone())),
+                .with_mcts(config.mcts.clone()),
         ),
     };
 
