@@ -3,7 +3,7 @@ import { useParams } from "react-router-dom";
 import { type ApiGameState, getGame, takeTurn } from "./api";
 import "./Game.css";
 
-// Import SVGs
+
 import wP from "./assets/pieces/wP.svg";
 import bP from "./assets/pieces/bP.svg";
 import wR from "./assets/pieces/wR.svg";
@@ -50,7 +50,7 @@ const RecursiveGrid = ({ state, selected, onSquareClick, currentDim, fixedCoords
             <div key={`slice-${targetIndex}-${i}`} className="dimension-slice">
                 <div className="slice-label">
                     {(() => {
-                        // Dim 2 (Index 2) -> Z. Dim 3 (Index 3) -> W. Dim 4+ -> D{Index+1}
+                        
                         if (targetIndex === 2) return `Z=${i + 1}`;
                         if (targetIndex === 3) return `W=${i + 1}`;
                         return `D${targetIndex + 1}=${i + 1}`;
@@ -67,7 +67,7 @@ const RecursiveGrid = ({ state, selected, onSquareClick, currentDim, fixedCoords
         );
     }
 
-    // CLI Layout: 3D = Row. 4D = Col of Rows.
+    
     const isRow = targetIndex % 2 === 0; 
     return (
         <div className={`recursive-grid ${isRow ? "row-layout" : "col-layout"}`}>
@@ -90,13 +90,13 @@ const Board2D = ({ state, selected, onSquareClick, fixedCoords }: Board2DProps) 
 
     const squares = [];
     
-    // 90 degrees Clockwise Rotation (corrected for White on Left):
-    // Screen Row (0..side-1) -> File (0..side-1) [Top is A]
-    // Screen Col (0..side-1) -> Rank (0..side-1) [Left is 1]
+    const invertColors = Object.entries(fixedCoords)
+        .reduce((sum, [_, val]) => sum + val, 0) % 2 !== 0;
+
     for (let row = 0; row < side; row++) {
         for (let col = 0; col < side; col++) {
-            const c = row; // File
-            const r = col; // Rank
+            const c = row; 
+            const r = col; 
 
             const isMatch = (pCoords: number[]) => {
                 if (pCoords[0] !== r || pCoords[1] !== c) return false;
@@ -116,8 +116,8 @@ const Board2D = ({ state, selected, onSquareClick, fixedCoords }: Board2DProps) 
                 return true;
             });
 
-            // Checkering pattern: (r+c)%2 works for standard board.
-            const isDark = (r + c) % 2 === 0; 
+            const baseDark = (r + c) % 2 === 0; 
+            const isDark = invertColors ? !baseDark : baseDark;
             
             const clickHandler = () => {
                 const coord = [];
