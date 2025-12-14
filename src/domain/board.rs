@@ -6,6 +6,31 @@ use std::fmt;
 use std::ops::{BitAnd, BitOr, Not, Shl, Shr};
 use std::sync::Arc;
 
+#[derive(Debug)]
+pub struct BoardCache {
+    pub index_to_coords: Vec<SmallVec<[usize; 4]>>,
+}
+
+impl BoardCache {
+    pub fn new(dimension: usize, side: usize) -> Self {
+        let total_cells = side.pow(dimension as u32);
+        let mut index_to_coords = Vec::with_capacity(total_cells);
+
+        for i in 0..total_cells {
+            let mut coords = SmallVec::with_capacity(dimension);
+            coords.resize(dimension, 0);
+            let mut temp = i;
+            for d in 0..dimension {
+                coords[d] = temp % side;
+                temp /= side;
+            }
+            index_to_coords.push(coords);
+        }
+
+        Self { index_to_coords }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BitBoard {
     Small(u32),
@@ -268,6 +293,7 @@ pub struct Board {
     pub kings: BitBoard,
 
     pub zobrist: Arc<ZobristKeys>,
+    pub cache: Arc<BoardCache>,
     pub hash: u64,
     pub history: Vec<u64>,
     pub en_passant_target: Option<(usize, usize)>,
@@ -280,6 +306,7 @@ impl Board {
         let empty = BitBoard::new_empty(dimension, side);
 
         let zobrist = Arc::new(ZobristKeys::new(total_cells));
+        let cache = Arc::new(BoardCache::new(dimension, side));
         let hash = 0;
 
         Board {
@@ -295,6 +322,7 @@ impl Board {
             queens: empty.clone(),
             kings: empty.clone(),
             zobrist,
+            cache,
             hash,
             history: Vec::new(),
             en_passant_target: None,
@@ -341,15 +369,7 @@ impl Board {
     }
 
     pub fn index_to_coords(&self, index: usize) -> SmallVec<[usize; 4]> {
-        let mut coords = SmallVec::with_capacity(self.dimension);
-
-        coords.resize(self.dimension, 0);
-        let mut temp = index;
-        for i in 0..self.dimension {
-            coords[i] = temp % self.side;
-            temp /= self.side;
-        }
-        coords
+        self.cache.index_to_coords[index].clone()
     }
 
     fn remove_piece_at_index(&mut self, index: usize) {
@@ -888,7 +908,7 @@ impl Board {
             Player::Black => &self.black_occupancy,
         };
 
-        let target_idx = self.coords_to_index(&target_sq.values)?;
+        let _target_idx = self.coords_to_index(&target_sq.values)?;
 
         let pawn_attacker_offsets =
             crate::domain::rules::Rules::get_pawn_capture_offsets_for_target(
