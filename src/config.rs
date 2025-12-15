@@ -21,6 +21,7 @@ pub struct MctsConfig {
     pub iterations: usize,
     pub iter_per_thread: f64,
     pub prior_weight: f64,
+    pub rollout_depth: usize,
 }
 
 impl Default for MctsConfig {
@@ -30,6 +31,7 @@ impl Default for MctsConfig {
             iterations: 50,
             iter_per_thread: 5.0,
             prior_weight: 1.4142,
+            rollout_depth: 0,
         }
     }
 }
@@ -63,8 +65,12 @@ impl AppConfig {
         eprintln!("  Minimax Depth: {}", config.minimax.depth);
         match &config.mcts {
             Some(mcts) => eprintln!(
-                "  MCTS: ENABLED (Depth: {}, Iterations: {}, Iter/Thread: {}, Prior: {})",
-                mcts.depth, mcts.iterations, mcts.iter_per_thread, mcts.prior_weight
+                "  MCTS: ENABLED (Depth: {}, Rollout: {}, Iterations: {}, Iter/Thread: {}, Prior: {})",
+                mcts.depth,
+                mcts.rollout_depth,
+                mcts.iterations,
+                mcts.iter_per_thread,
+                mcts.prior_weight
             ),
             None => eprintln!("  MCTS: DISABLED"),
         }
@@ -106,6 +112,12 @@ impl AppConfig {
             if let Ok(parsed) = val.parse() {
                 let mcts = self.mcts.get_or_insert(MctsConfig::default());
                 mcts.prior_weight = parsed;
+            }
+        }
+        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_ROLLOUT_DEPTH") {
+            if let Ok(parsed) = val.parse() {
+                let mcts = self.mcts.get_or_insert(MctsConfig::default());
+                mcts.rollout_depth = parsed;
             }
         }
         if let Ok(val) = std::env::var("HYPERCHESS_COMPUTE_MINUTES") {
@@ -198,6 +210,7 @@ mod tests {
         let _g2 = EnvVarGuard::new("HYPERCHESS_MCTS_DEPTH", "101");
         let _g3 = EnvVarGuard::new("HYPERCHESS_COMPUTE_CONCURRENCY", "42");
         let _g4 = EnvVarGuard::new("HYPERCHESS_API_PORT", "8888");
+        let _g5 = EnvVarGuard::new("HYPERCHESS_MCTS_ROLLOUT_DEPTH", "1");
 
         config.merge_env();
 

@@ -32,6 +32,80 @@ pub fn get_piece_value(board: &Board, idx: usize) -> i32 {
     }
 }
 
+pub fn minimax_shallow(
+    board: &mut Board,
+    depth: usize,
+    mut alpha: i32,
+    beta: i32,
+    player: Player,
+    nodes_searched: &Arc<AtomicUsize>,
+    stop_flag: &Arc<AtomicBool>,
+) -> i32 {
+    if stop_flag.load(Ordering::Relaxed) {
+        return 0;
+    }
+
+    if depth == 0 {
+        return q_search(board, alpha, beta, player, nodes_searched, stop_flag);
+    }
+
+    let moves = Rules::generate_legal_moves(board, player);
+    if moves.is_empty() {
+        if let Some(king_pos) = board.get_king_coordinate(player) {
+            if Rules::is_square_attacked(board, &king_pos, player.opponent()) {
+                return -30000 + (100 - depth as i32);
+            }
+        }
+        return 0;
+    }
+
+    let mut sorted_moves: Vec<(Move, i32)> = moves
+        .into_iter()
+        .map(|m| {
+            let to_idx = board.coords_to_index(&m.to.values).unwrap_or(0);
+            let victim = get_piece_value(board, to_idx);
+            let promo_bonus = if m.promotion.is_some() { 500 } else { 0 };
+            (m, victim + promo_bonus)
+        })
+        .collect();
+    sorted_moves.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let mut best_score = -i32::MAX;
+
+    for (mv, _) in sorted_moves {
+        let info = match board.apply_move(&mv) {
+            Ok(i) => i,
+            Err(_) => continue,
+        };
+
+        let score = -minimax_shallow(
+            board,
+            depth - 1,
+            -beta,
+            -alpha,
+            player.opponent(),
+            nodes_searched,
+            stop_flag,
+        );
+
+        board.unmake_move(&mv, info);
+
+        if score > best_score {
+            best_score = score;
+        }
+
+        if score > alpha {
+            alpha = score;
+        }
+
+        if alpha >= beta {
+            break;
+        }
+    }
+
+    best_score
+}
+
 pub fn q_search(
     board: &mut Board,
     mut alpha: i32,
@@ -40,7 +114,7 @@ pub fn q_search(
     nodes_searched: &Arc<AtomicUsize>,
     stop_flag: &Arc<AtomicBool>,
 ) -> i32 {
-    if nodes_searched.fetch_add(1, Ordering::Relaxed) % 2048 == 0 {
+    if nodes_searched.fetch_add(1, Ordering::Relaxed) % 4096 == 0 {
         if stop_flag.load(Ordering::Relaxed) {
             return 0;
         }

@@ -1,11 +1,12 @@
 [minimax]
-depth = 20
+depth = 1
 
 [mcts]
 iterations = 3000 
 depth = 50 
 iter_per_thread = 10
 prior_weight = 1.41
+rollout_depth = 1
 
 [compute]
 minutes = 2

@@ -31,10 +31,11 @@ pub struct MCTS {
     config: Option<MctsConfig>,
     stop_flag: Arc<AtomicBool>,
     nodes_searched: Arc<AtomicUsize>,
+    rollout_depth: usize,
 }
 
 use super::search_core::get_piece_value;
-use super::search_core::q_search;
+use super::search_core::minimax_shallow;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 
@@ -46,6 +47,7 @@ impl MCTS {
         config: Option<MctsConfig>,
         stop_flag: Option<Arc<AtomicBool>>,
         nodes_searched: Option<Arc<AtomicUsize>>,
+        rollout_depth: usize,
     ) -> Self {
         let mut root_clone = root_state.clone();
         let moves = Rules::generate_legal_moves(&mut root_clone, root_player);
@@ -65,6 +67,8 @@ impl MCTS {
             moves.push(m);
         }
 
+        let is_terminal = moves.is_empty() || root_clone.is_repetition();
+
         let root = Node {
             parent: None,
             children: Vec::new(),
@@ -72,7 +76,7 @@ impl MCTS {
             score: 0.0,
             prior: 1.0,
             unexpanded_moves: moves,
-            is_terminal: false,
+            is_terminal,
             move_to_node: None,
             player_to_move: root_player,
         };
@@ -85,6 +89,7 @@ impl MCTS {
             config,
             stop_flag: stop_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false))),
             nodes_searched: nodes_searched.unwrap_or_else(|| Arc::new(AtomicUsize::new(0))),
+            rollout_depth,
         }
     }
 
@@ -138,6 +143,7 @@ impl MCTS {
                     self.config.clone(),
                     Some(self.stop_flag.clone()),
                     Some(self.nodes_searched.clone()),
+                    self.rollout_depth,
                 );
                 local_mcts.execute_iterations(root_state, count);
 
@@ -235,6 +241,10 @@ impl MCTS {
             while self.nodes[node_idx].unexpanded_moves.is_empty()
                 && !self.nodes[node_idx].children.is_empty()
             {
+                if self.nodes[node_idx].is_terminal {
+                    break;
+                }
+
                 let best_child = self.select_child(node_idx);
                 node_idx = best_child;
 
@@ -246,7 +256,9 @@ impl MCTS {
                 current_player = current_player.opponent();
             }
 
-            if !self.nodes[node_idx].unexpanded_moves.is_empty() {
+            if !self.nodes[node_idx].is_terminal
+                && !self.nodes[node_idx].unexpanded_moves.is_empty()
+            {
                 let mv = self.nodes[node_idx].unexpanded_moves.pop().unwrap();
 
                 let info = current_state.apply_move(&mv).unwrap();
@@ -254,15 +266,22 @@ impl MCTS {
 
                 let next_player = current_player.opponent();
 
-                let legal_moves = Rules::generate_legal_moves(&mut current_state, next_player);
-                let is_terminal = legal_moves.is_empty();
+                let is_repetition = current_state.is_repetition();
+
+                let legal_moves = if is_repetition {
+                    MoveList::new()
+                } else {
+                    Rules::generate_legal_moves(&mut current_state, next_player)
+                };
+
+                let is_terminal = is_repetition || legal_moves.is_empty();
 
                 let mut prior = 1.0;
                 let to_idx = current_state.coords_to_index(&mv.to.values).unwrap_or(0);
                 if current_state.black_occupancy.get_bit(to_idx)
                     || current_state.white_occupancy.get_bit(to_idx)
                 {
-                    prior = 1.0;
+                    prior = 2.0;
                 }
 
                 let mut sorted_moves: Vec<(Move, i32)> = legal_moves
@@ -273,6 +292,7 @@ impl MCTS {
                         (m, victim)
                     })
                     .collect();
+
                 sorted_moves.sort_by(|a, b| a.1.cmp(&b.1));
 
                 let mut ordered_moves = MoveList::new();
@@ -321,7 +341,7 @@ impl MCTS {
         let mut best_score = -f64::INFINITY;
         let mut best_child = 0;
 
-        let maximize = parent.player_to_move == self.root_player;
+        let maximize = self.root_player == parent.player_to_move;
 
         let c_puct = self
             .config
@@ -331,13 +351,17 @@ impl MCTS {
 
         for &child_idx in &parent.children {
             let child = &self.nodes[child_idx];
-            let win_rate = if child.visits > 0 {
+            let mean_score = if child.visits > 0 {
                 child.score / child.visits as f64
             } else {
                 0.5
             };
 
-            let exploitation = if maximize { win_rate } else { 1.0 - win_rate };
+            let exploitation = if maximize {
+                mean_score
+            } else {
+                1.0 - mean_score
+            };
 
             let exploration = c_puct * child.prior * (sqrt_n / (1.0 + child.visits as f64));
             let uct_value = exploitation + exploration;
@@ -351,8 +375,9 @@ impl MCTS {
     }
 
     fn rollout_q_search(&self, state: &mut Board, player: Player) -> f64 {
-        let score_cp = q_search(
+        let score_cp = minimax_shallow(
             state,
+            self.rollout_depth,
             -i32::MAX,
             i32::MAX,
             player,
@@ -373,6 +398,10 @@ impl MCTS {
     }
 
     fn evaluate_terminal(&self, state: &Board, player_at_leaf: Player) -> f64 {
+        if state.is_repetition() {
+            return 0.5;
+        }
+
         if let Some(king_pos) = state.get_king_coordinate(player_at_leaf) {
             if Rules::is_square_attacked(state, &king_pos, player_at_leaf.opponent()) {
                 if let Some(tt) = &self.tt {
@@ -398,7 +427,6 @@ impl MCTS {
         loop {
             let node = &mut self.nodes[node_idx];
             node.visits += 1;
-
             node.score += score;
 
             if let Some(parent) = node.parent {
@@ -409,6 +437,3 @@ impl MCTS {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {}

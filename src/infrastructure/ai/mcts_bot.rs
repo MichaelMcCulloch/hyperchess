@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::MctsConfig;
+use crate::config::{AppConfig, MctsConfig};
 use crate::domain::board::Board;
 use crate::domain::models::{Move, Player};
 use crate::domain::services::PlayerStrategy;
@@ -19,9 +19,9 @@ pub struct MctsBot {
 }
 
 impl MctsBot {
-    pub fn new(config: &MctsConfig, time_limit_ms: u64) -> Self {
+    pub fn new(mcts_config: &MctsConfig, time_limit_ms: u64) -> Self {
         Self {
-            config: config.clone(),
+            config: mcts_config.clone(),
             time_limit: Duration::from_millis(time_limit_ms),
             tt: Arc::new(LockFreeTT::new(256)),
             stop_flag: Arc::new(AtomicBool::new(false)),
@@ -93,6 +93,7 @@ impl PlayerStrategy for MctsBot {
             Some(self.config.clone()),
             Some(self.stop_flag.clone()),
             Some(self.nodes_searched.clone()),
+            self.config.rollout_depth,
         );
 
         let (_win_rate, best_move) = mcts.run(board, self.config.iterations);
