@@ -20,7 +20,7 @@ pub struct MctsBot {
 }
 
 impl MctsBot {
-    pub fn new(config: &AppConfig, time_limit_ms: u64) -> Self {
+    pub fn new(config: &AppConfig) -> Self {
         let mcts_config = config.mcts.clone().unwrap_or_else(|| MctsConfig {
             iterations: 1000,
             depth: 50,
@@ -31,19 +31,12 @@ impl MctsBot {
 
         Self {
             config: mcts_config,
-            time_limit: Duration::from_millis(time_limit_ms),
+            time_limit: Duration::from_secs(config.compute.minutes * 60),
             tt: Arc::new(LockFreeTT::new(config.compute.memory)),
             stop_flag: Arc::new(AtomicBool::new(false)),
             nodes_searched: Arc::new(AtomicUsize::new(0)),
-            num_threads: std::thread::available_parallelism()
-                .map(|n| n.get().saturating_sub(2).max(1))
-                .unwrap_or(1),
+            num_threads: config.compute.concurrency.max(1),
         }
-    }
-
-    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
-        self.num_threads = concurrency;
-        self
     }
 }
 
@@ -111,8 +104,7 @@ impl PlayerStrategy for MctsBot {
             Some(self.stop_flag.clone()),
             Some(self.nodes_searched.clone()),
             self.config.rollout_depth,
-        )
-        .with_concurrency(self.num_threads);
+        );
 
         let (_win_rate, best_move) = mcts.run(board, self.config.iterations);
 

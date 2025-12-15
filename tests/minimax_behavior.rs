@@ -1,4 +1,4 @@
-use hyperchess::config::MinimaxConfig;
+use hyperchess::config::{AppConfig, MinimaxConfig};
 use hyperchess::domain::board::Board;
 use hyperchess::domain::coordinate::Coordinate;
 use hyperchess::domain::models::{Piece, PieceType, Player};
@@ -112,8 +112,8 @@ fn test_detect_checkmate_in_one() {
         )
         .unwrap();
 
-    let config = MinimaxConfig { depth: 2 };
-    let mut bot = MinimaxBot::new(&config, 1000, 2, 4, 256);
+    let config = AppConfig::default();
+    let mut bot = MinimaxBot::new(&config, 2, 4);
     let mv = bot
         .get_move(&board, Player::White)
         .expect("Should return a move");

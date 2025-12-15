@@ -1,5 +1,5 @@
 use super::eval::Evaluator;
-use crate::config::MinimaxConfig;
+use crate::config::{AppConfig, MinimaxConfig};
 use crate::domain::board::Board;
 use crate::domain::models::{Move, PieceType, Player};
 use crate::domain::rules::Rules;
@@ -28,30 +28,15 @@ pub struct MinimaxBot {
 }
 
 impl MinimaxBot {
-    pub fn new(
-        config: &MinimaxConfig,
-        time_limit_ms: u64,
-        _dimension: usize,
-        _side: usize,
-        memory_mb: usize,
-    ) -> Self {
-        let num_threads = std::thread::available_parallelism()
-            .map(|n| n.get().saturating_sub(2).max(1))
-            .unwrap_or(1);
-
+    pub fn new(config: &AppConfig, _dimension: usize, _side: usize) -> Self {
         Self {
-            depth: config.depth,
-            time_limit: Duration::from_millis(time_limit_ms),
-            tt: Arc::new(LockFreeTT::new(memory_mb)),
+            depth: config.minimax.depth,
+            time_limit: Duration::from_secs(config.compute.minutes * 60),
+            tt: Arc::new(LockFreeTT::new(config.compute.memory)),
             stop_flag: Arc::new(AtomicBool::new(false)),
             nodes_searched: Arc::new(AtomicUsize::new(0)),
-            num_threads,
+            num_threads: config.compute.concurrency.max(1),
         }
-    }
-
-    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
-        self.num_threads = concurrency;
-        self
     }
 
     fn evaluate(&self, board: &Board, player_at_leaf: Option<Player>) -> i32 {

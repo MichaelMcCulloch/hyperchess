@@ -38,7 +38,7 @@ impl Default for MctsConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ComputeConfig {
-    pub minutes: f64,
+    pub minutes: u64,
     pub concurrency: usize,
     pub memory: usize,
 }
@@ -147,7 +147,7 @@ impl AppConfig {
 impl Default for ComputeConfig {
     fn default() -> Self {
         Self {
-            minutes: 2.0,
+            minutes: 2,
             concurrency: 2,
             memory: 1024,
         }

@@ -95,11 +95,6 @@ impl MCTS {
         }
     }
 
-    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
-        self.num_threads = concurrency;
-        self
-    }
-
     pub fn with_serial(mut self) -> Self {
         self.serial = true;
         self

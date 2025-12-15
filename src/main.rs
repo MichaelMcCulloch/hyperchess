@@ -27,7 +27,6 @@ fn run_cli() {
     let side = 8;
     let mut player_white_type = "h";
     let mut player_black_type = "c";
-    let time_limit = (config.compute.minutes * 60.0 * 1000.0) as u64;
 
     if args.len() > 1 {
         if let Ok(d) = args[1].parse::<usize>() {
@@ -49,18 +48,9 @@ fn run_cli() {
 
     let create_bot = |config: &AppConfig| -> Box<dyn PlayerStrategy> {
         if config.mcts.is_some() {
-            Box::new(MctsBot::new(config, time_limit).with_concurrency(config.compute.concurrency))
+            Box::new(MctsBot::new(config))
         } else {
-            Box::new(
-                MinimaxBot::new(
-                    &config.minimax,
-                    time_limit,
-                    dimension,
-                    side,
-                    config.compute.memory,
-                )
-                .with_concurrency(config.compute.concurrency),
-            )
+            Box::new(MinimaxBot::new(&config, dimension, side))
         }
     };
 

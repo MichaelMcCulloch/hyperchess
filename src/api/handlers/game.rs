@@ -29,7 +29,6 @@ pub async fn create_game(
 
     let board = Board::new(dimension, side);
     let game = Game::new(board);
-    let time_limit = (state.config.compute.minutes * 60.0 * 1000.0) as u64;
 
     let mut white_bot = None;
     let mut black_bot = None;
@@ -37,17 +36,14 @@ pub async fn create_game(
     let create_bot =
         |config: &crate::config::AppConfig| -> Box<dyn crate::domain::services::PlayerStrategy + Send + Sync> {
             if config.mcts.is_some() {
-                Box::new(MctsBot::new(config, time_limit).with_concurrency(config.compute.concurrency))
+                Box::new(MctsBot::new(config))
             } else {
                 Box::new(
                     MinimaxBot::new(
-                        &config.minimax,
-                        time_limit,
+                        &config,
                         dimension,
                         side,
-                        config.compute.memory,
                     )
-                    .with_concurrency(config.compute.concurrency),
                 )
             }
         };
