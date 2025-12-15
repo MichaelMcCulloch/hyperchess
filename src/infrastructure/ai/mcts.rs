@@ -32,6 +32,7 @@ pub struct MCTS {
     stop_flag: Arc<AtomicBool>,
     nodes_searched: Arc<AtomicUsize>,
     rollout_depth: usize,
+    num_threads: usize,
 }
 
 use super::search_core::get_piece_value;
@@ -90,7 +91,13 @@ impl MCTS {
             stop_flag: stop_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false))),
             nodes_searched: nodes_searched.unwrap_or_else(|| Arc::new(AtomicUsize::new(0))),
             rollout_depth,
+            num_threads: 0,
         }
+    }
+
+    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
+        self.num_threads = concurrency;
+        self
     }
 
     pub fn with_serial(mut self) -> Self {
@@ -103,7 +110,11 @@ impl MCTS {
             return (0.5, None);
         }
 
-        let num_threads = rayon::current_num_threads();
+        let num_threads = if self.num_threads > 0 {
+            self.num_threads
+        } else {
+            rayon::current_num_threads()
+        };
 
         let min_iter = self
             .config

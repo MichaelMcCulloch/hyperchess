@@ -35,13 +35,19 @@ pub async fn create_game(
     let mut black_bot = None;
 
     let create_bot =
-        |config: &crate::config::AppConfig| -> Box<dyn crate::domain::services::PlayerStrategy> {
-            if let Some(mcts_config) = &config.mcts {
-                Box::new(MctsBot::new(mcts_config, time_limit))
+        |config: &crate::config::AppConfig| -> Box<dyn crate::domain::services::PlayerStrategy + Send + Sync> {
+            if config.mcts.is_some() {
+                Box::new(MctsBot::new(config, time_limit).with_concurrency(config.compute.concurrency))
             } else {
                 Box::new(
-                    MinimaxBot::new(&config.minimax, time_limit, dimension, side)
-                        .with_concurrency(config.compute.concurrency),
+                    MinimaxBot::new(
+                        &config.minimax,
+                        time_limit,
+                        dimension,
+                        side,
+                        config.compute.memory,
+                    )
+                    .with_concurrency(config.compute.concurrency),
                 )
             }
         };

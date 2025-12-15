@@ -198,7 +198,7 @@ pub fn q_search(
 
     let hash = board.hash;
     if let Some(t) = tt {
-        if let Some((tt_score, tt_depth, tt_flag, _)) = t.get(hash) {
+        if let Some((tt_score, _, tt_flag, _)) = t.get(hash) {
             match tt_flag {
                 Flag::Exact => return tt_score,
                 Flag::LowerBound => alpha = alpha.max(tt_score),

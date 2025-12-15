@@ -16,6 +16,7 @@ pub struct MctsBot {
     tt: Arc<LockFreeTT>,
     stop_flag: Arc<AtomicBool>,
     nodes_searched: Arc<AtomicUsize>,
+    num_threads: usize,
 }
 
 impl MctsBot {
@@ -34,7 +35,15 @@ impl MctsBot {
             tt: Arc::new(LockFreeTT::new(config.compute.memory)),
             stop_flag: Arc::new(AtomicBool::new(false)),
             nodes_searched: Arc::new(AtomicUsize::new(0)),
+            num_threads: std::thread::available_parallelism()
+                .map(|n| n.get().saturating_sub(2).max(1))
+                .unwrap_or(1),
         }
+    }
+
+    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
+        self.num_threads = concurrency;
+        self
     }
 }
 
@@ -102,7 +111,8 @@ impl PlayerStrategy for MctsBot {
             Some(self.stop_flag.clone()),
             Some(self.nodes_searched.clone()),
             self.config.rollout_depth,
-        );
+        )
+        .with_concurrency(self.num_threads);
 
         let (_win_rate, best_move) = mcts.run(board, self.config.iterations);
 

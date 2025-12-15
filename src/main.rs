@@ -49,7 +49,7 @@ fn run_cli() {
 
     let create_bot = |config: &AppConfig| -> Box<dyn PlayerStrategy> {
         if config.mcts.is_some() {
-            Box::new(MctsBot::new(config, time_limit))
+            Box::new(MctsBot::new(config, time_limit).with_concurrency(config.compute.concurrency))
         } else {
             Box::new(
                 MinimaxBot::new(

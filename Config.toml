@@ -2,9 +2,9 @@
 depth = 1
 
 [mcts]
-iterations = 3000 
+iterations = 30000 
 depth = 50 
-iter_per_thread = 10
+iter_per_thread = 100
 prior_weight = 1.41
 rollout_depth = 0
 
