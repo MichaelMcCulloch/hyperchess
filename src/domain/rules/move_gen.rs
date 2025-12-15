@@ -1,10 +1,37 @@
 use smallvec::SmallVec;
+use std::cell::RefCell;
 
 use crate::domain::board::{BitBoard, Board};
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{Move, PieceType, Player};
 use crate::domain::rules::attacks::is_square_attacked;
 use crate::domain::rules::{MoveList, apply_offset};
+
+struct MoveGenBuffer {
+    generator: BitBoard,
+    g: BitBoard,
+    p: BitBoard,
+    shifted_g: BitBoard,
+    shifted_p: BitBoard,
+    temp: BitBoard,
+}
+
+impl Default for MoveGenBuffer {
+    fn default() -> Self {
+        Self {
+            generator: BitBoard::Small(0),
+            g: BitBoard::Small(0),
+            p: BitBoard::Small(0),
+            shifted_g: BitBoard::Small(0),
+            shifted_p: BitBoard::Small(0),
+            temp: BitBoard::Small(0),
+        }
+    }
+}
+
+thread_local! {
+    static MOVE_GEN_BUFFER: RefCell<MoveGenBuffer> = RefCell::new(MoveGenBuffer::default());
+}
 
 pub fn generate_legal_moves(board: &mut Board, player: Player) -> MoveList {
     let mut moves = MoveList::new();
@@ -82,105 +109,130 @@ fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
         Player::Black => &board.black_occupancy,
     };
 
-    let mut generator = board.white_occupancy.zero_like();
-    let mut g = board.white_occupancy.zero_like();
-    let mut p = board.white_occupancy.zero_like();
-    let mut shifted_g = board.white_occupancy.zero_like();
-    let mut shifted_p = board.white_occupancy.zero_like();
-    let mut temp = board.white_occupancy.zero_like();
+    MOVE_GEN_BUFFER.with(|buffer_ref| {
+        let mut buffer = buffer_ref.borrow_mut();
 
-    for i in occupancy.iter_indices() {
-        let coord_vals = board.index_to_coords(i);
-        let coord = Coordinate::new(coord_vals.clone());
+        buffer
+            .generator
+            .ensure_capacity_and_clear(&board.white_occupancy);
+        buffer.g.ensure_capacity_and_clear(&board.white_occupancy);
+        buffer.p.ensure_capacity_and_clear(&board.white_occupancy);
+        buffer
+            .shifted_g
+            .ensure_capacity_and_clear(&board.white_occupancy);
+        buffer
+            .shifted_p
+            .ensure_capacity_and_clear(&board.white_occupancy);
+        buffer
+            .temp
+            .ensure_capacity_and_clear(&board.white_occupancy);
 
-        let piece_type = if board.pawns.get_bit(i) {
-            PieceType::Pawn
-        } else if board.knights.get_bit(i) {
-            PieceType::Knight
-        } else if board.bishops.get_bit(i) {
-            PieceType::Bishop
-        } else if board.rooks.get_bit(i) {
-            PieceType::Rook
-        } else if board.queens.get_bit(i) {
-            PieceType::Queen
-        } else if board.kings.get_bit(i) {
-            PieceType::King
-        } else {
-            continue;
-        };
+        let MoveGenBuffer {
+            generator,
+            g,
+            p,
+            shifted_g,
+            shifted_p,
+            temp,
+        } = &mut *buffer;
 
-        match piece_type {
-            PieceType::Pawn => generate_pawn_moves(board, &coord, player, &mut moves),
-            PieceType::Knight => generate_leaper_moves(
-                board,
-                &coord,
-                player,
-                &board.cache.knight_offsets,
-                &mut moves,
-            ),
-            PieceType::King => {
-                generate_leaper_moves(board, &coord, player, &board.cache.king_offsets, &mut moves)
-            }
-            PieceType::Rook => generate_slider_moves_bitwise(
-                board,
-                i,
-                &coord,
-                player,
-                &board.cache.rook_directions,
-                &mut moves,
-                &mut generator,
-                &mut g,
-                &mut p,
-                &mut shifted_g,
-                &mut shifted_p,
-                &mut temp,
-            ),
-            PieceType::Bishop => generate_slider_moves_bitwise(
-                board,
-                i,
-                &coord,
-                player,
-                &board.cache.bishop_directions,
-                &mut moves,
-                &mut generator,
-                &mut g,
-                &mut p,
-                &mut shifted_g,
-                &mut shifted_p,
-                &mut temp,
-            ),
-            PieceType::Queen => {
-                generate_slider_moves_bitwise(
+        for i in occupancy.iter_indices() {
+            let coord_vals = board.index_to_coords(i);
+            let coord = Coordinate::new(coord_vals.clone());
+
+            let piece_type = if board.pawns.get_bit(i) {
+                PieceType::Pawn
+            } else if board.knights.get_bit(i) {
+                PieceType::Knight
+            } else if board.bishops.get_bit(i) {
+                PieceType::Bishop
+            } else if board.rooks.get_bit(i) {
+                PieceType::Rook
+            } else if board.queens.get_bit(i) {
+                PieceType::Queen
+            } else if board.kings.get_bit(i) {
+                PieceType::King
+            } else {
+                continue;
+            };
+
+            match piece_type {
+                PieceType::Pawn => generate_pawn_moves(board, &coord, player, &mut moves),
+                PieceType::Knight => generate_leaper_moves(
+                    board,
+                    &coord,
+                    player,
+                    &board.cache.knight_offsets,
+                    &mut moves,
+                ),
+                PieceType::King => generate_leaper_moves(
+                    board,
+                    &coord,
+                    player,
+                    &board.cache.king_offsets,
+                    &mut moves,
+                ),
+                PieceType::Rook => generate_slider_moves_bitwise(
                     board,
                     i,
                     &coord,
                     player,
                     &board.cache.rook_directions,
                     &mut moves,
-                    &mut generator,
-                    &mut g,
-                    &mut p,
-                    &mut shifted_g,
-                    &mut shifted_p,
-                    &mut temp,
-                );
-                generate_slider_moves_bitwise(
+                    generator,
+                    g,
+                    p,
+                    shifted_g,
+                    shifted_p,
+                    temp,
+                ),
+                PieceType::Bishop => generate_slider_moves_bitwise(
                     board,
                     i,
                     &coord,
                     player,
                     &board.cache.bishop_directions,
                     &mut moves,
-                    &mut generator,
-                    &mut g,
-                    &mut p,
-                    &mut shifted_g,
-                    &mut shifted_p,
-                    &mut temp,
-                );
+                    generator,
+                    g,
+                    p,
+                    shifted_g,
+                    shifted_p,
+                    temp,
+                ),
+                PieceType::Queen => {
+                    generate_slider_moves_bitwise(
+                        board,
+                        i,
+                        &coord,
+                        player,
+                        &board.cache.rook_directions,
+                        &mut moves,
+                        generator,
+                        g,
+                        p,
+                        shifted_g,
+                        shifted_p,
+                        temp,
+                    );
+                    generate_slider_moves_bitwise(
+                        board,
+                        i,
+                        &coord,
+                        player,
+                        &board.cache.bishop_directions,
+                        &mut moves,
+                        generator,
+                        g,
+                        p,
+                        shifted_g,
+                        shifted_p,
+                        temp,
+                    );
+                }
             }
         }
-    }
+    });
     moves
 }
 

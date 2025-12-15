@@ -1,4 +1,4 @@
-use crate::domain::board::Board;
+use crate::domain::board::{BoardRepresentation, GenericBoard};
 use crate::domain::models::Player;
 use rand::Rng;
 
@@ -37,7 +37,11 @@ impl ZobristKeys {
         }
     }
 
-    pub fn get_hash(&self, board: &Board, current_player: Player) -> u64 {
+    pub fn get_hash<R: BoardRepresentation>(
+        &self,
+        board: &GenericBoard<R>,
+        current_player: Player,
+    ) -> u64 {
         let mut hash = 0;
         if current_player == Player::Black {
             hash ^= self.black_to_move;

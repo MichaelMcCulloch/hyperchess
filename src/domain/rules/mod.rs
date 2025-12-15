@@ -5,7 +5,7 @@ pub mod move_gen;
 
 use smallvec::SmallVec;
 
-use crate::domain::board::Board;
+use crate::domain::board::{Board, BoardRepresentation, GenericBoard};
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{Move, PieceType, Player};
 pub type MoveList = SmallVec<[Move; 64]>;
@@ -13,12 +13,16 @@ pub type MoveList = SmallVec<[Move; 64]>;
 pub struct Rules;
 
 impl Rules {
-    pub fn is_square_attacked(board: &Board, square: &Coordinate, by_player: Player) -> bool {
+    pub fn is_square_attacked<R: BoardRepresentation>(
+        board: &GenericBoard<R>,
+        square: &Coordinate,
+        by_player: Player,
+    ) -> bool {
         attacks::is_square_attacked(board, square, by_player)
     }
 
-    pub fn scan_ray_for_threat(
-        board: &Board,
+    pub fn scan_ray_for_threat<R: BoardRepresentation>(
+        board: &GenericBoard<R>,
         origin_vals: &[usize],
         direction: &[isize],
         attacker: Player,

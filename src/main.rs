@@ -2,7 +2,7 @@ use hyperchess::application::game_service::GameService;
 use hyperchess::config::AppConfig;
 use hyperchess::domain::board::Board;
 use hyperchess::domain::services::PlayerStrategy;
-use hyperchess::infrastructure::ai::MinimaxBot;
+use hyperchess::infrastructure::ai::{MctsBot, MinimaxBot};
 use hyperchess::infrastructure::console::HumanConsolePlayer;
 use std::env;
 
@@ -47,28 +47,27 @@ fn run_cli() {
         }
     }
 
+    let create_bot = |config: &AppConfig| -> Box<dyn PlayerStrategy> {
+        if let Some(mcts_config) = &config.mcts {
+            Box::new(MctsBot::new(mcts_config, time_limit))
+        } else {
+            Box::new(
+                MinimaxBot::new(&config.minimax, time_limit, dimension, side)
+                    .with_concurrency(config.compute.concurrency),
+            )
+        }
+    };
+
     let player_white: Box<dyn PlayerStrategy> = match player_white_type {
         "h" => Box::new(HumanConsolePlayer::new()),
-        "c" => Box::new(
-            MinimaxBot::new(&config.minimax, time_limit, dimension, side)
-                .with_mcts(config.mcts.clone())
-                .with_concurrency(config.compute.concurrency),
-        ),
+        "c" => create_bot(&config),
         _ => Box::new(HumanConsolePlayer::new()),
     };
 
     let player_black: Box<dyn PlayerStrategy> = match player_black_type {
         "h" => Box::new(HumanConsolePlayer::new()),
-        "c" => Box::new(
-            MinimaxBot::new(&config.minimax, time_limit, dimension, side)
-                .with_mcts(config.mcts.clone())
-                .with_concurrency(config.compute.concurrency),
-        ),
-        _ => Box::new(
-            MinimaxBot::new(&config.minimax, time_limit, dimension, side)
-                .with_mcts(config.mcts.clone())
-                .with_concurrency(config.compute.concurrency),
-        ),
+        "c" => create_bot(&config),
+        _ => create_bot(&config),
     };
 
     let board = Board::new(dimension, side);

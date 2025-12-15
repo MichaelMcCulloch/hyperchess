@@ -1,3 +1,4 @@
+use crate::domain::board::board_representation::BoardRepresentation;
 use smallvec::{SmallVec, smallvec};
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not, Shl, ShlAssign, Shr, ShrAssign};
 
@@ -6,6 +7,52 @@ pub enum BitBoard {
     Small(u32),
     Medium(u128),
     Large { data: SmallVec<[u64; 8]> },
+}
+
+impl Default for BitBoard {
+    fn default() -> Self {
+        BitBoard::Small(0)
+    }
+}
+
+impl BoardRepresentation for BitBoard {
+    type Iter<'a> = BitIterator<'a>;
+
+    fn new_empty(dimension: usize, side: usize) -> Self {
+        BitBoard::new_empty(dimension, side)
+    }
+
+    fn set_bit(&mut self, index: usize) {
+        self.set_bit(index)
+    }
+
+    fn clear_bit(&mut self, index: usize) {
+        self.clear_bit(index)
+    }
+
+    fn get_bit(&self, index: usize) -> bool {
+        self.get_bit(index)
+    }
+
+    fn count_ones(&self) -> u32 {
+        self.count_ones()
+    }
+
+    fn iter_indices(&self) -> Self::Iter<'_> {
+        self.iter_indices()
+    }
+
+    fn copy_from(&mut self, other: &Self) {
+        self.copy_from(other)
+    }
+
+    fn zero_like(&self) -> Self {
+        self.zero_like()
+    }
+
+    fn ensure_capacity_and_clear(&mut self, template: &Self) {
+        self.ensure_capacity_and_clear(template)
+    }
 }
 
 impl BitBoard {
@@ -105,6 +152,22 @@ impl BitBoard {
             BitBoard::Large { data } => BitBoard::Large {
                 data: smallvec![0u64; data.len()],
             },
+        }
+    }
+
+    pub fn ensure_capacity_and_clear(&mut self, template: &Self) {
+        match (self, template) {
+            (BitBoard::Small(a), BitBoard::Small(_)) => *a = 0,
+            (BitBoard::Medium(a), BitBoard::Medium(_)) => *a = 0,
+            (BitBoard::Large { data: a }, BitBoard::Large { data: b }) => {
+                if a.len() != b.len() {
+                    a.resize(b.len(), 0);
+                }
+                for x in a.iter_mut() {
+                    *x = 0;
+                }
+            }
+            (this, that) => *this = that.zero_like(),
         }
     }
 }
@@ -425,5 +488,19 @@ impl<'a> Iterator for BitIterator<'a> {
                 }
             }
         }
+    }
+}
+
+impl<'a> BitAnd<&'a BitBoard> for BitBoard {
+    type Output = BitBoard;
+    fn bitand(self, rhs: &'a BitBoard) -> BitBoard {
+        &self & rhs
+    }
+}
+
+impl<'a> BitOr<&'a BitBoard> for BitBoard {
+    type Output = BitBoard;
+    fn bitor(self, rhs: &'a BitBoard) -> BitBoard {
+        &self | rhs
     }
 }

@@ -2,12 +2,13 @@ use smallvec::SmallVec;
 use std::collections::HashMap;
 
 use crate::domain::board::bitboard::BitBoard;
+use crate::domain::board::board_representation::BoardRepresentation;
 use crate::domain::models::Player;
 
 #[derive(Debug)]
-pub struct BoardCache {
+pub struct GenericBoardCache<R: BoardRepresentation> {
     pub index_to_coords: Vec<SmallVec<[usize; 4]>>,
-    pub validity_masks: HashMap<(Vec<isize>, usize), BitBoard>,
+    pub validity_masks: HashMap<(Vec<isize>, usize), R>,
 
     pub knight_offsets: Vec<Vec<isize>>,
     pub king_offsets: Vec<Vec<isize>>,
@@ -18,7 +19,9 @@ pub struct BoardCache {
     pub black_pawn_capture_offsets: Vec<Vec<isize>>,
 }
 
-impl BoardCache {
+pub type BoardCache = GenericBoardCache<BitBoard>;
+
+impl<R: BoardRepresentation> GenericBoardCache<R> {
     pub fn new(dimension: usize, side: usize) -> Self {
         let total_cells = side.pow(dimension as u32);
         let mut index_to_coords = Vec::with_capacity(total_cells);
@@ -51,7 +54,7 @@ impl BoardCache {
         for dir in all_dirs {
             let mut step = 1;
             while step < side {
-                let mut mask_bb = BitBoard::new_empty(dimension, side);
+                let mut mask_bb = R::new_empty(dimension, side);
 
                 for i in 0..total_cells {
                     let coords = &index_to_coords[i];

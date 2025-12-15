@@ -1,7 +1,5 @@
 use super::eval::Evaluator;
-use super::mcts::MCTS;
-use super::see::SEE;
-use crate::config::{MctsConfig, MinimaxConfig};
+use crate::config::MinimaxConfig;
 use crate::domain::board::Board;
 use crate::domain::models::{Move, PieceType, Player};
 use crate::domain::rules::Rules;
@@ -13,15 +11,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::search_core::{VAL_BISHOP, VAL_KNIGHT, VAL_QUEEN, VAL_ROOK};
+
 const CHECKMATE_SCORE: i32 = 30000;
 const TIMEOUT_CHECK_INTERVAL: usize = 2048;
-
-const VAL_PAWN: i32 = 100;
-const VAL_KNIGHT: i32 = 320;
-const VAL_BISHOP: i32 = 330;
-const VAL_ROOK: i32 = 500;
-const VAL_QUEEN: i32 = 900;
-const VAL_KING: i32 = 20000;
 
 const MAX_HISTORY: i32 = 2000;
 
@@ -31,7 +24,6 @@ pub struct MinimaxBot {
     tt: Arc<LockFreeTT>,
     stop_flag: Arc<AtomicBool>,
     nodes_searched: Arc<AtomicUsize>,
-    mcts_config: Option<MctsConfig>,
     num_threads: usize,
 }
 
@@ -52,7 +44,6 @@ impl MinimaxBot {
             tt: Arc::new(LockFreeTT::new(256)),
             stop_flag: Arc::new(AtomicBool::new(false)),
             nodes_searched: Arc::new(AtomicUsize::new(0)),
-            mcts_config: None,
             num_threads,
         }
     }
@@ -62,25 +53,7 @@ impl MinimaxBot {
         self
     }
 
-    pub fn with_mcts(mut self, config: Option<MctsConfig>) -> Self {
-        self.mcts_config = config;
-        self
-    }
-
     fn evaluate(&self, board: &Board, player_at_leaf: Option<Player>) -> i32 {
-        if let Some(mcts_config) = &self.mcts_config {
-            if let Some(player) = player_at_leaf {
-                let mut mcts =
-                    MCTS::new(board, player, None, Some(mcts_config.clone())).with_serial();
-                let win_rate = mcts.run(board, mcts_config.iterations);
-
-                let val_f = (win_rate - 0.5) * 2.0 * (VAL_KING as f64);
-                let val = val_f as i32;
-
-                return if player == Player::Black { -val } else { val };
-            }
-        }
-
         let score = Evaluator::evaluate(board);
 
         if let Some(p) = player_at_leaf {
@@ -92,75 +65,18 @@ impl MinimaxBot {
     }
 
     fn get_piece_value(&self, board: &Board, idx: usize) -> i32 {
-        if board.pawns.get_bit(idx) {
-            VAL_PAWN
-        } else if board.knights.get_bit(idx) {
-            VAL_KNIGHT
-        } else if board.bishops.get_bit(idx) {
-            VAL_BISHOP
-        } else if board.rooks.get_bit(idx) {
-            VAL_ROOK
-        } else if board.queens.get_bit(idx) {
-            VAL_QUEEN
-        } else if board.kings.get_bit(idx) {
-            VAL_KING
-        } else {
-            0
-        }
+        super::search_core::get_piece_value(board, idx)
     }
 
-    fn q_search(&self, board: &mut Board, mut alpha: i32, beta: i32, player: Player) -> i32 {
-        if self.nodes_searched.fetch_add(1, Ordering::Relaxed) % TIMEOUT_CHECK_INTERVAL == 0 {
-            if self.stop_flag.load(Ordering::Relaxed) {
-                return 0;
-            }
-        }
-
-        let stand_pat = self.evaluate(board, Some(player));
-
-        if stand_pat >= beta {
-            return beta;
-        }
-
-        if stand_pat > alpha {
-            alpha = stand_pat;
-        }
-
-        let moves = Rules::generate_loud_moves(board, player);
-
-        let mut sorted_moves: Vec<(Move, i32)> = moves
-            .into_iter()
-            .map(|m| {
-                let to_idx = board.coords_to_index(&m.to.values).unwrap_or(0);
-                let victim = self.get_piece_value(board, to_idx);
-                (m, victim)
-            })
-            .collect();
-        sorted_moves.sort_by(|a, b| b.1.cmp(&a.1));
-
-        for (mv, _) in sorted_moves {
-            let see_val = SEE::static_exchange_evaluation(board, &mv);
-            if see_val < 0 {
-                continue;
-            }
-
-            let info = match board.apply_move(&mv) {
-                Ok(i) => i,
-                Err(_) => continue,
-            };
-
-            let score = -self.q_search(board, -beta, -alpha, player.opponent());
-
-            board.unmake_move(&mv, info);
-
-            if score >= beta {
-                return beta;
-            }
-            if score > alpha {
-                alpha = score;
-            }
-        }
-        alpha
+    fn q_search(&self, board: &mut Board, alpha: i32, beta: i32, player: Player) -> i32 {
+        super::search_core::q_search(
+            board,
+            alpha,
+            beta,
+            player,
+            &self.nodes_searched,
+            &self.stop_flag,
+        )
     }
 
     fn sort_moves(

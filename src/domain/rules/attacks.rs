@@ -1,11 +1,15 @@
 use smallvec::SmallVec;
 
-use crate::domain::board::Board;
+use crate::domain::board::{BoardRepresentation, GenericBoard};
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{PieceType, Player};
 use crate::domain::rules::apply_offset;
 
-pub fn is_square_attacked(board: &Board, square: &Coordinate, by_player: Player) -> bool {
+pub fn is_square_attacked<R: BoardRepresentation>(
+    board: &GenericBoard<R>,
+    square: &Coordinate,
+    by_player: Player,
+) -> bool {
     let enemy_occupancy = match by_player {
         Player::White => &board.white_occupancy,
         Player::Black => &board.black_occupancy,
@@ -73,8 +77,8 @@ pub fn is_square_attacked(board: &Board, square: &Coordinate, by_player: Player)
     false
 }
 
-pub fn scan_ray_for_threat(
-    board: &Board,
+pub fn scan_ray_for_threat<R: BoardRepresentation>(
+    board: &GenericBoard<R>,
     origin_vals: &[usize],
     direction: &[isize],
     attacker: Player,
@@ -86,7 +90,7 @@ pub fn scan_ray_for_threat(
         Player::Black => &board.black_occupancy,
     };
 
-    let all_occupancy = &board.white_occupancy | &board.black_occupancy;
+    let all_occupancy = board.white_occupancy.clone() | &board.black_occupancy;
 
     loop {
         if let Some(next) = apply_offset(&current, direction, board.side) {

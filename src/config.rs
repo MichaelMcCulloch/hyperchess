@@ -20,6 +20,7 @@ pub struct MctsConfig {
     pub depth: usize,
     pub iterations: usize,
     pub iter_per_thread: f64,
+    pub prior_weight: f64,
 }
 
 impl Default for MctsConfig {
@@ -28,6 +29,7 @@ impl Default for MctsConfig {
             depth: 50,
             iterations: 50,
             iter_per_thread: 5.0,
+            prior_weight: 1.4142,
         }
     }
 }
@@ -61,8 +63,8 @@ impl AppConfig {
         eprintln!("  Minimax Depth: {}", config.minimax.depth);
         match &config.mcts {
             Some(mcts) => eprintln!(
-                "  MCTS: ENABLED (Depth: {}, Iterations: {}, Iter/Thread: {})",
-                mcts.depth, mcts.iterations, mcts.iter_per_thread
+                "  MCTS: ENABLED (Depth: {}, Iterations: {}, Iter/Thread: {}, Prior: {})",
+                mcts.depth, mcts.iterations, mcts.iter_per_thread, mcts.prior_weight
             ),
             None => eprintln!("  MCTS: DISABLED"),
         }
@@ -98,6 +100,12 @@ impl AppConfig {
             if let Ok(parsed) = val.parse() {
                 let mcts = self.mcts.get_or_insert(MctsConfig::default());
                 mcts.iter_per_thread = parsed;
+            }
+        }
+        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_PRIOR_WEIGHT") {
+            if let Ok(parsed) = val.parse() {
+                let mcts = self.mcts.get_or_insert(MctsConfig::default());
+                mcts.prior_weight = parsed;
             }
         }
         if let Ok(val) = std::env::var("HYPERCHESS_COMPUTE_MINUTES") {
@@ -137,7 +145,6 @@ mod tests {
     use super::*;
     use std::env;
 
-    // Helper to safely set and unset env vars for tests
     struct EnvVarGuard {
         key: String,
         original: Option<String>,
@@ -169,7 +176,6 @@ mod tests {
 
     #[test]
     fn test_default_config_loading() {
-        // Ensure no env vars interfere
         let _guard = EnvVarGuard::new(
             "HYPERCHESS_MINIMAX_DEPTH",
             "invalid_to_ensure_clean_slate_or_removal",
@@ -188,7 +194,6 @@ mod tests {
     fn test_merge_env_overrides() {
         let mut config = AppConfig::default();
 
-        // Set env vars
         let _g1 = EnvVarGuard::new("HYPERCHESS_MINIMAX_DEPTH", "99");
         let _g2 = EnvVarGuard::new("HYPERCHESS_MCTS_DEPTH", "101");
         let _g3 = EnvVarGuard::new("HYPERCHESS_COMPUTE_CONCURRENCY", "42");
@@ -210,13 +215,11 @@ mod tests {
 
         config.merge_env();
 
-        assert_eq!(config.minimax.depth, 4); // Should remain default
+        assert_eq!(config.minimax.depth, 4);
     }
 
     #[test]
     fn test_load_prints_config() {
-        // This test primarily ensures that calling load() doesn't panic.
-        // It will try to read Config.toml from the current directory.
         let _config = AppConfig::load();
     }
 }

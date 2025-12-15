@@ -18,7 +18,7 @@ use crate::domain::coordinate::Coordinate;
 use crate::domain::game::Game;
 use crate::domain::models::{GameResult, PieceType, Player};
 use crate::domain::rules::Rules;
-use crate::infrastructure::ai::minimax::MinimaxBot;
+use crate::infrastructure::ai::{MctsBot, MinimaxBot};
 
 pub async fn create_game(
     State(state): State<AppState>,
@@ -34,28 +34,28 @@ pub async fn create_game(
     let mut white_bot = None;
     let mut black_bot = None;
 
+    let create_bot =
+        |config: &crate::config::AppConfig| -> Box<dyn crate::domain::services::PlayerStrategy> {
+            if let Some(mcts_config) = &config.mcts {
+                Box::new(MctsBot::new(mcts_config, time_limit))
+            } else {
+                Box::new(
+                    MinimaxBot::new(&config.minimax, time_limit, dimension, side)
+                        .with_concurrency(config.compute.concurrency),
+                )
+            }
+        };
+
     match payload.mode.to_lowercase().as_str() {
         "cc" => {
-            white_bot = Some(
-                MinimaxBot::new(&state.config.minimax, time_limit, dimension, side)
-                    .with_mcts(state.config.mcts.clone()),
-            );
-            black_bot = Some(
-                MinimaxBot::new(&state.config.minimax, time_limit, dimension, side)
-                    .with_mcts(state.config.mcts.clone()),
-            );
+            white_bot = Some(create_bot(&state.config));
+            black_bot = Some(create_bot(&state.config));
         }
         "hc" => {
-            black_bot = Some(
-                MinimaxBot::new(&state.config.minimax, time_limit, dimension, side)
-                    .with_mcts(state.config.mcts.clone()),
-            );
+            black_bot = Some(create_bot(&state.config));
         }
         "ch" => {
-            white_bot = Some(
-                MinimaxBot::new(&state.config.minimax, time_limit, dimension, side)
-                    .with_mcts(state.config.mcts.clone()),
-            );
+            white_bot = Some(create_bot(&state.config));
         }
         "hh" => {}
         _ => {

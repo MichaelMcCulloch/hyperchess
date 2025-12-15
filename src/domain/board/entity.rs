@@ -3,7 +3,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::domain::board::bitboard::BitBoard;
-use crate::domain::board::cache::BoardCache;
+use crate::domain::board::board_representation::BoardRepresentation;
+use crate::domain::board::cache::GenericBoardCache;
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{GameResult, Move, Piece, PieceType, Player};
 use crate::domain::zobrist::ZobristKeys;
@@ -16,39 +17,41 @@ pub struct UnmakeInfo {
 }
 
 #[derive(Clone, Debug)]
-pub struct Board {
+pub struct GenericBoard<R: BoardRepresentation = BitBoard> {
     pub dimension: usize,
     pub side: usize,
     pub total_cells: usize,
 
-    pub white_occupancy: BitBoard,
-    pub black_occupancy: BitBoard,
+    pub white_occupancy: R,
+    pub black_occupancy: R,
 
-    pub pawns: BitBoard,
-    pub rooks: BitBoard,
-    pub knights: BitBoard,
-    pub bishops: BitBoard,
-    pub queens: BitBoard,
-    pub kings: BitBoard,
+    pub pawns: R,
+    pub rooks: R,
+    pub knights: R,
+    pub bishops: R,
+    pub queens: R,
+    pub kings: R,
 
     pub zobrist: Arc<ZobristKeys>,
-    pub cache: Arc<BoardCache>,
+    pub cache: Arc<GenericBoardCache<R>>,
     pub hash: u64,
     pub history: Vec<u64>,
     pub en_passant_target: Option<(usize, usize)>,
     pub castling_rights: u8,
 }
 
-impl Board {
+pub type Board = GenericBoard<BitBoard>;
+
+impl<R: BoardRepresentation> GenericBoard<R> {
     pub fn new_empty(dimension: usize, side: usize) -> Self {
         let total_cells = side.pow(dimension as u32);
-        let empty = BitBoard::new_empty(dimension, side);
+        let empty = R::new_empty(dimension, side);
 
         let zobrist = Arc::new(ZobristKeys::new(total_cells));
-        let cache = Arc::new(BoardCache::new(dimension, side));
+        let cache = Arc::new(GenericBoardCache::new(dimension, side));
         let hash = 0;
 
-        Board {
+        GenericBoard {
             dimension,
             side,
             total_cells,
@@ -716,7 +719,7 @@ impl Board {
         pt: PieceType,
     ) -> Option<usize> {
         let mut current = origin_coord.values.clone();
-        let occupancy = &self.white_occupancy | &self.black_occupancy;
+        let occupancy = self.white_occupancy.clone() | &self.black_occupancy;
         let my_occ = match owner {
             Player::White => &self.white_occupancy,
             Player::Black => &self.black_occupancy,

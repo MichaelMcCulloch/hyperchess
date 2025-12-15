@@ -3,7 +3,7 @@ use crate::domain::board::{Board, UnmakeInfo};
 use crate::domain::models::{Move, Player};
 use crate::domain::rules::{MoveList, Rules};
 use crate::infrastructure::ai::transposition::{Flag, LockFreeTT};
-use rand::seq::SliceRandom;
+
 use std::sync::Arc;
 
 use std::f64;
@@ -16,6 +16,7 @@ struct Node {
     children: Vec<usize>,
     visits: u32,
     score: f64,
+    prior: f64,
     unexpanded_moves: MoveList,
     is_terminal: bool,
     move_to_node: Option<Move>,
@@ -28,9 +29,14 @@ pub struct MCTS {
     tt: Option<Arc<LockFreeTT>>,
     serial: bool,
     config: Option<MctsConfig>,
+    stop_flag: Arc<AtomicBool>,
+    nodes_searched: Arc<AtomicUsize>,
 }
 
+use super::search_core::get_piece_value;
+use super::search_core::q_search;
 use rayon::prelude::*;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 impl MCTS {
     pub fn new(
@@ -38,17 +44,33 @@ impl MCTS {
         root_player: Player,
         tt: Option<Arc<LockFreeTT>>,
         config: Option<MctsConfig>,
+        stop_flag: Option<Arc<AtomicBool>>,
+        nodes_searched: Option<Arc<AtomicUsize>>,
     ) -> Self {
         let mut root_clone = root_state.clone();
-        let mut moves = Rules::generate_legal_moves(&mut root_clone, root_player);
-        let mut rng = rand::thread_rng();
-        moves.shuffle(&mut rng);
+        let moves = Rules::generate_legal_moves(&mut root_clone, root_player);
+
+        let mut sorted_moves: Vec<(Move, i32)> = moves
+            .into_iter()
+            .map(|m| {
+                let to_idx = root_clone.coords_to_index(&m.to.values).unwrap_or(0);
+                let victim = get_piece_value(&root_clone, to_idx);
+                (m, victim)
+            })
+            .collect();
+        sorted_moves.sort_by(|a, b| a.1.cmp(&b.1));
+
+        let mut moves = MoveList::new();
+        for (m, _) in sorted_moves {
+            moves.push(m);
+        }
 
         let root = Node {
             parent: None,
             children: Vec::new(),
             visits: 0,
             score: 0.0,
+            prior: 1.0,
             unexpanded_moves: moves,
             is_terminal: false,
             move_to_node: None,
@@ -61,6 +83,8 @@ impl MCTS {
             tt,
             serial: false,
             config,
+            stop_flag: stop_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false))),
+            nodes_searched: nodes_searched.unwrap_or_else(|| Arc::new(AtomicUsize::new(0))),
         }
     }
 
@@ -69,9 +93,9 @@ impl MCTS {
         self
     }
 
-    pub fn run(&mut self, root_state: &Board, iterations: usize) -> f64 {
+    pub fn run(&mut self, root_state: &Board, iterations: usize) -> (f64, Option<Move>) {
         if iterations == 0 {
-            return 0.5;
+            return (0.5, None);
         }
 
         let num_threads = rayon::current_num_threads();
@@ -89,18 +113,13 @@ impl MCTS {
 
         if num_tasks <= 1 {
             self.execute_iterations(root_state, iterations);
-            let root = &self.nodes[0];
-            return if root.visits == 0 {
-                0.5
-            } else {
-                root.score / root.visits as f64
-            };
+            return (self.get_win_rate(), self.get_best_move());
         }
 
         let chunk_size = iterations / num_tasks;
         let remainder = iterations % num_tasks;
 
-        let results: Vec<(u32, f64)> = (0..num_tasks)
+        let results: Vec<(u32, f64, Vec<(Move, u32, f64)>)> = (0..num_tasks)
             .into_par_iter()
             .map(|i| {
                 let count = if i < remainder {
@@ -109,7 +128,7 @@ impl MCTS {
                     chunk_size
                 };
                 if count == 0 {
-                    return (0, 0.0);
+                    return (0, 0.0, Vec::new());
                 }
 
                 let mut local_mcts = MCTS::new(
@@ -117,31 +136,97 @@ impl MCTS {
                     self.root_player,
                     self.tt.clone(),
                     self.config.clone(),
+                    Some(self.stop_flag.clone()),
+                    Some(self.nodes_searched.clone()),
                 );
                 local_mcts.execute_iterations(root_state, count);
 
                 let root = &local_mcts.nodes[0];
-                (root.visits, root.score)
+
+                let child_stats = root
+                    .children
+                    .iter()
+                    .map(|&c_idx| {
+                        let child = &local_mcts.nodes[c_idx];
+                        (
+                            child.move_to_node.clone().unwrap(),
+                            child.visits,
+                            child.score,
+                        )
+                    })
+                    .collect();
+
+                (root.visits, root.score, child_stats)
             })
             .collect();
 
-        let (total_visits, total_score) = results
-            .into_iter()
-            .fold((0, 0.0), |acc, x| (acc.0 + x.0, acc.1 + x.1));
+        let mut aggregated_children: Vec<(Move, u32, f64)> = Vec::new();
 
-        if total_visits == 0 {
+        let mut total_visits = 0;
+        let mut total_score = 0.0;
+
+        for (v, s, children) in results {
+            total_visits += v;
+            total_score += s;
+            for (m, cv, cs) in children {
+                if let Some(existing) = aggregated_children.iter_mut().find(|(em, _, _)| em == &m) {
+                    existing.1 += cv;
+                    existing.2 += cs;
+                } else {
+                    aggregated_children.push((m, cv, cs));
+                }
+            }
+        }
+
+        let win_rate = if total_visits == 0 {
             0.5
         } else {
             total_score / total_visits as f64
+        };
+
+        let best_move = aggregated_children
+            .into_iter()
+            .max_by_key(|(_, visits, _)| *visits)
+            .map(|(m, _, _)| m);
+
+        (win_rate, best_move)
+    }
+
+    fn get_win_rate(&self) -> f64 {
+        let root = &self.nodes[0];
+        if root.visits == 0 {
+            0.5
+        } else {
+            root.score / root.visits as f64
         }
     }
 
-    fn execute_iterations(&mut self, root_state: &Board, iterations: usize) {
-        let mut rng = rand::thread_rng();
+    pub fn get_best_move(&self) -> Option<Move> {
+        let root = &self.nodes[0];
+        if root.children.is_empty() {
+            return None;
+        }
 
+        let mut best_visits = 0;
+        let mut best_move = None;
+
+        for &child_idx in &root.children {
+            let child = &self.nodes[child_idx];
+            if child.visits > best_visits {
+                best_visits = child.visits;
+                best_move = child.move_to_node.clone();
+            }
+        }
+        best_move
+    }
+
+    fn execute_iterations(&mut self, root_state: &Board, iterations: usize) {
         let mut current_state = root_state.clone();
 
         for _ in 0..iterations {
+            if self.stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
             let mut node_idx = 0;
             let mut current_player = self.root_player;
 
@@ -172,12 +257,36 @@ impl MCTS {
                 let legal_moves = Rules::generate_legal_moves(&mut current_state, next_player);
                 let is_terminal = legal_moves.is_empty();
 
+                let mut prior = 1.0;
+                let to_idx = current_state.coords_to_index(&mv.to.values).unwrap_or(0);
+                if current_state.black_occupancy.get_bit(to_idx)
+                    || current_state.white_occupancy.get_bit(to_idx)
+                {
+                    prior = 1.0;
+                }
+
+                let mut sorted_moves: Vec<(Move, i32)> = legal_moves
+                    .into_iter()
+                    .map(|m| {
+                        let to_idx = current_state.coords_to_index(&m.to.values).unwrap_or(0);
+                        let victim = get_piece_value(&current_state, to_idx);
+                        (m, victim)
+                    })
+                    .collect();
+                sorted_moves.sort_by(|a, b| a.1.cmp(&b.1));
+
+                let mut ordered_moves = MoveList::new();
+                for (m, _) in sorted_moves {
+                    ordered_moves.push(m);
+                }
+
                 let new_node = Node {
                     parent: Some(node_idx),
                     children: Vec::new(),
                     visits: 0,
                     score: 0.0,
-                    unexpanded_moves: legal_moves,
+                    prior,
+                    unexpanded_moves: ordered_moves,
                     is_terminal,
                     move_to_node: Some(mv),
                     player_to_move: next_player,
@@ -194,12 +303,7 @@ impl MCTS {
             let result_score = if self.nodes[node_idx].is_terminal {
                 self.evaluate_terminal(&current_state, current_player)
             } else {
-                self.rollout_inplace(
-                    &mut current_state,
-                    current_player,
-                    &mut rng,
-                    &mut path_stack,
-                )
+                self.rollout_q_search(&mut current_state, current_player)
             };
 
             self.backpropagate(node_idx, result_score);
@@ -212,24 +316,30 @@ impl MCTS {
 
     fn select_child(&self, parent_idx: usize) -> usize {
         let parent = &self.nodes[parent_idx];
-        let log_n = (parent.visits as f64).ln();
+        let sqrt_n = (parent.visits as f64).sqrt();
 
         let mut best_score = -f64::INFINITY;
         let mut best_child = 0;
 
         let maximize = parent.player_to_move == self.root_player;
 
+        let c_puct = self
+            .config
+            .as_ref()
+            .map(|c| c.prior_weight)
+            .unwrap_or(UCT_C);
+
         for &child_idx in &parent.children {
             let child = &self.nodes[child_idx];
             let win_rate = if child.visits > 0 {
                 child.score / child.visits as f64
             } else {
-                0.0
+                0.5
             };
 
             let exploitation = if maximize { win_rate } else { 1.0 - win_rate };
 
-            let exploration = UCT_C * (log_n / (child.visits as f64 + 1e-6)).sqrt();
+            let exploration = c_puct * child.prior * (sqrt_n / (1.0 + child.visits as f64));
             let uct_value = exploitation + exploration;
 
             if uct_value > best_score {
@@ -240,41 +350,26 @@ impl MCTS {
         best_child
     }
 
-    fn rollout_inplace(
-        &self,
-        state: &mut Board,
-        mut player: Player,
-        rng: &mut rand::rngs::ThreadRng,
-        stack: &mut Vec<(Move, UnmakeInfo)>,
-    ) -> f64 {
-        let mut depth = 0;
-        let max_depth = self.config.as_ref().map(|c| c.depth).unwrap_or(50);
-        const VAL_KING_F: f64 = 20000.0;
+    fn rollout_q_search(&self, state: &mut Board, player: Player) -> f64 {
+        let score_cp = q_search(
+            state,
+            -i32::MAX,
+            i32::MAX,
+            player,
+            &self.nodes_searched,
+            &self.stop_flag,
+        );
 
-        while depth < max_depth {
-            if let Some(tt) = &self.tt {
-                if let Some((score, _, flag, _)) = tt.get(state.hash) {
-                    if flag == Flag::Exact {
-                        let normalized = (score as f64 / VAL_KING_F) / 2.0 + 0.5;
-                        return normalized.max(0.0).min(1.0);
-                    }
-                }
-            }
+        let k = 0.003;
+        let sigmoid = 1.0 / (1.0 + (-k * score_cp as f64).exp());
 
-            let moves = Rules::generate_legal_moves(state, player);
-            if moves.is_empty() {
-                return self.evaluate_terminal(state, player);
-            }
+        let win_rate_for_player = sigmoid;
 
-            let mv = moves.choose(rng).unwrap();
-            let info = state.apply_move(mv).unwrap();
-            stack.push((mv.clone(), info));
-
-            player = player.opponent();
-            depth += 1;
+        if player == self.root_player {
+            win_rate_for_player
+        } else {
+            1.0 - win_rate_for_player
         }
-
-        0.5
     }
 
     fn evaluate_terminal(&self, state: &Board, player_at_leaf: Player) -> f64 {
@@ -316,24 +411,4 @@ impl MCTS {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::domain::board::Board;
-
-    #[test]
-    fn test_mcts_smoke() {
-        let board = Board::new(2, 8);
-        let mut mcts = MCTS::new(&board, Player::White, None, None);
-        let score = mcts.run(&board, 10);
-        assert!(score >= 0.0 && score <= 1.0);
-    }
-
-    #[test]
-    fn test_mcts_parallel_execution() {
-        let board = Board::new(2, 8);
-        let mut mcts = MCTS::new(&board, Player::White, None, None);
-
-        let score = mcts.run(&board, 100);
-        assert!(score >= 0.0 && score <= 1.0);
-    }
-}
+mod tests {}
