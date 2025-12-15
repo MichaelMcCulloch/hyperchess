@@ -383,6 +383,7 @@ impl MCTS {
             player,
             &self.nodes_searched,
             &self.stop_flag,
+            self.tt.as_ref(),
         );
 
         let k = 0.003;

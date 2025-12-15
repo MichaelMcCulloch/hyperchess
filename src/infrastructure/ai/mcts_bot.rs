@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::{AppConfig, MctsConfig};
+use crate::config::MctsConfig;
 use crate::domain::board::Board;
 use crate::domain::models::{Move, Player};
 use crate::domain::services::PlayerStrategy;

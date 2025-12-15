@@ -76,6 +76,7 @@ impl MinimaxBot {
             player,
             &self.nodes_searched,
             &self.stop_flag,
+            Some(&self.tt),
         )
     }
 
