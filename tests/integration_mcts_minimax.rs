@@ -16,7 +16,9 @@ fn test_mcts_minimax_integration_mate_in_one() {
         rollout_depth: 0,
     };
 
-    let mut bot = MctsBot::new(&mcts_config, 1000);
+    let mut config = AppConfig::default();
+    config.mcts = Some(mcts_config);
+    let mut bot = MctsBot::new(&config, 1000);
 
     let mv = bot.get_move(&board, Player::White);
     assert!(mv.is_some());

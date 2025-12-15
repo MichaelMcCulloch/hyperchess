@@ -113,7 +113,7 @@ fn test_detect_checkmate_in_one() {
         .unwrap();
 
     let config = MinimaxConfig { depth: 2 };
-    let mut bot = MinimaxBot::new(&config, 1000, 2, 4);
+    let mut bot = MinimaxBot::new(&config, 1000, 2, 4, 256);
     let mv = bot
         .get_move(&board, Player::White)
         .expect("Should return a move");

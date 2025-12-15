@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::MctsConfig;
+use crate::config::{AppConfig, MctsConfig};
 use crate::domain::board::Board;
 use crate::domain::models::{Move, Player};
 use crate::domain::services::PlayerStrategy;
@@ -19,11 +19,19 @@ pub struct MctsBot {
 }
 
 impl MctsBot {
-    pub fn new(mcts_config: &MctsConfig, time_limit_ms: u64) -> Self {
+    pub fn new(config: &AppConfig, time_limit_ms: u64) -> Self {
+        let mcts_config = config.mcts.clone().unwrap_or_else(|| MctsConfig {
+            iterations: 1000,
+            depth: 50,
+            iter_per_thread: 10.0,
+            prior_weight: 1.414,
+            rollout_depth: 0,
+        });
+
         Self {
-            config: mcts_config.clone(),
+            config: mcts_config,
             time_limit: Duration::from_millis(time_limit_ms),
-            tt: Arc::new(LockFreeTT::new(256)),
+            tt: Arc::new(LockFreeTT::new(config.compute.memory)),
             stop_flag: Arc::new(AtomicBool::new(false)),
             nodes_searched: Arc::new(AtomicUsize::new(0)),
         }

@@ -6,11 +6,12 @@ iterations = 3000
 depth = 50 
 iter_per_thread = 10
 prior_weight = 1.41
-rollout_depth = 1
+rollout_depth = 0
 
 [compute]
 minutes = 2
 concurrency = 30
+memory = 4096
 
 [api]
 port = 3123

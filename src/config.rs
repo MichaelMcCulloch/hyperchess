@@ -40,6 +40,7 @@ impl Default for MctsConfig {
 pub struct ComputeConfig {
     pub minutes: f64,
     pub concurrency: usize,
+    pub memory: usize,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -75,8 +76,8 @@ impl AppConfig {
             None => eprintln!("  MCTS: DISABLED"),
         }
         eprintln!(
-            "  Compute: {:.1} min, {} threads",
-            config.compute.minutes, config.compute.concurrency
+            "  Compute: {:.1} min, {} threads, {} MB memory",
+            config.compute.minutes, config.compute.concurrency, config.compute.memory
         );
         eprintln!("  API Port: {}", config.api.port);
         eprintln!("----------------------------------------");
@@ -120,6 +121,11 @@ impl AppConfig {
                 mcts.rollout_depth = parsed;
             }
         }
+        if let Ok(val) = std::env::var("HYPERCHESS_COMPUTE_MEMORY") {
+            if let Ok(parsed) = val.parse() {
+                self.compute.memory = parsed;
+            }
+        }
         if let Ok(val) = std::env::var("HYPERCHESS_COMPUTE_MINUTES") {
             if let Ok(parsed) = val.parse() {
                 self.compute.minutes = parsed;
@@ -138,16 +144,32 @@ impl AppConfig {
     }
 }
 
+impl Default for ComputeConfig {
+    fn default() -> Self {
+        Self {
+            minutes: 2.0,
+            concurrency: 2,
+            memory: 1024,
+        }
+    }
+}
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self { port: 3123 }
+    }
+}
+impl Default for MinimaxConfig {
+    fn default() -> Self {
+        Self { depth: 4 }
+    }
+}
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            minimax: MinimaxConfig { depth: 4 },
+            minimax: MinimaxConfig::default(),
             mcts: None,
-            compute: ComputeConfig {
-                minutes: 2.0,
-                concurrency: 2,
-            },
-            api: ApiConfig { port: 3123 },
+            compute: ComputeConfig::default(),
+            api: ApiConfig::default(),
         }
     }
 }

@@ -33,6 +33,7 @@ impl MinimaxBot {
         time_limit_ms: u64,
         _dimension: usize,
         _side: usize,
+        memory_mb: usize,
     ) -> Self {
         let num_threads = std::thread::available_parallelism()
             .map(|n| n.get().saturating_sub(2).max(1))
@@ -41,7 +42,7 @@ impl MinimaxBot {
         Self {
             depth: config.depth,
             time_limit: Duration::from_millis(time_limit_ms),
-            tt: Arc::new(LockFreeTT::new(256)),
+            tt: Arc::new(LockFreeTT::new(memory_mb)),
             stop_flag: Arc::new(AtomicBool::new(false)),
             nodes_searched: Arc::new(AtomicUsize::new(0)),
             num_threads,
