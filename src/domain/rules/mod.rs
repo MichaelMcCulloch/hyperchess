@@ -8,7 +8,7 @@ use smallvec::SmallVec;
 use crate::domain::board::{Board, BoardRepresentation, GenericBoard};
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{Move, PieceType, Player};
-pub type MoveList = SmallVec<[Move; 64]>;
+pub type MoveList = SmallVec<[Move; 256]>;
 
 pub struct Rules;
 
@@ -53,6 +53,10 @@ impl Rules {
 
     pub fn generate_legal_moves(board: &mut Board, player: Player) -> MoveList {
         move_gen::generate_legal_moves(board, player)
+    }
+
+    pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
+        move_gen::generate_pseudo_legal_moves(board, player)
     }
 
     pub fn generate_loud_moves(board: &mut Board, player: Player) -> MoveList {

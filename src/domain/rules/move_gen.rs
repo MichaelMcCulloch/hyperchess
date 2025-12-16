@@ -2,30 +2,30 @@ use smallvec::SmallVec;
 use std::cell::RefCell;
 
 use crate::domain::board::cache::DirectionInfo;
-use crate::domain::board::{BitBoard, Board};
+use crate::domain::board::{BitBoardLarge, Board};
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{Move, PieceType, Player};
 use crate::domain::rules::attacks::is_square_attacked;
 use crate::domain::rules::{MoveList, apply_offset};
 
 struct MoveGenBuffer {
-    generator: BitBoard,
-    g: BitBoard,
-    p: BitBoard,
-    shifted_g: BitBoard,
-    shifted_p: BitBoard,
-    temp: BitBoard,
+    generator: BitBoardLarge,
+    g: BitBoardLarge,
+    p: BitBoardLarge,
+    shifted_g: BitBoardLarge,
+    shifted_p: BitBoardLarge,
+    temp: BitBoardLarge,
 }
 
 impl Default for MoveGenBuffer {
     fn default() -> Self {
         Self {
-            generator: BitBoard::Small(0),
-            g: BitBoard::Small(0),
-            p: BitBoard::Small(0),
-            shifted_g: BitBoard::Small(0),
-            shifted_p: BitBoard::Small(0),
-            temp: BitBoard::Small(0),
+            generator: BitBoardLarge::default(),
+            g: BitBoardLarge::default(),
+            p: BitBoardLarge::default(),
+            shifted_g: BitBoardLarge::default(),
+            shifted_p: BitBoardLarge::default(),
+            temp: BitBoardLarge::default(),
         }
     }
 }
@@ -103,7 +103,7 @@ pub fn leaves_king_in_check(board: &mut Board, player: Player, mv: &Move) -> boo
     in_check
 }
 
-fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
+pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
     let mut moves = MoveList::new();
     let occupancy = match player {
         Player::White => &board.white_occupancy,
@@ -246,50 +246,33 @@ fn generate_slider_moves_bitwise(
     directions: &[DirectionInfo],
     moves: &mut MoveList,
 
-    generator: &mut BitBoard,
-    g: &mut BitBoard,
-    p: &mut BitBoard,
-    shifted_g: &mut BitBoard,
-    shifted_p: &mut BitBoard,
-    temp: &mut BitBoard,
+    generator: &mut BitBoardLarge,
+    g: &mut BitBoardLarge,
+    p: &mut BitBoardLarge,
+    shifted_g: &mut BitBoardLarge,
+    shifted_p: &mut BitBoardLarge,
+    temp: &mut BitBoardLarge,
 ) {
-    match generator {
-        BitBoard::Small(b) => *b = 0,
-        BitBoard::Medium(b) => *b = 0,
-        BitBoard::Large { data } => {
-            for x in data.iter_mut() {
-                *x = 0;
-            }
-        }
+    for x in generator.data.iter_mut() {
+        *x = 0;
     }
     generator.set_bit(origin_idx);
 
     let all_occupancy = &board.white_occupancy | &board.black_occupancy;
-    let empty = match all_occupancy {
-        BitBoard::Small(b) => {
-            let mask = (1u32.checked_shl(board.total_cells as u32).unwrap_or(0)).wrapping_sub(1);
-            BitBoard::Small((!b) & mask)
-        }
-        BitBoard::Medium(b) => {
-            let mask = (1u128.checked_shl(board.total_cells as u32).unwrap_or(0)).wrapping_sub(1);
-            BitBoard::Medium((!b) & mask)
-        }
-        BitBoard::Large { data } => {
-            let mut new_data = SmallVec::with_capacity(data.len());
-            let mut remaining = board.total_cells;
-            for val in data {
-                let limit = std::cmp::min(64, remaining);
-                let mask = if limit == 64 {
-                    !0u64
-                } else {
-                    (1u64 << limit) - 1
-                };
-                new_data.push((!val) & mask);
-                remaining = remaining.saturating_sub(64);
-            }
-            BitBoard::Large { data: new_data }
-        }
-    };
+
+    let mut empty_data = SmallVec::with_capacity(all_occupancy.data.len());
+    let mut remaining = board.total_cells;
+    for val in &all_occupancy.data {
+        let limit = std::cmp::min(64, remaining);
+        let mask = if limit == 64 {
+            !0u64
+        } else {
+            (1u64 << limit) - 1
+        };
+        empty_data.push((!val) & mask);
+        remaining = remaining.saturating_sub(64);
+    }
+    let empty = BitBoardLarge { data: empty_data };
 
     let own_occupancy = match player {
         Player::White => &board.white_occupancy,
@@ -326,15 +309,15 @@ fn generate_slider_moves_bitwise(
 }
 
 pub fn kogge_stone_fill_inplace(
-    g: &mut BitBoard,
-    p: &mut BitBoard,
+    g: &mut BitBoardLarge,
+    p: &mut BitBoardLarge,
     stride: isize,
     board: &Board,
     dir_info: &DirectionInfo,
 
-    shifted_g: &mut BitBoard,
-    shifted_p: &mut BitBoard,
-    temp: &mut BitBoard,
+    shifted_g: &mut BitBoardLarge,
+    shifted_p: &mut BitBoardLarge,
+    temp: &mut BitBoardLarge,
 ) {
     let mut shift_amt = 1;
 

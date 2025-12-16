@@ -1,4 +1,5 @@
 pub mod bitboard;
+pub mod bitboard_large;
 pub mod board_representation;
 pub mod cache;
 pub mod entity;
@@ -6,6 +7,7 @@ pub mod u64_board;
 
 pub use bitboard::BitBoard;
 pub use bitboard::BitIterator;
+pub use bitboard_large::BitBoardLarge;
 pub use board_representation::BoardRepresentation;
 pub use cache::BoardCache;
 pub use entity::Board;

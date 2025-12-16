@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use hyperchess::domain::board::{BitBoard, Board};
+    use hyperchess::domain::board::Board;
     use hyperchess::domain::coordinate::Coordinate;
     use hyperchess::domain::models::{Piece, PieceType, Player};
     use hyperchess::domain::rules::Rules;
@@ -65,7 +65,7 @@ mod tests {
         {
             let mask_idx = info.id * board.side + 1;
             if let Some(mask) = board.cache.validity_masks.get(mask_idx) {
-                if let BitBoard::Small(bits) = mask {
+                if let Some(bits) = mask.data.get(0) {
                     println!("Mask (0,-1) step 1: {:016b}", bits);
                 }
             }

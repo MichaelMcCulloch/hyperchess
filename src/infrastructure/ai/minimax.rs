@@ -208,7 +208,8 @@ impl MinimaxBot {
             }
         }
 
-        let mut moves = Rules::generate_legal_moves(board, player);
+        let mut moves = Rules::generate_pseudo_legal_moves(board, player);
+
         if moves.is_empty() {
             if let Some(king_pos) = board.get_king_coordinate(player) {
                 if Rules::is_square_attacked(board, &king_pos, player.opponent()) {
@@ -237,6 +238,7 @@ impl MinimaxBot {
         let mut best_score = -i32::MAX;
         let original_alpha = alpha;
         let mut best_move_obj: Option<Move> = None;
+        let mut legal_moves_count = 0;
 
         let in_check = if let Some(king_pos) = board.get_king_coordinate(player) {
             Rules::is_square_attacked(board, &king_pos, player.opponent())
@@ -249,6 +251,14 @@ impl MinimaxBot {
                 Ok(i) => i,
                 Err(_) => continue,
             };
+
+            if let Some(king_pos) = board.get_king_coordinate(player) {
+                if Rules::is_square_attacked(board, &king_pos, player.opponent()) {
+                    board.unmake_move(mv, info);
+                    continue;
+                }
+            }
+            legal_moves_count += 1;
 
             let is_capture = info.captured.is_some();
             let is_promotion = mv.promotion.is_some();
@@ -357,6 +367,14 @@ impl MinimaxBot {
                     killers[depth][0] = Some(mv.clone());
                 }
                 break;
+            }
+        }
+
+        if legal_moves_count == 0 {
+            if in_check {
+                return -CHECKMATE_SCORE + (self.depth - depth) as i32;
+            } else {
+                return 0;
             }
         }
 

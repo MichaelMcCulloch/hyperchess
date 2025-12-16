@@ -49,9 +49,22 @@ impl MCTS {
         stop_flag: Option<Arc<AtomicBool>>,
         nodes_searched: Option<Arc<AtomicUsize>>,
         rollout_depth: usize,
+        root_moves: Option<MoveList>,
     ) -> Self {
         let mut root_clone = root_state.clone();
-        let moves = Rules::generate_legal_moves(&mut root_clone, root_player);
+
+        let moves = if let Some(m) = root_moves {
+            m
+        } else {
+            let pseudo = Rules::generate_pseudo_legal_moves(&mut root_clone, root_player);
+            let mut valid = MoveList::new();
+            for mv in pseudo {
+                if !Rules::leaves_king_in_check(&mut root_clone, root_player, &mv) {
+                    valid.push(mv);
+                }
+            }
+            valid
+        };
 
         let mut sorted_moves: Vec<(Move, i32)> = moves
             .into_iter()
@@ -130,6 +143,18 @@ impl MCTS {
         let chunk_size = iterations / num_tasks;
         let remainder = iterations % num_tasks;
 
+        let root_moves = {
+            let mut root_clone = root_state.clone();
+            let pseudo = Rules::generate_pseudo_legal_moves(&mut root_clone, self.root_player);
+            let mut valid = MoveList::new();
+            for mv in pseudo {
+                if !Rules::leaves_king_in_check(&mut root_clone, self.root_player, &mv) {
+                    valid.push(mv);
+                }
+            }
+            valid
+        };
+
         let results: Vec<(u32, f64, Vec<(Move, u32, f64)>)> = (0..num_tasks)
             .into_par_iter()
             .map(|i| {
@@ -150,6 +175,7 @@ impl MCTS {
                     Some(self.stop_flag.clone()),
                     Some(self.nodes_searched.clone()),
                     self.rollout_depth,
+                    Some(root_moves.clone()),
                 );
                 local_mcts.execute_iterations(root_state, count);
 

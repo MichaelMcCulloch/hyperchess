@@ -104,6 +104,7 @@ impl PlayerStrategy for MctsBot {
             Some(self.stop_flag.clone()),
             Some(self.nodes_searched.clone()),
             self.config.rollout_depth,
+            None,
         );
 
         let (_win_rate, best_move) = mcts.run(board, self.config.iterations);

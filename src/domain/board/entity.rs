@@ -40,7 +40,7 @@ pub struct GenericBoard<R: BoardRepresentation = BitBoard> {
     pub castling_rights: u8,
 }
 
-pub type Board = GenericBoard<BitBoard>;
+pub type Board = GenericBoard<crate::domain::board::BitBoardLarge>;
 
 impl<R: BoardRepresentation> GenericBoard<R> {
     pub fn new_empty(dimension: usize, side: usize) -> Self {
