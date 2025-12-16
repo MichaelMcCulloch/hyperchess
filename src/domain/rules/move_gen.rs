@@ -1,6 +1,7 @@
 use smallvec::SmallVec;
 use std::cell::RefCell;
 
+use crate::domain::board::cache::DirectionInfo;
 use crate::domain::board::{BitBoard, Board};
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{Move, PieceType, Player};
@@ -242,7 +243,7 @@ fn generate_slider_moves_bitwise(
     origin_idx: usize,
     origin_coord: &Coordinate,
     player: Player,
-    directions: &[Vec<isize>],
+    directions: &[DirectionInfo],
     moves: &mut MoveList,
 
     generator: &mut BitBoard,
@@ -295,8 +296,8 @@ fn generate_slider_moves_bitwise(
         Player::Black => &board.black_occupancy,
     };
 
-    for dir in directions {
-        let stride = calculate_stride(board, dir);
+    for dir_info in directions {
+        let stride = calculate_stride(board, &dir_info.offsets);
         if stride == 0 {
             continue;
         }
@@ -304,7 +305,7 @@ fn generate_slider_moves_bitwise(
         g.copy_from(generator);
         p.copy_from(&empty);
 
-        kogge_stone_fill_inplace(g, p, stride, board, dir, shifted_g, shifted_p, temp);
+        kogge_stone_fill_inplace(g, p, stride, board, dir_info, shifted_g, shifted_p, temp);
 
         for to_idx in g.iter_indices() {
             if to_idx == origin_idx {
@@ -329,7 +330,7 @@ pub fn kogge_stone_fill_inplace(
     p: &mut BitBoard,
     stride: isize,
     board: &Board,
-    direction: &[isize],
+    dir_info: &DirectionInfo,
 
     shifted_g: &mut BitBoard,
     shifted_p: &mut BitBoard,
@@ -337,17 +338,14 @@ pub fn kogge_stone_fill_inplace(
 ) {
     let mut shift_amt = 1;
 
-    let dir_vec = direction.to_vec();
+    let mask_base_idx = dir_info.id * board.side;
 
     while shift_amt < board.side {
-        let mask = if let Some(m) = board
-            .cache
-            .validity_masks
-            .get(&(dir_vec.clone(), shift_amt))
-        {
-            m
-        } else {
-            panic!("Validity mask missing");
+        let mask = unsafe {
+            board
+                .cache
+                .validity_masks
+                .get_unchecked(mask_base_idx + shift_amt)
         };
 
         shifted_g.copy_from(g);
@@ -375,11 +373,7 @@ pub fn kogge_stone_fill_inplace(
         shift_amt *= 2;
     }
 
-    let mask = board
-        .cache
-        .validity_masks
-        .get(&(dir_vec, 1))
-        .expect("Validity mask for step 1 missing");
+    let mask = unsafe { board.cache.validity_masks.get_unchecked(mask_base_idx + 1) };
 
     *g &= mask;
     if stride > 0 {
@@ -413,7 +407,7 @@ fn generate_castling_moves(board: &Board, player: Player, moves: &mut MoveList) 
     }
 
     let king_file = 4;
-    let mut king_coords = vec![rank; board.dimension];
+    let mut king_coords = vec![rank as u8; board.dimension];
     king_coords[1] = king_file;
     let king_coord = Coordinate::new(king_coords.clone());
     if is_square_attacked(board, &king_coord, player.opponent()) {
@@ -540,7 +534,7 @@ fn generate_pawn_moves(board: &Board, origin: &Coordinate, player: Player, moves
                     add_pawn_move(origin, &target, board.side, player, moves);
                     let is_start_rank = match player {
                         Player::White => origin.values[movement_axis] == 1,
-                        Player::Black => origin.values[movement_axis] == board.side - 2,
+                        Player::Black => origin.values[movement_axis] as usize == board.side - 2,
                     };
                     if is_start_rank {
                         if let Some(target2) = apply_offset(&target, &forward_step, board.side) {
@@ -583,7 +577,7 @@ fn generate_pawn_moves(board: &Board, origin: &Coordinate, player: Player, moves
 
 fn add_pawn_move(
     from: &Coordinate,
-    to_vals: &[usize],
+    to_vals: &[u8],
     side: usize,
     player: Player,
     moves: &mut MoveList,
@@ -593,7 +587,7 @@ fn add_pawn_move(
             true
         } else {
             match player {
-                Player::White => to_vals[i] == side - 1,
+                Player::White => to_vals[i] as usize == side - 1,
                 Player::Black => to_vals[i] == 0,
             }
         }

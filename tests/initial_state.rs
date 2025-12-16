@@ -3,7 +3,7 @@ use hyperchess::domain::coordinate::Coordinate;
 use hyperchess::domain::models::{PieceType, Player};
 
 fn coord(x: usize, y: usize) -> Coordinate {
-    Coordinate::new(vec![x, y])
+    Coordinate::new(vec![x as u8, y as u8])
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn test_3d_setup() {
     assert!(
         is_piece_at(
             &board,
-            &Coordinate::new(vec![0, 2, 0]),
+            &Coordinate::new(vec![0u8, 2, 0]),
             PieceType::King,
             Player::White
         ),
@@ -67,7 +67,7 @@ fn test_3d_setup() {
     assert!(
         is_piece_at(
             &board,
-            &Coordinate::new(vec![3, 2, 3]),
+            &Coordinate::new(vec![3u8, 2, 3]),
             PieceType::King,
             Player::Black
         ),
@@ -77,7 +77,7 @@ fn test_3d_setup() {
     assert!(
         is_piece_at(
             &board,
-            &Coordinate::new(vec![1, 0, 1]),
+            &Coordinate::new(vec![1u8, 0, 1]),
             PieceType::Pawn,
             Player::White
         ),
@@ -87,7 +87,7 @@ fn test_3d_setup() {
     assert!(
         is_piece_at(
             &board,
-            &Coordinate::new(vec![2, 0, 2]),
+            &Coordinate::new(vec![2u8, 0, 2]),
             PieceType::Pawn,
             Player::Black
         ),
@@ -95,7 +95,7 @@ fn test_3d_setup() {
     );
 
     assert!(
-        board.get_piece(&Coordinate::new(vec![0, 2, 1])).is_none(),
+        board.get_piece(&Coordinate::new(vec![0u8, 2, 1])).is_none(),
         "Should be empty at x=0, z=1"
     );
 }

@@ -97,20 +97,20 @@ impl<R: BoardRepresentation> GenericBoard<R> {
         self.hash ^= self.zobrist.piece_keys[offset * self.total_cells + index];
     }
 
-    pub fn coords_to_index(&self, coords: &[usize]) -> Option<usize> {
+    pub fn coords_to_index(&self, coords: &[u8]) -> Option<usize> {
         let mut index = 0;
         let mut multiplier = 1;
         for &c in coords {
-            if c >= self.side {
+            if c as usize >= self.side {
                 return None;
             }
-            index += c * multiplier;
+            index += (c as usize) * multiplier;
             multiplier *= self.side;
         }
         Some(index)
     }
 
-    pub fn index_to_coords(&self, index: usize) -> SmallVec<[usize; 4]> {
+    pub fn index_to_coords(&self, index: usize) -> SmallVec<[u8; 8]> {
         self.cache.index_to_coords[index].clone()
     }
 
@@ -143,8 +143,8 @@ impl<R: BoardRepresentation> GenericBoard<R> {
 
     pub fn setup_standard_chess(&mut self) {
         for file_y in 0..self.side {
-            let mut white_coords = vec![0; self.dimension];
-            white_coords[1] = file_y;
+            let mut white_coords: SmallVec<[u8; 8]> = smallvec![0; self.dimension];
+            white_coords[1] = file_y as u8;
 
             white_coords[0] = 1;
 
@@ -178,14 +178,15 @@ impl<R: BoardRepresentation> GenericBoard<R> {
                 );
             }
 
-            let mut black_coords = vec![self.side - 1; self.dimension];
-            black_coords[1] = file_y;
+            let mut black_coords: SmallVec<[u8; 8]> =
+                smallvec![(self.side - 1) as u8; self.dimension];
+            black_coords[1] = file_y as u8;
 
             if self.side > 3 {
-                black_coords[0] = self.side - 2;
+                black_coords[0] = (self.side - 2) as u8;
 
                 for d in 2..self.dimension {
-                    black_coords[d] = self.side - 2;
+                    black_coords[d] = (self.side - 2) as u8;
                 }
 
                 if let Some(idx) = self.coords_to_index(&black_coords) {
@@ -199,10 +200,10 @@ impl<R: BoardRepresentation> GenericBoard<R> {
                 }
             }
 
-            black_coords[0] = self.side - 1;
+            black_coords[0] = (self.side - 1) as u8;
 
             for d in 2..self.dimension {
-                black_coords[d] = self.side - 1;
+                black_coords[d] = (self.side - 1) as u8;
             }
 
             if let Some(idx) = self.coords_to_index(&black_coords) {
@@ -353,7 +354,7 @@ impl<R: BoardRepresentation> GenericBoard<R> {
         self.en_passant_target = None;
 
         if moving_piece.piece_type == PieceType::Pawn {
-            let mut diffs = SmallVec::<[usize; 4]>::new();
+            let mut diffs: SmallVec<[usize; 4]> = SmallVec::new();
             for i in 0..self.dimension {
                 let d = (mv.from.values[i] as isize - mv.to.values[i] as isize).abs();
                 diffs.push(d as usize);
@@ -373,7 +374,7 @@ impl<R: BoardRepresentation> GenericBoard<R> {
                         -1
                     };
                     let mut target_vals = mv.from.values.clone();
-                    target_vals[axis] = (target_vals[axis] as isize + dir) as usize;
+                    target_vals[axis] = (target_vals[axis] as isize + dir) as u8;
                     if let Some(target_idx) = self.coords_to_index(&target_vals) {
                         self.en_passant_target = Some((target_idx, to_idx));
                         if target_idx < self.zobrist.en_passant_keys.len() {
@@ -396,14 +397,14 @@ impl<R: BoardRepresentation> GenericBoard<R> {
         if self.side == 8 {
             let w_rank = 0;
             let b_rank = 7;
-            let mut w_qs_c: SmallVec<[usize; 4]> = smallvec![w_rank; self.dimension];
+            let mut w_qs_c: SmallVec<[u8; 8]> = smallvec![w_rank; self.dimension];
             w_qs_c[1] = 0;
-            let mut w_ks_c: SmallVec<[usize; 4]> = smallvec![w_rank; self.dimension];
+            let mut w_ks_c: SmallVec<[u8; 8]> = smallvec![w_rank; self.dimension];
             w_ks_c[1] = 7;
 
-            let mut b_qs_c: SmallVec<[usize; 4]> = smallvec![b_rank; self.dimension];
+            let mut b_qs_c: SmallVec<[u8; 8]> = smallvec![b_rank; self.dimension];
             b_qs_c[1] = 0;
-            let mut b_ks_c: SmallVec<[usize; 4]> = smallvec![b_rank; self.dimension];
+            let mut b_ks_c: SmallVec<[u8; 8]> = smallvec![b_rank; self.dimension];
             b_ks_c[1] = 7;
 
             let w_qs = self.coords_to_index(&w_qs_c);
@@ -651,7 +652,8 @@ impl<R: BoardRepresentation> GenericBoard<R> {
             }
         }
 
-        for dir in &self.cache.bishop_directions {
+        for dir_info in &self.cache.bishop_directions {
+            let dir = &dir_info.offsets;
             if crate::domain::rules::Rules::scan_ray_for_threat(
                 self,
                 &target_sq.values,
@@ -667,7 +669,8 @@ impl<R: BoardRepresentation> GenericBoard<R> {
             }
         }
 
-        for dir in &self.cache.rook_directions {
+        for dir_info in &self.cache.rook_directions {
+            let dir = &dir_info.offsets;
             if crate::domain::rules::Rules::scan_ray_for_threat(
                 self,
                 &target_sq.values,
@@ -683,13 +686,15 @@ impl<R: BoardRepresentation> GenericBoard<R> {
             }
         }
 
-        for dir in &self.cache.bishop_directions {
+        for dir_info in &self.cache.bishop_directions {
+            let dir = &dir_info.offsets;
             if let Some(idx) = self.trace_ray_for_piece(target_sq, dir, attacker, PieceType::Queen)
             {
                 return Some((900, idx));
             }
         }
-        for dir in &self.cache.rook_directions {
+        for dir_info in &self.cache.rook_directions {
+            let dir = &dir_info.offsets;
             if let Some(idx) = self.trace_ray_for_piece(target_sq, dir, attacker, PieceType::Queen)
             {
                 return Some((900, idx));

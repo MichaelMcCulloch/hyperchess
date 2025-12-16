@@ -5,7 +5,7 @@ use hyperchess::domain::rules::Rules;
 use std::collections::HashSet;
 
 fn coord3(x: usize, y: usize, z: usize) -> Coordinate {
-    Coordinate::new(vec![x, y, z])
+    Coordinate::new(vec![x as u8, y as u8, z as u8])
 }
 
 #[test]

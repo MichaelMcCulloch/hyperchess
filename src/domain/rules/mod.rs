@@ -23,7 +23,7 @@ impl Rules {
 
     pub fn scan_ray_for_threat<R: BoardRepresentation>(
         board: &GenericBoard<R>,
-        origin_vals: &[usize],
+        origin_vals: &[u8],
         direction: &[isize],
         attacker: Player,
         threat_types: &[PieceType],
@@ -63,27 +63,19 @@ impl Rules {
         move_gen::leaves_king_in_check(board, player, mv)
     }
 
-    pub fn apply_offset(
-        coords: &[usize],
-        offset: &[isize],
-        side: usize,
-    ) -> Option<SmallVec<[usize; 4]>> {
+    pub fn apply_offset(coords: &[u8], offset: &[isize], side: usize) -> Option<SmallVec<[u8; 8]>> {
         apply_offset(coords, offset, side)
     }
 }
 
-pub fn apply_offset(
-    coords: &[usize],
-    offset: &[isize],
-    side: usize,
-) -> Option<SmallVec<[usize; 4]>> {
+pub fn apply_offset(coords: &[u8], offset: &[isize], side: usize) -> Option<SmallVec<[u8; 8]>> {
     let mut new_coords = SmallVec::with_capacity(coords.len());
     for (c, &o) in coords.iter().zip(offset.iter()) {
         let val = *c as isize + o;
         if val < 0 || val >= side as isize {
             return None;
         }
-        new_coords.push(val as usize);
+        new_coords.push(val as u8);
     }
     Some(new_coords)
 }

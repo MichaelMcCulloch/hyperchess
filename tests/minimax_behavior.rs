@@ -7,7 +7,7 @@ use hyperchess::domain::services::PlayerStrategy;
 use hyperchess::infrastructure::ai::MinimaxBot;
 
 fn coord(x: usize, y: usize) -> Coordinate {
-    Coordinate::new(vec![x, y])
+    Coordinate::new(vec![x as u8, y as u8])
 }
 
 #[test]

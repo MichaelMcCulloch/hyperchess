@@ -13,7 +13,7 @@ impl HumanConsolePlayer {
 
     fn parse_coordinate(input: &str, dim: usize, side: usize) -> Result<Coordinate, String> {
         let mut remaining = input.trim();
-        let mut coords = vec![0; dim];
+        let mut coords: Vec<u8> = vec![0; dim];
 
         for d in (0..dim).rev() {
             if remaining.is_empty() {
@@ -44,7 +44,7 @@ impl HumanConsolePlayer {
                 if val >= side {
                     return Err(format!("Coordinate letter '{}' out of bounds", letter_part));
                 }
-                coords[d] = val;
+                coords[d] = val as u8;
             } else {
                 let end_idx = remaining
                     .find(|c: char| !c.is_ascii_digit())
@@ -67,7 +67,7 @@ impl HumanConsolePlayer {
                         val, side
                     ));
                 }
-                coords[d] = val - 1;
+                coords[d] = (val - 1) as u8;
             }
         }
 

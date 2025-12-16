@@ -35,11 +35,11 @@ pub fn is_square_attacked<R: BoardRepresentation>(
         }
     }
 
-    for dir in &board.cache.rook_directions {
+    for dir_info in &board.cache.rook_directions {
         if scan_ray_for_threat(
             board,
             &square.values,
-            dir,
+            &dir_info.offsets,
             by_player,
             &[PieceType::Rook, PieceType::Queen],
         ) {
@@ -47,11 +47,11 @@ pub fn is_square_attacked<R: BoardRepresentation>(
         }
     }
 
-    for dir in &board.cache.bishop_directions {
+    for dir_info in &board.cache.bishop_directions {
         if scan_ray_for_threat(
             board,
             &square.values,
-            dir,
+            &dir_info.offsets,
             by_player,
             &[PieceType::Bishop, PieceType::Queen],
         ) {
@@ -79,12 +79,12 @@ pub fn is_square_attacked<R: BoardRepresentation>(
 
 pub fn scan_ray_for_threat<R: BoardRepresentation>(
     board: &GenericBoard<R>,
-    origin_vals: &[usize],
+    origin_vals: &[u8],
     direction: &[isize],
     attacker: Player,
     threat_types: &[PieceType],
 ) -> bool {
-    let mut current: SmallVec<[usize; 4]> = SmallVec::from_slice(origin_vals);
+    let mut current: SmallVec<[u8; 8]> = SmallVec::from_slice(origin_vals);
     let enemy_occupancy = match attacker {
         Player::White => &board.white_occupancy,
         Player::Black => &board.black_occupancy,

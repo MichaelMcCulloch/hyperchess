@@ -1,5 +1,6 @@
 use smallvec::SmallVec;
 
+use crate::domain::board::cache::DirectionInfo;
 use crate::domain::board::{BitBoard, Board};
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{PieceType, Player};
@@ -67,7 +68,7 @@ fn count_slider_moves(
     board: &Board,
     origin: &Coordinate,
     player: Player,
-    directions: &[Vec<isize>],
+    directions: &[DirectionInfo],
 ) -> i32 {
     let origin_idx = board.coords_to_index(&origin.values).unwrap();
     let mut count = 0;
@@ -112,8 +113,8 @@ fn count_slider_moves(
     let mut shifted_p = generator.zero_like();
     let mut temp = generator.zero_like();
 
-    for dir in directions {
-        let stride = calculate_stride(board, dir);
+    for dir_info in directions {
+        let stride = calculate_stride(board, &dir_info.offsets);
         if stride == 0 {
             continue;
         }
@@ -126,7 +127,7 @@ fn count_slider_moves(
             &mut p,
             stride,
             board,
-            dir,
+            dir_info,
             &mut shifted_g,
             &mut shifted_p,
             &mut temp,

@@ -6,7 +6,7 @@ mod tests {
     use hyperchess::domain::rules::Rules;
 
     fn coord(x: usize, y: usize) -> Coordinate {
-        Coordinate::new(vec![x, y])
+        Coordinate::new(vec![x as u8, y as u8])
     }
 
     #[test]
@@ -57,9 +57,17 @@ mod tests {
         }
 
         let dir = vec![0, -1];
-        if let Some(mask) = board.cache.validity_masks.get(&(dir.clone(), 1)) {
-            if let BitBoard::Small(bits) = mask {
-                println!("Mask (0,-1) step 1: {:016b}", bits);
+        if let Some(info) = board
+            .cache
+            .rook_directions
+            .iter()
+            .find(|d| d.offsets == dir)
+        {
+            let mask_idx = info.id * board.side + 1;
+            if let Some(mask) = board.cache.validity_masks.get(mask_idx) {
+                if let BitBoard::Small(bits) = mask {
+                    println!("Mask (0,-1) step 1: {:016b}", bits);
+                }
             }
         }
 

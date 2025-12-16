@@ -120,8 +120,8 @@ pub async fn take_turn(
         return (StatusCode::FORBIDDEN, "Not human turn").into_response();
     }
 
-    let coord_start = Coordinate::new(payload.start);
-    let coord_end = Coordinate::new(payload.end);
+    let coord_start = Coordinate::new(payload.start.iter().map(|&x| x as u8).collect::<Vec<u8>>());
+    let coord_end = Coordinate::new(payload.end.iter().map(|&x| x as u8).collect::<Vec<u8>>());
 
     let mut chosen_move = None;
     let mut temp_board_valid = session.game.board().clone();
@@ -178,7 +178,11 @@ fn build_api_state(game: &Game) -> ApiGameState {
         .chain(board.black_occupancy.iter_indices())
         .map(|idx| {
             let p = board.get_piece_at_index(idx).unwrap();
-            let coords = board.index_to_coords(idx).into_vec();
+            let coords = board
+                .index_to_coords(idx)
+                .iter()
+                .map(|&x| x as usize)
+                .collect();
             ApiPiece {
                 piece_type: p.piece_type,
                 owner: p.owner,
@@ -224,7 +228,7 @@ fn build_api_state(game: &Game) -> ApiGameState {
         }
 
         let valid_move = ApiValidMove {
-            to: mv.to.values.into_vec(),
+            to: mv.to.values.iter().map(|&x| x as usize).collect(),
             consequence,
         };
 

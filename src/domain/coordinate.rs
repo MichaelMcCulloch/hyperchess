@@ -4,11 +4,11 @@ use std::fmt;
 
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Coordinate {
-    pub values: SmallVec<[usize; 4]>,
+    pub values: SmallVec<[u8; 8]>,
 }
 
 impl Coordinate {
-    pub fn new<I: Into<SmallVec<[usize; 4]>>>(values: I) -> Self {
+    pub fn new<I: Into<SmallVec<[u8; 8]>>>(values: I) -> Self {
         Self {
             values: values.into(),
         }

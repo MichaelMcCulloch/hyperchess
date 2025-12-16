@@ -1,5 +1,5 @@
 use super::eval::Evaluator;
-use crate::config::{AppConfig, MinimaxConfig};
+use crate::config::AppConfig;
 use crate::domain::board::Board;
 use crate::domain::models::{Move, PieceType, Player};
 use crate::domain::rules::Rules;

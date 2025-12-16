@@ -29,8 +29,8 @@ fn test_initial_board_setup_and_pawn_move() {
         owner: Player::Black,
     };
 
-    let w_king_coord = Coordinate::new(vec![0, 0]);
-    let b_king_coord = Coordinate::new(vec![7, 7]);
+    let w_king_coord = Coordinate::new(vec![0u8, 0]);
+    let b_king_coord = Coordinate::new(vec![7u8, 7]);
 
     board.set_piece(&w_king_coord, w_king).unwrap();
     board.set_piece(&b_king_coord, b_king).unwrap();

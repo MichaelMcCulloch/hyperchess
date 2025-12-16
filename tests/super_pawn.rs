@@ -4,7 +4,7 @@ use hyperchess::domain::models::{Piece, PieceType, Player};
 use hyperchess::domain::rules::Rules;
 
 fn coord_3d(x: usize, y: usize, z: usize) -> Coordinate {
-    Coordinate::new(vec![x, y, z])
+    Coordinate::new(vec![x as u8, y as u8, z as u8])
 }
 
 #[test]

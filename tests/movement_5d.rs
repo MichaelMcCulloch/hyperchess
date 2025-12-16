@@ -9,7 +9,7 @@ fn test_5d_bishop_movement() {
     let side = 3;
     let mut board = Board::new_empty(dimension, side);
 
-    let center = Coordinate::new(vec![1, 1, 1, 1, 1]);
+    let center = Coordinate::new(vec![1u8, 1, 1, 1, 1]);
     board
         .set_piece(
             &center,
@@ -42,7 +42,7 @@ fn test_5d_rook_movement() {
     let side = 3;
     let mut board = Board::new_empty(dimension, side);
 
-    let center = Coordinate::new(vec![1, 1, 1, 1, 1]);
+    let center = Coordinate::new(vec![1u8, 1, 1, 1, 1]);
     board
         .set_piece(
             &center,
@@ -71,7 +71,7 @@ fn test_5d_knight_movement() {
     let side = 5;
     let mut board = Board::new_empty(dimension, side);
 
-    let center = Coordinate::new(vec![2, 2, 2, 2, 2]);
+    let center = Coordinate::new(vec![2u8, 2, 2, 2, 2]);
     board
         .set_piece(
             &center,
