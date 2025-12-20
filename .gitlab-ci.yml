@@ -11,11 +11,24 @@ services:
     command: ["--tls=false"]
 
 stages:
+  - context
   - test
   - build
 
 before_script:
   - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+
+feed_repo_md:
+  stage: context
+  image: registry.semanticallyinvalid.net/utility/ftb:latest
+  script:
+    - feed_the_machine --include rs . > hyperchess.md
+  artifacts:
+    name: repo-md-$CI_COMMIT_SHA
+    paths:
+      - hyperchess.md
+    when: always
+
 
 test_server:
   stage: test
