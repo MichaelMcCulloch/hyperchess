@@ -15,8 +15,6 @@ stages:
   - test
   - build
 
-before_script:
-  - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
 
 feed_repo_md:
   stage: context
@@ -38,6 +36,8 @@ test_server:
 
 build_client:
   stage: build
+  before_script:
+  - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
   script:
     - docker build -t $CI_REGISTRY_IMAGE/client client/
     - docker push $CI_REGISTRY_IMAGE/client
@@ -46,6 +46,8 @@ build_client:
 
 build_server:
   stage: build
+  before_script:
+  - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
   script:
     - docker build -t $CI_REGISTRY_IMAGE/server .
     - docker push $CI_REGISTRY_IMAGE/server
