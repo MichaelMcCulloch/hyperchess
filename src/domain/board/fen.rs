@@ -178,6 +178,7 @@ impl Board {
             board.geo.total_cells,
             side_to_move,
         );
+        board.state.start_phase = board.compute_phase();
 
         Ok(board)
     }

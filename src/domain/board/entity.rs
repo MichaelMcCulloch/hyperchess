@@ -210,6 +210,31 @@ impl<R: BoardRepresentation> GenericBoard<R> {
         self.state.hash = self
             .zobrist
             .get_hash(&self.pieces, &self.state, self.geo.total_cells);
+        self.state.start_phase = self.compute_phase();
+    }
+
+    /// Sum phase weights for all non-pawn, non-king pieces on the board.
+    /// Dimension-agnostic: just walks the bitboards.
+    pub fn compute_phase(&self) -> i32 {
+        let mut phase = 0i32;
+        let total = self.geo.total_cells;
+        for idx in 0..total {
+            let occupied = self.pieces.white_occupancy.get_bit(idx)
+                || self.pieces.black_occupancy.get_bit(idx);
+            if !occupied {
+                continue;
+            }
+            if self.pieces.knights.get_bit(idx) {
+                phase += 1;
+            } else if self.pieces.bishops.get_bit(idx) {
+                phase += 1;
+            } else if self.pieces.rooks.get_bit(idx) {
+                phase += 2;
+            } else if self.pieces.queens.get_bit(idx) {
+                phase += 4;
+            }
+        }
+        phase
     }
 
     fn determine_backrank_piece(&self, file_idx: usize, total_files: usize) -> PieceType {

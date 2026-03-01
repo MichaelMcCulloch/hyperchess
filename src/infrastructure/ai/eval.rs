@@ -127,14 +127,26 @@ const ROOK_SEMI_OPEN_FILE_BONUS_EG: i32 = 5;
 const CASTLING_RIGHTS_BONUS_MG: i32 = 10;
 const CASTLING_RIGHTS_BONUS_EG: i32 = 0;
 
+// ── Trade bonus (simplification awareness) ─────────────────────────
+//
+// When one side has more non-pawn material, piece trades amplify
+// that advantage.  The bonus scales with:
+//   (a) material imbalance (non-pawn, centipawns)
+//   (b) how much material has left the board (simplification ratio)
+//
+// Fully dimension-agnostic: uses only piece counts and stored
+// start_phase, not board topology.
+
+const TRADE_BONUS_MG: i32 = 0; // negligible in middlegame
+const TRADE_BONUS_EG: i32 = 48; // ~½ pawn at maximum simplification
+
 pub struct Evaluator;
 
 impl Evaluator {
     pub fn evaluate(board: &Board) -> i32 {
         let (mg_score, eg_score, phase) = Self::gather_scores(board);
 
-        let start_phase = Self::calculate_start_phase(board);
-
+        let start_phase = board.state.start_phase.max(1);
         let phase = phase.min(start_phase);
 
         (mg_score * phase + eg_score * (start_phase - phase)) / start_phase
@@ -145,6 +157,10 @@ impl Evaluator {
         let mut eg_score = 0;
         let mut phase = 0;
 
+        // Track non-pawn material per side (for trade bonus)
+        let mut white_npm = 0i32;
+        let mut black_npm = 0i32;
+
         let center = (board.side() as f32 - 1.0) / 2.0;
 
         // Per-piece evaluation (material + PST + mobility)
@@ -153,6 +169,9 @@ impl Evaluator {
             mg_score += mg;
             eg_score += eg;
             phase += p;
+            if piece_type != PieceType::Pawn && piece_type != PieceType::King {
+                white_npm += Self::piece_value_mg(piece_type);
+            }
         }
 
         for (idx, piece_type) in Self::iter_pieces(board, Player::Black) {
@@ -160,6 +179,9 @@ impl Evaluator {
             mg_score -= mg;
             eg_score -= eg;
             phase += p;
+            if piece_type != PieceType::Pawn && piece_type != PieceType::King {
+                black_npm += Self::piece_value_mg(piece_type);
+            }
         }
 
         // Positional evaluation (N-dimensional)
@@ -183,7 +205,30 @@ impl Evaluator {
         mg_score += cr_mg;
         eg_score += cr_eg;
 
+        // ── Trade bonus ──
+        // npm_diff > 0 → white has more material → white benefits from trades.
+        // simplification = (start_phase - phase) / start_phase ∈ [0, 1].
+        // We multiply in integer arithmetic to avoid float.
+        let start_phase = board.state.start_phase.max(1);
+        let npm_diff = white_npm - black_npm;
+        let simplification = start_phase - phase.min(start_phase);
+        // trade = npm_diff_sign * BONUS * simplification / start_phase
+        // Normalize npm_diff to roughly ±1..±5 range by dividing by rook value.
+        let npm_norm = npm_diff / ROOK_MG.max(1);
+        mg_score += npm_norm * TRADE_BONUS_MG * simplification / start_phase;
+        eg_score += npm_norm * TRADE_BONUS_EG * simplification / start_phase;
+
         (mg_score, eg_score, phase)
+    }
+
+    fn piece_value_mg(piece_type: PieceType) -> i32 {
+        match piece_type {
+            PieceType::Knight => KNIGHT_MG,
+            PieceType::Bishop => BISHOP_MG,
+            PieceType::Rook => ROOK_MG,
+            PieceType::Queen => QUEEN_MG,
+            _ => 0,
+        }
     }
 
     fn iter_pieces<'a>(
@@ -773,10 +818,6 @@ impl Evaluator {
         let eg = (white_rights - black_rights) * CASTLING_RIGHTS_BONUS_EG;
 
         (mg, eg)
-    }
-
-    fn calculate_start_phase(_board: &Board) -> i32 {
-        24
     }
 }
 

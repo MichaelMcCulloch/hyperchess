@@ -9,6 +9,9 @@ pub struct PositionState {
     pub castling_rights: u8,
     pub halfmove_clock: u16,
     pub fullmove_number: u16,
+    /// Total game-phase value at position creation (for tapered eval).
+    /// Computed from piece counts × phase weights; dimension-agnostic.
+    pub start_phase: i32,
 }
 
 impl PositionState {
@@ -20,6 +23,7 @@ impl PositionState {
             castling_rights: 0,
             halfmove_clock: 0,
             fullmove_number: 1,
+            start_phase: 0,
         }
     }
 
