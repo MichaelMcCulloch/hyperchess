@@ -7,6 +7,8 @@ pub struct PositionState {
     pub history: Vec<u64>,
     pub en_passant_target: Option<(usize, usize)>,
     pub castling_rights: u8,
+    pub halfmove_clock: u16,
+    pub fullmove_number: u16,
 }
 
 impl PositionState {
@@ -16,6 +18,8 @@ impl PositionState {
             history: Vec::new(),
             en_passant_target: None,
             castling_rights: 0,
+            halfmove_clock: 0,
+            fullmove_number: 1,
         }
     }
 

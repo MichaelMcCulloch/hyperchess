@@ -1,8 +1,14 @@
-//! Regression test for a blunder found in a game vs Stockfish 20.
+//! Regression tests for blunders found in games vs Stockfish 20.
 //!
+//! ## Blunder 1: Ke3-d4?? (forced mate)
 //! After move 29 (e4xf5, Rc5-e5+) the engine played Ke3-d4?? walking into
 //! a forced mate: Qg2-e4+ Kd4-c3 Rf8-c8+ Qb3-c4(forced) Qe4xc4#.
 //! The engine must choose Ke3-f4 or Ke3-d3 to avoid the forced mate.
+//!
+//! ## Blunder 2: g2-g4?? (destroys kingside pawn shelter)
+//! At move 13 (White castled on g1, pawns f2/g2/h3), the engine pushed g2-g4??
+//! ripping open the kingside and losing the pawn shelter. With king safety
+//! evaluation, the engine must not play this self-destructive move.
 
 use hyperchess::config::AppConfig;
 use hyperchess::domain::board::Board;
@@ -93,5 +99,65 @@ fn test_no_blunder_allows_forced_mate() {
         (blunder.from, blunder.to),
         "Engine must not play Ke3-d4 which leads to forced mate \
          (Qg2-e4+ Kd4-c3 Rf8-c8+ Qb3-c4 Qe4xc4#)"
+    );
+}
+
+/// At move 13, with the king castled on g1 and pawns f2/g2/h3 shielding it,
+/// the engine played g2-g4?? destroying its own pawn shelter.
+///
+/// NOTE: In the original position, g4 is tactically justified at shallow
+/// depth because of the f5xg4, h3xg4, Bh5xg4, Nf3xg4 sequence that wins
+/// material. The positional disaster only manifests beyond the search
+/// horizon. This test verifies that the king shelter evaluation produces
+/// a meaningful static penalty for removing shelter pieces — it does not
+/// (yet) assert the engine avoids g4, since that requires deeper search
+/// or better pruning of positionally destructive moves.
+///
+/// Game (HyperChess as White vs Stockfish 20 as Black):
+///   1. e2e4 e7e5 2. g1f3 b8c6 3. b1c3 g8f6 4. a2a3 d7d5
+///   5. e4d5 f6d5 6. f1b5 d5c3 7. b2c3 f8d6 8. d1e2 e8g8
+///   9. d2d3 c8g4 10. h2h3 g4h5 11. e1g1 f7f5 12. a1b1 c6a5
+///   13. g2g4?? ← blunder
+///
+/// Position FEN: r2q1rk1/ppp3pp/3b4/nB2pp1b/8/P1PP1N1P/2P1QPP1/1RB2RK1 w - - 2 13
+#[test]
+fn test_king_shelter_eval_penalizes_g4() {
+    use hyperchess::infrastructure::ai::eval::Evaluator;
+
+    let moves = [
+        "e2e4", "e7e5", "g1f3", "b8c6", "b1c3", "g8f6", "a2a3", "d7d5", "e4d5", "f6d5", "f1b5",
+        "d5c3", "b2c3", "f8d6", "d1e2", "e8g8", "d2d3", "c8g4", "h2h3", "g4h5", "e1g1", "f7f5",
+        "a1b1", "c6a5",
+    ];
+
+    let mut board = Board::new(2, 8);
+    replay(&mut board, &moves);
+
+    // Verify the king is on g1 (castled kingside)
+    let white_king = board.get_king_coordinate(Player::White).unwrap();
+    assert_eq!(
+        white_king,
+        Coordinate::new(vec![0, 6]),
+        "White king should be on g1"
+    );
+
+    let eval_before = Evaluator::evaluate(&board);
+
+    let mut board_after_g4 = board.clone();
+    board_after_g4.apply_move(&uci("g2g4")).unwrap();
+    let eval_after = Evaluator::evaluate(&board_after_g4);
+
+    let delta = eval_after - eval_before;
+    println!(
+        "Eval before g4: {} cp, after: {} cp, delta: {} cp",
+        eval_before, eval_after, delta
+    );
+
+    // The static eval must penalize g4 by at least 30cp (loss of king shelter).
+    // In practice the penalty is ~75cp with current constants.
+    assert!(
+        delta <= -30,
+        "Static eval should penalize g2-g4 by at least 30cp for \
+         destroying the kingside shelter (got delta={delta}cp)"
     );
 }

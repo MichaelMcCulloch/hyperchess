@@ -268,8 +268,8 @@ fn vs_stockfish_full_game() {
     let mut config = AppConfig::default();
     config.minimax.depth = 10;
     config.compute.minutes = 2;
-    config.compute.concurrency = 4;
-    config.compute.memory = 256;
+    config.compute.concurrency = 30;
+    config.compute.memory = 4096;
 
     let mut board = Board::new(2, 8);
     let mut bot = MinimaxBot::new(&config, 2, 8);

@@ -3,9 +3,11 @@ pub mod bitboard_large;
 pub mod board_representation;
 pub mod cache;
 pub mod entity;
+pub mod fen;
 pub mod geometry;
 pub mod pieces;
 pub mod position;
+pub mod san;
 pub mod u64_board;
 
 pub use bitboard::BitBoard;
