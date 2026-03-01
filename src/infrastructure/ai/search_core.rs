@@ -48,6 +48,7 @@ struct QFrame {
     moves: smallvec::SmallVec<[(Move, i32); 8]>,
     move_idx: usize,
     pending_unmake: Option<(Move, UnmakeInfo)>,
+    in_check: bool,
 }
 
 use smallvec::SmallVec;
@@ -73,6 +74,7 @@ pub fn q_search(
         moves: SmallVec::new(),
         move_idx: usize::MAX, // sentinel: means "not yet initialized"
         pending_unmake: None,
+        in_check: false,
     });
 
     'outer: loop {
@@ -144,39 +146,74 @@ pub fn q_search(
                 }
             }
 
-            let score_val = Evaluator::evaluate(board);
-            let stand_pat = if stack[depth].player == Player::Black {
-                -score_val
+            // Detect if side to move is in check
+            let in_check = if let Some(king_pos) = board.get_king_coordinate(stack[depth].player) {
+                Rules::is_square_attacked(board, &king_pos, stack[depth].player.opponent())
             } else {
-                score_val
+                false
             };
+            stack[depth].in_check = in_check;
 
-            if stand_pat >= stack[depth].beta {
-                return_value = stack[depth].beta;
-                stack.pop();
-                if stack.is_empty() {
-                    return return_value;
+            if in_check {
+                // When in check: generate all legal evasions (not just captures)
+                // and skip stand-pat (being in check is not a valid "do nothing" option).
+                let legal = Rules::generate_legal_moves(board, stack[depth].player);
+                if legal.is_empty() {
+                    // Checkmate
+                    return_value = -30000;
+                    stack.pop();
+                    if stack.is_empty() {
+                        return return_value;
+                    }
+                    continue;
                 }
-                continue;
+                let mut sorted: SmallVec<[(Move, i32); 8]> = legal
+                    .into_iter()
+                    .map(|m| {
+                        let to_idx = board.coords_to_index(&m.to.values).unwrap_or(0);
+                        let victim = get_piece_value(board, to_idx);
+                        (m, victim)
+                    })
+                    .collect();
+                sorted.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+
+                stack[depth].moves = sorted;
+                stack[depth].move_idx = 0;
+            } else {
+                let score_val = Evaluator::evaluate(board);
+                let stand_pat = if stack[depth].player == Player::Black {
+                    -score_val
+                } else {
+                    score_val
+                };
+
+                if stand_pat >= stack[depth].beta {
+                    return_value = stack[depth].beta;
+                    stack.pop();
+                    if stack.is_empty() {
+                        return return_value;
+                    }
+                    continue;
+                }
+
+                if stand_pat > stack[depth].alpha {
+                    stack[depth].alpha = stand_pat;
+                }
+
+                let loud = Rules::generate_loud_moves(board, stack[depth].player);
+                let mut sorted: SmallVec<[(Move, i32); 8]> = loud
+                    .into_iter()
+                    .map(|m| {
+                        let to_idx = board.coords_to_index(&m.to.values).unwrap_or(0);
+                        let victim = get_piece_value(board, to_idx);
+                        (m, victim)
+                    })
+                    .collect();
+                sorted.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+
+                stack[depth].moves = sorted;
+                stack[depth].move_idx = 0;
             }
-
-            if stand_pat > stack[depth].alpha {
-                stack[depth].alpha = stand_pat;
-            }
-
-            let loud = Rules::generate_loud_moves(board, stack[depth].player);
-            let mut sorted: SmallVec<[(Move, i32); 8]> = loud
-                .into_iter()
-                .map(|m| {
-                    let to_idx = board.coords_to_index(&m.to.values).unwrap_or(0);
-                    let victim = get_piece_value(board, to_idx);
-                    (m, victim)
-                })
-                .collect();
-            sorted.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-
-            stack[depth].moves = sorted;
-            stack[depth].move_idx = 0;
             // Fall through to process moves
         }
 
@@ -187,9 +224,12 @@ pub fn q_search(
             let mv = mv.clone();
             stack[depth].move_idx += 1;
 
-            let see_val = SEE::static_exchange_evaluation(board, &mv);
-            if see_val < 0 {
-                continue;
+            // Skip SEE pruning when in check — all evasions must be searched
+            if !stack[depth].in_check {
+                let see_val = SEE::static_exchange_evaluation(board, &mv);
+                if see_val < 0 {
+                    continue;
+                }
             }
 
             let info = match board.apply_move(&mv) {
@@ -212,6 +252,7 @@ pub fn q_search(
                 moves: SmallVec::new(),
                 move_idx: usize::MAX,
                 pending_unmake: None,
+                in_check: false,
             });
             continue 'outer;
         }
