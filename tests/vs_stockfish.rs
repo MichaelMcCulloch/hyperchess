@@ -2,7 +2,6 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
 use hyperchess::config::AppConfig;
-use hyperchess::config::MctsConfig;
 use hyperchess::domain::board::Board;
 use hyperchess::domain::coordinate::Coordinate;
 use hyperchess::domain::models::{Move, PieceType, Player};
@@ -10,7 +9,6 @@ use hyperchess::domain::rules::Rules;
 use hyperchess::domain::services::PlayerStrategy;
 use hyperchess::infrastructure::ai::MinimaxBot;
 use hyperchess::infrastructure::ai::eval::Evaluator;
-use hyperchess::infrastructure::ai::mcts_bot::MctsBot;
 use hyperchess::infrastructure::display::render_board;
 
 /// Convert an internal Coordinate (2D, 0-indexed [rank, file]) to UCI square string.
@@ -418,26 +416,6 @@ fn vs_stockfish_full_game() {
 
     let bot = Box::new(MinimaxBot::new(&config, 2, 8));
     play_vs_stockfish(bot, "Minimax d20");
-}
-
-#[test]
-#[ignore] // Run with: cargo test vs_stockfish_mcts -- --ignored --nocapture
-fn vs_stockfish_mcts() {
-    let mut config = AppConfig::default();
-    config.minimax.depth = 20;
-    config.compute.minutes = 2;
-    config.compute.concurrency = 30;
-    config.compute.memory = 4096;
-    config.mcts = Some(MctsConfig {
-        depth: 50,
-        iterations: 100_000,
-        iter_per_thread: 10.0,
-        prior_weight: 1.4142,
-        rollout_depth: 0,
-    });
-
-    let bot = Box::new(MctsBot::new(&config));
-    play_vs_stockfish(bot, "MCTS+Minimax");
 }
 
 fn print_pgn(moves: &[String]) {

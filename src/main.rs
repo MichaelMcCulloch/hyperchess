@@ -2,7 +2,7 @@ use hyperchess::application::game_service::GameService;
 use hyperchess::config::AppConfig;
 use hyperchess::domain::board::Board;
 use hyperchess::domain::services::PlayerStrategy;
-use hyperchess::infrastructure::ai::{MctsBot, MinimaxBot};
+use hyperchess::infrastructure::ai::MinimaxBot;
 use hyperchess::infrastructure::console::HumanConsolePlayer;
 use std::env;
 
@@ -47,11 +47,7 @@ fn run_cli() {
     }
 
     let create_bot = |config: &AppConfig| -> Box<dyn PlayerStrategy> {
-        if config.mcts.is_some() {
-            Box::new(MctsBot::new(config))
-        } else {
-            Box::new(MinimaxBot::new(config, dimension, side))
-        }
+        Box::new(MinimaxBot::new(config, dimension, side))
     };
 
     let player_white: Box<dyn PlayerStrategy> = match player_white_type {

@@ -18,7 +18,7 @@ use crate::domain::coordinate::Coordinate;
 use crate::domain::game::Game;
 use crate::domain::models::{GameResult, PieceType, Player};
 use crate::domain::rules::Rules;
-use crate::infrastructure::ai::{MctsBot, MinimaxBot};
+use crate::infrastructure::ai::MinimaxBot;
 
 pub async fn create_game(
     State(state): State<AppState>,
@@ -35,17 +35,7 @@ pub async fn create_game(
 
     let create_bot =
         |config: &crate::config::AppConfig| -> Box<dyn crate::domain::services::PlayerStrategy + Send + Sync> {
-            if config.mcts.is_some() {
-                Box::new(MctsBot::new(config))
-            } else {
-                Box::new(
-                    MinimaxBot::new(
-                        config,
-                        dimension,
-                        side,
-                    )
-                )
-            }
+            Box::new(MinimaxBot::new(config, dimension, side))
         };
 
     match payload.mode.to_lowercase().as_str() {

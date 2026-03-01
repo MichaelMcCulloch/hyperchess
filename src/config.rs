@@ -5,7 +5,7 @@ use std::path::Path;
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct AppConfig {
     pub minimax: MinimaxConfig,
-    pub mcts: Option<MctsConfig>,
+
     pub compute: ComputeConfig,
     pub api: ApiConfig,
 }
@@ -13,27 +13,6 @@ pub struct AppConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct MinimaxConfig {
     pub depth: usize,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct MctsConfig {
-    pub depth: usize,
-    pub iterations: usize,
-    pub iter_per_thread: f64,
-    pub prior_weight: f64,
-    pub rollout_depth: usize,
-}
-
-impl Default for MctsConfig {
-    fn default() -> Self {
-        Self {
-            depth: 50,
-            iterations: 50,
-            iter_per_thread: 5.0,
-            prior_weight: 1.4142,
-            rollout_depth: 0,
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -64,17 +43,6 @@ impl AppConfig {
         eprintln!("----------------------------------------");
         eprintln!("HyperChess Configuration:");
         eprintln!("  Minimax Depth: {}", config.minimax.depth);
-        match &config.mcts {
-            Some(mcts) => eprintln!(
-                "  MCTS: ENABLED (Depth: {}, Rollout: {}, Iterations: {}, Iter/Thread: {}, Prior: {})",
-                mcts.depth,
-                mcts.rollout_depth,
-                mcts.iterations,
-                mcts.iter_per_thread,
-                mcts.prior_weight
-            ),
-            None => eprintln!("  MCTS: DISABLED"),
-        }
         eprintln!(
             "  Compute: {:.1} min, {} threads, {} MB memory",
             config.compute.minutes, config.compute.concurrency, config.compute.memory
@@ -90,36 +58,6 @@ impl AppConfig {
             && let Ok(parsed) = val.parse()
         {
             self.minimax.depth = parsed;
-        }
-        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_DEPTH")
-            && let Ok(parsed) = val.parse()
-        {
-            let mcts = self.mcts.get_or_insert(MctsConfig::default());
-            mcts.depth = parsed;
-        }
-        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_ITERATIONS")
-            && let Ok(parsed) = val.parse()
-        {
-            let mcts = self.mcts.get_or_insert(MctsConfig::default());
-            mcts.iterations = parsed;
-        }
-        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_ITER_PER_THREAD")
-            && let Ok(parsed) = val.parse()
-        {
-            let mcts = self.mcts.get_or_insert(MctsConfig::default());
-            mcts.iter_per_thread = parsed;
-        }
-        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_PRIOR_WEIGHT")
-            && let Ok(parsed) = val.parse()
-        {
-            let mcts = self.mcts.get_or_insert(MctsConfig::default());
-            mcts.prior_weight = parsed;
-        }
-        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_ROLLOUT_DEPTH")
-            && let Ok(parsed) = val.parse()
-        {
-            let mcts = self.mcts.get_or_insert(MctsConfig::default());
-            mcts.rollout_depth = parsed;
         }
         if let Ok(val) = std::env::var("HYPERCHESS_COMPUTE_MEMORY")
             && let Ok(parsed) = val.parse()
@@ -206,12 +144,10 @@ mod tests {
         );
         unsafe {
             env::remove_var("HYPERCHESS_MINIMAX_DEPTH");
-            env::remove_var("HYPERCHESS_MCTS_DEPTH");
         }
 
         let config = AppConfig::default();
         assert_eq!(config.minimax.depth, 4);
-        assert!(config.mcts.is_none());
     }
 
     #[test]
@@ -219,16 +155,12 @@ mod tests {
         let mut config = AppConfig::default();
 
         let _g1 = EnvVarGuard::new("HYPERCHESS_MINIMAX_DEPTH", "99");
-        let _g2 = EnvVarGuard::new("HYPERCHESS_MCTS_DEPTH", "101");
         let _g3 = EnvVarGuard::new("HYPERCHESS_COMPUTE_CONCURRENCY", "42");
         let _g4 = EnvVarGuard::new("HYPERCHESS_API_PORT", "8888");
-        let _g5 = EnvVarGuard::new("HYPERCHESS_MCTS_ROLLOUT_DEPTH", "1");
 
         config.merge_env();
 
         assert_eq!(config.minimax.depth, 99);
-        assert!(config.mcts.is_some());
-        assert_eq!(config.mcts.unwrap().depth, 101);
         assert_eq!(config.compute.concurrency, 42);
         assert_eq!(config.api.port, 8888);
     }
