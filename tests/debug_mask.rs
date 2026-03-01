@@ -58,13 +58,14 @@ mod tests {
 
         let dir = vec![0, -1];
         if let Some(info) = board
+            .geo
             .cache
             .rook_directions
             .iter()
             .find(|d| d.offsets == dir)
         {
-            let mask_idx = info.id * board.side + 1;
-            if let Some(mask) = board.cache.validity_masks.get(mask_idx) {
+            let mask_idx = info.id * board.side() + 1;
+            if let Some(mask) = board.geo.cache.validity_masks.get(mask_idx) {
                 if let Some(bits) = mask.data.get(0) {
                     println!("Mask (0,-1) step 1: {:016b}", bits);
                 }

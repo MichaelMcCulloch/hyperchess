@@ -11,31 +11,31 @@ pub fn is_square_attacked<R: BoardRepresentation>(
     by_player: Player,
 ) -> bool {
     let enemy_occupancy = match by_player {
-        Player::White => &board.white_occupancy,
-        Player::Black => &board.black_occupancy,
+        Player::White => &board.pieces.white_occupancy,
+        Player::Black => &board.pieces.black_occupancy,
     };
 
-    for offset in &board.cache.knight_offsets {
-        if let Some(target_coord) = apply_offset(&square.values, offset, board.side) {
+    for offset in &board.geo.cache.knight_offsets {
+        if let Some(target_coord) = apply_offset(&square.values, offset, board.side()) {
             if let Some(target_idx) = board.coords_to_index(&target_coord) {
-                if enemy_occupancy.get_bit(target_idx) && board.knights.get_bit(target_idx) {
+                if enemy_occupancy.get_bit(target_idx) && board.pieces.knights.get_bit(target_idx) {
                     return true;
                 }
             }
         }
     }
 
-    for offset in &board.cache.king_offsets {
-        if let Some(target_coord) = apply_offset(&square.values, offset, board.side) {
+    for offset in &board.geo.cache.king_offsets {
+        if let Some(target_coord) = apply_offset(&square.values, offset, board.side()) {
             if let Some(target_idx) = board.coords_to_index(&target_coord) {
-                if enemy_occupancy.get_bit(target_idx) && board.kings.get_bit(target_idx) {
+                if enemy_occupancy.get_bit(target_idx) && board.pieces.kings.get_bit(target_idx) {
                     return true;
                 }
             }
         }
     }
 
-    for dir_info in &board.cache.rook_directions {
+    for dir_info in &board.geo.cache.rook_directions {
         if scan_ray_for_threat(
             board,
             &square.values,
@@ -47,7 +47,7 @@ pub fn is_square_attacked<R: BoardRepresentation>(
         }
     }
 
-    for dir_info in &board.cache.bishop_directions {
+    for dir_info in &board.geo.cache.bishop_directions {
         if scan_ray_for_threat(
             board,
             &square.values,
@@ -60,14 +60,14 @@ pub fn is_square_attacked<R: BoardRepresentation>(
     }
 
     let pawn_attack_offsets = match by_player {
-        Player::White => &board.cache.white_pawn_capture_offsets,
-        Player::Black => &board.cache.black_pawn_capture_offsets,
+        Player::White => &board.geo.cache.white_pawn_capture_offsets,
+        Player::Black => &board.geo.cache.black_pawn_capture_offsets,
     };
 
     for offset in pawn_attack_offsets {
-        if let Some(target_coord) = apply_offset(&square.values, offset, board.side) {
+        if let Some(target_coord) = apply_offset(&square.values, offset, board.side()) {
             if let Some(target_idx) = board.coords_to_index(&target_coord) {
-                if enemy_occupancy.get_bit(target_idx) && board.pawns.get_bit(target_idx) {
+                if enemy_occupancy.get_bit(target_idx) && board.pieces.pawns.get_bit(target_idx) {
                     return true;
                 }
             }
@@ -86,22 +86,22 @@ pub fn scan_ray_for_threat<R: BoardRepresentation>(
 ) -> bool {
     let mut current: SmallVec<[u8; 8]> = SmallVec::from_slice(origin_vals);
     let enemy_occupancy = match attacker {
-        Player::White => &board.white_occupancy,
-        Player::Black => &board.black_occupancy,
+        Player::White => &board.pieces.white_occupancy,
+        Player::Black => &board.pieces.black_occupancy,
     };
 
-    let all_occupancy = board.white_occupancy.clone() | &board.black_occupancy;
+    let all_occupancy = board.pieces.white_occupancy.clone() | &board.pieces.black_occupancy;
 
     loop {
-        if let Some(next) = apply_offset(&current, direction, board.side) {
+        if let Some(next) = apply_offset(&current, direction, board.side()) {
             if let Some(idx) = board.coords_to_index(&next) {
                 if all_occupancy.get_bit(idx) {
                     if enemy_occupancy.get_bit(idx) {
                         for &t in threat_types {
                             let match_found = match t {
-                                PieceType::Rook => board.rooks.get_bit(idx),
-                                PieceType::Bishop => board.bishops.get_bit(idx),
-                                PieceType::Queen => board.queens.get_bit(idx),
+                                PieceType::Rook => board.pieces.rooks.get_bit(idx),
+                                PieceType::Bishop => board.pieces.bishops.get_bit(idx),
+                                PieceType::Queen => board.pieces.queens.get_bit(idx),
                                 _ => false,
                             };
                             if match_found {

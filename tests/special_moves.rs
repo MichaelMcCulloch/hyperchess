@@ -41,7 +41,7 @@ fn test_en_passant() {
     let ep_target_idx = board.coords_to_index(&[5, 5]).unwrap();
     let ep_victim_idx = board.coords_to_index(&[4, 5]).unwrap();
     assert_eq!(
-        board.en_passant_target,
+        board.state.en_passant_target,
         Some((ep_target_idx, ep_victim_idx)),
         "EP Target/Victim tuple should be set"
     );
@@ -63,13 +63,13 @@ fn test_en_passant() {
     let captured = board.get_piece(&coord(4, 5));
     assert!(captured.is_none(), "Captured pawn should be removed");
 
-    assert_eq!(board.en_passant_target, None);
+    assert_eq!(board.state.en_passant_target, None);
 }
 
 #[test]
 fn test_castling_kingside_white() {
     let mut board = Board::new_empty(2, 8);
-    board.castling_rights = 0xF;
+    board.state.castling_rights = 0xF;
 
     board
         .set_piece(
@@ -111,13 +111,13 @@ fn test_castling_kingside_white() {
     assert!(r.is_some());
     assert_eq!(r.unwrap().piece_type, PieceType::Rook);
 
-    assert_eq!(board.castling_rights & 0x3, 0);
+    assert_eq!(board.state.castling_rights & 0x3, 0);
 }
 
 #[test]
 fn test_castling_blocked() {
     let mut board = Board::new_empty(2, 8);
-    board.castling_rights = 0xF;
+    board.state.castling_rights = 0xF;
 
     board
         .set_piece(
@@ -158,7 +158,7 @@ fn test_castling_blocked() {
 #[test]
 fn test_castling_through_check() {
     let mut board = Board::new_empty(2, 8);
-    board.castling_rights = 0xF;
+    board.state.castling_rights = 0xF;
 
     board
         .set_piece(

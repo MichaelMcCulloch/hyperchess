@@ -1,8 +1,8 @@
 use super::eval::Evaluator;
 use crate::config::AppConfig;
-use crate::domain::board::Board;
+use crate::domain::board::{Board, UnmakeInfo};
 use crate::domain::models::{Move, PieceType, Player};
-use crate::domain::rules::Rules;
+use crate::domain::rules::{MoveList, Rules};
 use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::ai::transposition::{Flag, LockFreeTT, PackedMove};
 use rayon::prelude::*;
@@ -86,8 +86,8 @@ impl MinimaxBot {
             }
 
             let enemy_occupancy = match player {
-                Player::White => &board.black_occupancy,
-                Player::Black => &board.white_occupancy,
+                Player::White => &board.pieces.black_occupancy,
+                Player::Black => &board.pieces.white_occupancy,
             };
 
             if enemy_occupancy.get_bit(to_idx) {
@@ -133,260 +133,553 @@ impl MinimaxBot {
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Iterative minimax with PVS, LMR, null-move pruning.
+    /// Uses an explicit stack instead of call-stack recursion.
     fn minimax(
         &self,
         board: &mut Board,
         depth: usize,
-        mut alpha: i32,
-        mut beta: i32,
+        alpha: i32,
+        beta: i32,
         player: Player,
         start_time: Instant,
         allow_null: bool,
         killers: &mut [[Option<Move>; 2]],
         history: &mut [Vec<i32>],
     ) -> i32 {
-        if self.nodes_searched.fetch_add(1, Ordering::Relaxed) % TIMEOUT_CHECK_INTERVAL == 0 {
-            if start_time.elapsed() > self.time_limit {
-                self.stop_flag.store(true, Ordering::Relaxed);
-                return 0;
-            }
-        }
-        if self.stop_flag.load(Ordering::Relaxed) {
-            return 0;
-        }
+        let mut stack: Vec<SearchFrame> = Vec::with_capacity(depth + 1);
+        let mut return_value: i32 = 0;
 
-        let hash = board.hash;
+        stack.push(SearchFrame::new(depth, alpha, beta, player, allow_null));
 
-        let mut tt_move = None;
-        if let Some((tt_score, tt_depth, tt_flag, best_m)) = self.tt.get(hash) {
-            tt_move = best_m;
-            if tt_depth as usize >= depth {
-                match tt_flag {
-                    Flag::Exact => return tt_score,
-                    Flag::LowerBound => alpha = alpha.max(tt_score),
-                    Flag::UpperBound => beta = beta.min(tt_score),
+        'outer: loop {
+            let d = stack.len() - 1;
+
+            // ========== HANDLE CHILD RETURNS ==========
+            match stack[d].phase {
+                SearchPhase::NullMoveReturn => {
+                    let score = -return_value;
+                    let null_info = stack[d].null_move_info.take().unwrap();
+                    board.unmake_null_move(null_info);
+
+                    if score >= stack[d].beta {
+                        return_value = stack[d].beta;
+                        stack.pop();
+                        if stack.is_empty() {
+                            return return_value;
+                        }
+                        continue;
+                    }
+                    // Null move didn't cause cutoff, proceed to generate moves
+                    stack[d].phase = SearchPhase::GenerateMoves;
+                    // fall through
                 }
-                if alpha >= beta {
-                    return tt_score;
+
+                SearchPhase::MoveSearchReturn => {
+                    let score = -return_value;
+                    let (mv, info) = stack[d].pending_unmake.take().unwrap();
+
+                    // For non-PV moves (i > 0), check if we need LMR re-search or PVS re-search
+                    let move_index = stack[d].current_move_index;
+                    let reduction = stack[d].current_reduction;
+
+                    if move_index > 0 {
+                        // This was a scout/LMR search
+                        if score > stack[d].alpha && reduction > 0 {
+                            // LMR re-search needed: search at full depth with scout window
+                            stack[d].phase = SearchPhase::LmrReSearchReturn;
+                            stack[d].pending_unmake = Some((mv, info));
+
+                            let child_depth = stack[d].depth - 1;
+                            let child_alpha = -stack[d].alpha - 1;
+                            let child_beta = -stack[d].alpha;
+                            let child_player = stack[d].player.opponent();
+
+                            stack.push(SearchFrame::new(
+                                child_depth,
+                                child_alpha,
+                                child_beta,
+                                child_player,
+                                true,
+                            ));
+                            continue 'outer;
+                        }
+
+                        if score > stack[d].alpha && score < stack[d].beta {
+                            // PVS re-search needed: search with full window
+                            stack[d].phase = SearchPhase::PvsReSearchReturn;
+                            stack[d].pending_unmake = Some((mv, info));
+
+                            let child_depth = stack[d].depth - 1;
+                            let child_alpha = -stack[d].beta;
+                            let child_beta = -stack[d].alpha;
+                            let child_player = stack[d].player.opponent();
+
+                            stack.push(SearchFrame::new(
+                                child_depth,
+                                child_alpha,
+                                child_beta,
+                                child_player,
+                                true,
+                            ));
+                            continue 'outer;
+                        }
+                    }
+
+                    // Process the score
+                    self.process_move_result(&mut stack[d], board, &mv, score, killers, history);
+                    board.unmake_move(&mv, info);
+
+                    if self.stop_flag.load(Ordering::Relaxed) {
+                        return_value = 0;
+                        stack.pop();
+                        if stack.is_empty() {
+                            return return_value;
+                        }
+                        continue;
+                    }
+
+                    if stack[d].alpha >= stack[d].beta {
+                        // Beta cutoff — store TT and return
+                        self.store_tt(board, &stack[d]);
+                        return_value = stack[d].best_score;
+                        stack.pop();
+                        if stack.is_empty() {
+                            return return_value;
+                        }
+                        continue;
+                    }
+
+                    stack[d].phase = SearchPhase::ProcessMoves;
+                    // fall through to next move
                 }
-            }
-        }
 
-        if depth == 0 {
-            return self.q_search(board, alpha, beta, player);
-        }
+                SearchPhase::LmrReSearchReturn => {
+                    let score = -return_value;
+                    let (ref mv, _) = *stack[d].pending_unmake.as_ref().unwrap();
 
-        if allow_null && depth >= 3 {
-            let static_eval = self.evaluate(board, Some(player));
-            if static_eval >= beta {
-                let in_check = if let Some(king_pos) = board.get_king_coordinate(player) {
-                    Rules::is_square_attacked(board, &king_pos, player.opponent())
-                } else {
-                    false
-                };
+                    if score > stack[d].alpha && score < stack[d].beta {
+                        // PVS re-search needed
+                        stack[d].phase = SearchPhase::PvsReSearchReturn;
 
-                if !in_check {
-                    let r = if depth > 6 { 3 } else { 2 };
-                    let null_info = board.make_null_move();
-                    let score = -self.minimax(
+                        let child_depth = stack[d].depth - 1;
+                        let child_alpha = -stack[d].beta;
+                        let child_beta = -stack[d].alpha;
+                        let child_player = stack[d].player.opponent();
+
+                        stack.push(SearchFrame::new(
+                            child_depth,
+                            child_alpha,
+                            child_beta,
+                            child_player,
+                            true,
+                        ));
+                        continue 'outer;
+                    }
+
+                    // Process the score from LMR re-search
+                    let mv_clone = mv.clone();
+                    let (mv, info) = stack[d].pending_unmake.take().unwrap();
+
+                    self.process_move_result(
+                        &mut stack[d],
                         board,
-                        depth - 1 - r,
-                        -beta,
-                        -beta + 1,
-                        player.opponent(),
-                        start_time,
-                        false,
+                        &mv_clone,
+                        score,
                         killers,
                         history,
                     );
-                    board.unmake_null_move(null_info);
-                    if score >= beta {
-                        return beta;
+                    board.unmake_move(&mv, info);
+
+                    if self.stop_flag.load(Ordering::Relaxed) {
+                        return_value = 0;
+                        stack.pop();
+                        if stack.is_empty() {
+                            return return_value;
+                        }
+                        continue;
+                    }
+
+                    if stack[d].alpha >= stack[d].beta {
+                        self.store_tt(board, &stack[d]);
+                        return_value = stack[d].best_score;
+                        stack.pop();
+                        if stack.is_empty() {
+                            return return_value;
+                        }
+                        continue;
+                    }
+
+                    stack[d].phase = SearchPhase::ProcessMoves;
+                }
+
+                SearchPhase::PvsReSearchReturn => {
+                    let score = -return_value;
+                    let (mv, info) = stack[d].pending_unmake.take().unwrap();
+
+                    self.process_move_result(&mut stack[d], board, &mv, score, killers, history);
+                    board.unmake_move(&mv, info);
+
+                    if self.stop_flag.load(Ordering::Relaxed) {
+                        return_value = 0;
+                        stack.pop();
+                        if stack.is_empty() {
+                            return return_value;
+                        }
+                        continue;
+                    }
+
+                    if stack[d].alpha >= stack[d].beta {
+                        self.store_tt(board, &stack[d]);
+                        return_value = stack[d].best_score;
+                        stack.pop();
+                        if stack.is_empty() {
+                            return return_value;
+                        }
+                        continue;
+                    }
+
+                    stack[d].phase = SearchPhase::ProcessMoves;
+                }
+
+                _ => {} // Init, GenerateMoves, ProcessMoves — handled below
+            }
+
+            // ========== INITIALIZATION ==========
+            if stack[d].phase == SearchPhase::Init {
+                if self.nodes_searched.fetch_add(1, Ordering::Relaxed) % TIMEOUT_CHECK_INTERVAL == 0
+                {
+                    if start_time.elapsed() > self.time_limit {
+                        self.stop_flag.store(true, Ordering::Relaxed);
+                        return_value = 0;
+                        stack.pop();
+                        if stack.is_empty() {
+                            return return_value;
+                        }
+                        continue;
                     }
                 }
-            }
-        }
-
-        let mut moves = Rules::generate_pseudo_legal_moves(board, player);
-
-        if moves.is_empty() {
-            if let Some(king_pos) = board.get_king_coordinate(player) {
-                if Rules::is_square_attacked(board, &king_pos, player.opponent()) {
-                    return -CHECKMATE_SCORE + (self.depth - depth) as i32;
-                }
-            }
-            return 0;
-        }
-
-        let mut do_futility = false;
-        if depth == 1 {
-            let eval = self.evaluate(board, Some(player));
-            if eval + 500 < alpha {
-                do_futility = true;
-            }
-        }
-
-        let my_killers = if depth < killers.len() {
-            Some(&killers[depth])
-        } else {
-            None
-        };
-
-        self.sort_moves(board, &mut moves, tt_move, my_killers, history, player);
-
-        let mut best_score = -i32::MAX;
-        let original_alpha = alpha;
-        let mut best_move_obj: Option<Move> = None;
-        let mut legal_moves_count = 0;
-
-        let in_check = if let Some(king_pos) = board.get_king_coordinate(player) {
-            Rules::is_square_attacked(board, &king_pos, player.opponent())
-        } else {
-            false
-        };
-
-        for (i, mv) in moves.iter().enumerate() {
-            let info = match board.apply_move(mv) {
-                Ok(i) => i,
-                Err(_) => continue,
-            };
-
-            if let Some(king_pos) = board.get_king_coordinate(player) {
-                if Rules::is_square_attacked(board, &king_pos, player.opponent()) {
-                    board.unmake_move(mv, info);
+                if self.stop_flag.load(Ordering::Relaxed) {
+                    return_value = 0;
+                    stack.pop();
+                    if stack.is_empty() {
+                        return return_value;
+                    }
                     continue;
                 }
-            }
-            legal_moves_count += 1;
 
-            let is_capture = info.captured.is_some();
-            let is_promotion = mv.promotion.is_some();
+                let hash = board.state.hash;
+                stack[d].hash = hash;
 
-            if do_futility && !is_capture && !is_promotion && !in_check {
-                board.unmake_move(mv, info);
-                continue;
-            }
-
-            let mut score;
-            let mut reduction = 0;
-
-            if i >= 4 && depth >= 3 && !is_capture && !is_promotion && !in_check {
-                reduction = if depth > 6 { 2 } else { 1 };
-                if depth - 1 < reduction {
-                    reduction = 0;
-                }
-            }
-
-            if i == 0 {
-                score = -self.minimax(
-                    board,
-                    depth - 1,
-                    -beta,
-                    -alpha,
-                    player.opponent(),
-                    start_time,
-                    true,
-                    killers,
-                    history,
-                );
-            } else {
-                score = -self.minimax(
-                    board,
-                    depth - 1 - reduction,
-                    -alpha - 1,
-                    -alpha,
-                    player.opponent(),
-                    start_time,
-                    true,
-                    killers,
-                    history,
-                );
-
-                if score > alpha && reduction > 0 {
-                    score = -self.minimax(
-                        board,
-                        depth - 1,
-                        -alpha - 1,
-                        -alpha,
-                        player.opponent(),
-                        start_time,
-                        true,
-                        killers,
-                        history,
-                    );
-                }
-
-                if score > alpha && score < beta {
-                    score = -self.minimax(
-                        board,
-                        depth - 1,
-                        -beta,
-                        -alpha,
-                        player.opponent(),
-                        start_time,
-                        true,
-                        killers,
-                        history,
-                    );
-                }
-            }
-
-            board.unmake_move(mv, info);
-
-            if self.stop_flag.load(Ordering::Relaxed) {
-                return 0;
-            }
-
-            if score > best_score {
-                best_score = score;
-                best_move_obj = Some(mv.clone());
-            }
-
-            if score > alpha {
-                alpha = score;
-
-                if !is_capture && !is_promotion {
-                    let from_idx = board.coords_to_index(&mv.from.values).unwrap_or(0);
-                    let to_idx = board.coords_to_index(&mv.to.values).unwrap_or(0);
-                    let hist_idx = from_idx * board.total_cells() + to_idx;
-
-                    if hist_idx < history[player as usize].len() {
-                        let bonus = (depth * depth) as i32;
-                        let current = history[player as usize][hist_idx];
-                        if current + bonus < MAX_HISTORY {
-                            history[player as usize][hist_idx] += bonus;
+                if let Some((tt_score, tt_depth, tt_flag, best_m)) = self.tt.get(hash) {
+                    stack[d].tt_move = best_m;
+                    if tt_depth as usize >= stack[d].depth {
+                        match tt_flag {
+                            Flag::Exact => {
+                                return_value = tt_score;
+                                stack.pop();
+                                if stack.is_empty() {
+                                    return return_value;
+                                }
+                                continue;
+                            }
+                            Flag::LowerBound => stack[d].alpha = stack[d].alpha.max(tt_score),
+                            Flag::UpperBound => stack[d].beta = stack[d].beta.min(tt_score),
+                        }
+                        if stack[d].alpha >= stack[d].beta {
+                            return_value = tt_score;
+                            stack.pop();
+                            if stack.is_empty() {
+                                return return_value;
+                            }
+                            continue;
                         }
                     }
                 }
-            }
 
-            if alpha >= beta {
-                if !is_capture && !is_promotion && depth < killers.len() {
-                    killers[depth][1] = killers[depth][0].clone();
-                    killers[depth][0] = Some(mv.clone());
+                stack[d].original_alpha = stack[d].alpha;
+
+                if stack[d].depth == 0 {
+                    return_value =
+                        self.q_search(board, stack[d].alpha, stack[d].beta, stack[d].player);
+                    stack.pop();
+                    if stack.is_empty() {
+                        return return_value;
+                    }
+                    continue;
                 }
-                break;
+
+                // Null move pruning
+                if stack[d].allow_null && stack[d].depth >= 3 {
+                    let static_eval = self.evaluate(board, Some(stack[d].player));
+                    if static_eval >= stack[d].beta {
+                        let in_check = if let Some(king_pos) =
+                            board.get_king_coordinate(stack[d].player)
+                        {
+                            Rules::is_square_attacked(board, &king_pos, stack[d].player.opponent())
+                        } else {
+                            false
+                        };
+
+                        if !in_check {
+                            let r = if stack[d].depth > 6 { 3 } else { 2 };
+                            let null_info = board.make_null_move();
+                            stack[d].null_move_info = Some(null_info);
+                            stack[d].phase = SearchPhase::NullMoveReturn;
+
+                            let child_depth = stack[d].depth - 1 - r;
+                            let child_alpha = -stack[d].beta;
+                            let child_beta = -stack[d].beta + 1;
+                            let child_player = stack[d].player.opponent();
+
+                            stack.push(SearchFrame::new(
+                                child_depth,
+                                child_alpha,
+                                child_beta,
+                                child_player,
+                                false,
+                            ));
+                            continue 'outer;
+                        }
+                    }
+                }
+
+                stack[d].phase = SearchPhase::GenerateMoves;
+                // fall through
+            }
+
+            // ========== GENERATE MOVES ==========
+            if stack[d].phase == SearchPhase::GenerateMoves {
+                let mut moves = Rules::generate_pseudo_legal_moves(board, stack[d].player);
+
+                if moves.is_empty() {
+                    if let Some(king_pos) = board.get_king_coordinate(stack[d].player) {
+                        if Rules::is_square_attacked(board, &king_pos, stack[d].player.opponent()) {
+                            return_value = -CHECKMATE_SCORE + (self.depth - stack[d].depth) as i32;
+                            stack.pop();
+                            if stack.is_empty() {
+                                return return_value;
+                            }
+                            continue;
+                        }
+                    }
+                    return_value = 0;
+                    stack.pop();
+                    if stack.is_empty() {
+                        return return_value;
+                    }
+                    continue;
+                }
+
+                // Futility pruning setup
+                if stack[d].depth == 1 {
+                    let eval = self.evaluate(board, Some(stack[d].player));
+                    if eval + 500 < stack[d].alpha {
+                        stack[d].do_futility = true;
+                    }
+                }
+
+                // In-check detection
+                stack[d].in_check =
+                    if let Some(king_pos) = board.get_king_coordinate(stack[d].player) {
+                        Rules::is_square_attacked(board, &king_pos, stack[d].player.opponent())
+                    } else {
+                        false
+                    };
+
+                let my_killers = if stack[d].depth < killers.len() {
+                    Some(&killers[stack[d].depth])
+                } else {
+                    None
+                };
+
+                self.sort_moves(
+                    board,
+                    &mut moves,
+                    stack[d].tt_move,
+                    my_killers,
+                    history,
+                    stack[d].player,
+                );
+
+                stack[d].moves = moves;
+                stack[d].move_idx = 0;
+                stack[d].phase = SearchPhase::ProcessMoves;
+                // fall through
+            }
+
+            // ========== PROCESS MOVES ==========
+            if stack[d].phase == SearchPhase::ProcessMoves {
+                while stack[d].move_idx < stack[d].moves.len() {
+                    let i = stack[d].move_idx;
+                    let mv = stack[d].moves[i].clone();
+                    stack[d].move_idx += 1;
+
+                    let info = match board.apply_move(&mv) {
+                        Ok(info) => info,
+                        Err(_) => continue,
+                    };
+
+                    // Legality check
+                    if let Some(king_pos) = board.get_king_coordinate(stack[d].player) {
+                        if Rules::is_square_attacked(board, &king_pos, stack[d].player.opponent()) {
+                            board.unmake_move(&mv, info);
+                            continue;
+                        }
+                    }
+                    stack[d].legal_count += 1;
+                    let legal_idx = stack[d].legal_count - 1; // 0-based legal move index
+
+                    let is_capture = info.captured.is_some();
+                    let is_promotion = mv.promotion.is_some();
+
+                    // Futility pruning
+                    if stack[d].do_futility && !is_capture && !is_promotion && !stack[d].in_check {
+                        board.unmake_move(&mv, info);
+                        continue;
+                    }
+
+                    // LMR reduction
+                    let mut reduction = 0;
+                    if legal_idx >= 4
+                        && stack[d].depth >= 3
+                        && !is_capture
+                        && !is_promotion
+                        && !stack[d].in_check
+                    {
+                        reduction = if stack[d].depth > 6 { 2 } else { 1 };
+                        if stack[d].depth - 1 < reduction {
+                            reduction = 0;
+                        }
+                    }
+
+                    stack[d].current_move_index = legal_idx;
+                    stack[d].current_reduction = reduction;
+                    stack[d].pending_unmake = Some((mv, info));
+                    stack[d].phase = SearchPhase::MoveSearchReturn;
+
+                    let child_player = stack[d].player.opponent();
+
+                    if legal_idx == 0 {
+                        // PV move: full window
+                        let child_depth = stack[d].depth - 1;
+                        let child_alpha = -stack[d].beta;
+                        let child_beta = -stack[d].alpha;
+
+                        stack.push(SearchFrame::new(
+                            child_depth,
+                            child_alpha,
+                            child_beta,
+                            child_player,
+                            true,
+                        ));
+                    } else {
+                        // Scout/LMR search: null window
+                        let child_depth = stack[d].depth - 1 - reduction;
+                        let child_alpha = -stack[d].alpha - 1;
+                        let child_beta = -stack[d].alpha;
+
+                        stack.push(SearchFrame::new(
+                            child_depth,
+                            child_alpha,
+                            child_beta,
+                            child_player,
+                            true,
+                        ));
+                    }
+                    continue 'outer;
+                }
+
+                // All moves exhausted
+                if stack[d].legal_count == 0 {
+                    if stack[d].in_check {
+                        return_value = -CHECKMATE_SCORE + (self.depth - stack[d].depth) as i32;
+                    } else {
+                        return_value = 0;
+                    }
+                    stack.pop();
+                    if stack.is_empty() {
+                        return return_value;
+                    }
+                    continue;
+                }
+
+                self.store_tt(board, &stack[d]);
+                return_value = stack[d].best_score;
+                stack.pop();
+                if stack.is_empty() {
+                    return return_value;
+                }
+                continue;
+            }
+        }
+    }
+
+    /// Process the result of a child search for a move.
+    fn process_move_result(
+        &self,
+        frame: &mut SearchFrame,
+        board: &Board,
+        mv: &Move,
+        score: i32,
+        killers: &mut [[Option<Move>; 2]],
+        history: &mut [Vec<i32>],
+    ) {
+        if score > frame.best_score {
+            frame.best_score = score;
+            frame.best_move_obj = Some(mv.clone());
+        }
+
+        if score > frame.alpha {
+            frame.alpha = score;
+
+            let is_capture = frame
+                .pending_unmake
+                .as_ref()
+                .map(|(_, info)| info.captured.is_some())
+                .unwrap_or(false);
+            let is_promotion = mv.promotion.is_some();
+
+            if !is_capture && !is_promotion {
+                let from_idx = board.coords_to_index(&mv.from.values).unwrap_or(0);
+                let to_idx = board.coords_to_index(&mv.to.values).unwrap_or(0);
+                let hist_idx = from_idx * board.total_cells() + to_idx;
+
+                if hist_idx < history[frame.player as usize].len() {
+                    let bonus = (frame.depth * frame.depth) as i32;
+                    let current = history[frame.player as usize][hist_idx];
+                    if current + bonus < MAX_HISTORY {
+                        history[frame.player as usize][hist_idx] += bonus;
+                    }
+                }
             }
         }
 
-        if legal_moves_count == 0 {
-            if in_check {
-                return -CHECKMATE_SCORE + (self.depth - depth) as i32;
-            } else {
-                return 0;
+        if frame.alpha >= frame.beta {
+            let is_capture = frame
+                .pending_unmake
+                .as_ref()
+                .map(|(_, info)| info.captured.is_some())
+                .unwrap_or(false);
+            let is_promotion = mv.promotion.is_some();
+
+            if !is_capture && !is_promotion && frame.depth < killers.len() {
+                killers[frame.depth][1] = killers[frame.depth][0].clone();
+                killers[frame.depth][0] = Some(mv.clone());
             }
         }
+    }
 
-        let flag = if best_score <= original_alpha {
+    fn store_tt(&self, board: &Board, frame: &SearchFrame) {
+        let flag = if frame.best_score <= frame.original_alpha {
             Flag::UpperBound
-        } else if best_score >= beta {
+        } else if frame.best_score >= frame.beta {
             Flag::LowerBound
         } else {
             Flag::Exact
         };
 
-        let packed_move = best_move_obj.and_then(|m| {
+        let packed_move = frame.best_move_obj.as_ref().and_then(|m| {
             let from = board.coords_to_index(&m.from.values)?;
             let to = board.coords_to_index(&m.to.values)?;
             let promo = match m.promotion {
@@ -404,9 +697,78 @@ impl MinimaxBot {
             })
         });
 
-        self.tt
-            .store(hash, best_score, depth as u8, flag, packed_move);
-        best_score
+        self.tt.store(
+            frame.hash,
+            frame.best_score,
+            frame.depth as u8,
+            flag,
+            packed_move,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Search frame for iterative minimax
+// ---------------------------------------------------------------------------
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum SearchPhase {
+    Init,
+    NullMoveReturn,
+    GenerateMoves,
+    ProcessMoves,
+    MoveSearchReturn,
+    LmrReSearchReturn,
+    PvsReSearchReturn,
+}
+
+struct SearchFrame {
+    depth: usize,
+    alpha: i32,
+    beta: i32,
+    original_alpha: i32,
+    player: Player,
+    allow_null: bool,
+    phase: SearchPhase,
+    hash: u64,
+    tt_move: Option<PackedMove>,
+    moves: MoveList,
+    move_idx: usize,
+    best_score: i32,
+    best_move_obj: Option<Move>,
+    legal_count: usize,
+    in_check: bool,
+    do_futility: bool,
+    current_move_index: usize,
+    current_reduction: usize,
+    pending_unmake: Option<(Move, UnmakeInfo)>,
+    null_move_info: Option<UnmakeInfo>,
+}
+
+impl SearchFrame {
+    fn new(depth: usize, alpha: i32, beta: i32, player: Player, allow_null: bool) -> Self {
+        Self {
+            depth,
+            alpha,
+            beta,
+            original_alpha: alpha,
+            player,
+            allow_null,
+            phase: SearchPhase::Init,
+            hash: 0,
+            tt_move: None,
+            moves: MoveList::new(),
+            move_idx: 0,
+            best_score: -i32::MAX,
+            best_move_obj: None,
+            legal_count: 0,
+            in_check: false,
+            do_futility: false,
+            current_move_index: 0,
+            current_reduction: 0,
+            pending_unmake: None,
+            null_move_info: None,
+        }
     }
 }
 

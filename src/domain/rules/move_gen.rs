@@ -55,8 +55,8 @@ pub fn generate_loud_moves(board: &mut Board, player: Player) -> MoveList {
     for mv in pseudo_legal {
         let is_loud = {
             let enemy_occupancy = match player {
-                Player::White => &board.black_occupancy,
-                Player::Black => &board.white_occupancy,
+                Player::White => &board.pieces.black_occupancy,
+                Player::Black => &board.pieces.white_occupancy,
             };
             let to_idx = board.coords_to_index(&mv.to.values);
             let is_capture = if let Some(idx) = to_idx {
@@ -64,10 +64,11 @@ pub fn generate_loud_moves(board: &mut Board, player: Player) -> MoveList {
             } else {
                 false
             };
-            let is_ep_capture = if let Some((ep_idx, _)) = board.en_passant_target {
+            let is_ep_capture = if let Some((ep_idx, _)) = board.state.en_passant_target {
                 if let Some(idx) = to_idx {
                     idx == ep_idx
                         && board
+                            .pieces
                             .pawns
                             .get_bit(board.coords_to_index(&mv.from.values).unwrap_or(usize::MAX))
                 } else {
@@ -106,8 +107,8 @@ pub fn leaves_king_in_check(board: &mut Board, player: Player, mv: &Move) -> boo
 pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
     let mut moves = MoveList::new();
     let occupancy = match player {
-        Player::White => &board.white_occupancy,
-        Player::Black => &board.black_occupancy,
+        Player::White => &board.pieces.white_occupancy,
+        Player::Black => &board.pieces.black_occupancy,
     };
 
     MOVE_GEN_BUFFER.with(|buffer_ref| {
@@ -115,18 +116,22 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
 
         buffer
             .generator
-            .ensure_capacity_and_clear(&board.white_occupancy);
-        buffer.g.ensure_capacity_and_clear(&board.white_occupancy);
-        buffer.p.ensure_capacity_and_clear(&board.white_occupancy);
+            .ensure_capacity_and_clear(&board.pieces.white_occupancy);
+        buffer
+            .g
+            .ensure_capacity_and_clear(&board.pieces.white_occupancy);
+        buffer
+            .p
+            .ensure_capacity_and_clear(&board.pieces.white_occupancy);
         buffer
             .shifted_g
-            .ensure_capacity_and_clear(&board.white_occupancy);
+            .ensure_capacity_and_clear(&board.pieces.white_occupancy);
         buffer
             .shifted_p
-            .ensure_capacity_and_clear(&board.white_occupancy);
+            .ensure_capacity_and_clear(&board.pieces.white_occupancy);
         buffer
             .temp
-            .ensure_capacity_and_clear(&board.white_occupancy);
+            .ensure_capacity_and_clear(&board.pieces.white_occupancy);
 
         let MoveGenBuffer {
             generator,
@@ -141,17 +146,17 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
             let coord_vals = board.index_to_coords(i);
             let coord = Coordinate::new(coord_vals.clone());
 
-            let piece_type = if board.pawns.get_bit(i) {
+            let piece_type = if board.pieces.pawns.get_bit(i) {
                 PieceType::Pawn
-            } else if board.knights.get_bit(i) {
+            } else if board.pieces.knights.get_bit(i) {
                 PieceType::Knight
-            } else if board.bishops.get_bit(i) {
+            } else if board.pieces.bishops.get_bit(i) {
                 PieceType::Bishop
-            } else if board.rooks.get_bit(i) {
+            } else if board.pieces.rooks.get_bit(i) {
                 PieceType::Rook
-            } else if board.queens.get_bit(i) {
+            } else if board.pieces.queens.get_bit(i) {
                 PieceType::Queen
-            } else if board.kings.get_bit(i) {
+            } else if board.pieces.kings.get_bit(i) {
                 PieceType::King
             } else {
                 continue;
@@ -163,14 +168,14 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
                     board,
                     &coord,
                     player,
-                    &board.cache.knight_offsets,
+                    &board.geo.cache.knight_offsets,
                     &mut moves,
                 ),
                 PieceType::King => generate_leaper_moves(
                     board,
                     &coord,
                     player,
-                    &board.cache.king_offsets,
+                    &board.geo.cache.king_offsets,
                     &mut moves,
                 ),
                 PieceType::Rook => generate_slider_moves_bitwise(
@@ -178,7 +183,7 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
                     i,
                     &coord,
                     player,
-                    &board.cache.rook_directions,
+                    &board.geo.cache.rook_directions,
                     &mut moves,
                     generator,
                     g,
@@ -192,7 +197,7 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
                     i,
                     &coord,
                     player,
-                    &board.cache.bishop_directions,
+                    &board.geo.cache.bishop_directions,
                     &mut moves,
                     generator,
                     g,
@@ -207,7 +212,7 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
                         i,
                         &coord,
                         player,
-                        &board.cache.rook_directions,
+                        &board.geo.cache.rook_directions,
                         &mut moves,
                         generator,
                         g,
@@ -221,7 +226,7 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
                         i,
                         &coord,
                         player,
-                        &board.cache.bishop_directions,
+                        &board.geo.cache.bishop_directions,
                         &mut moves,
                         generator,
                         g,
@@ -258,10 +263,10 @@ fn generate_slider_moves_bitwise(
     }
     generator.set_bit(origin_idx);
 
-    let all_occupancy = &board.white_occupancy | &board.black_occupancy;
+    let all_occupancy = &board.pieces.white_occupancy | &board.pieces.black_occupancy;
 
     let mut empty_data = SmallVec::with_capacity(all_occupancy.data.len());
-    let mut remaining = board.total_cells;
+    let mut remaining = board.total_cells();
     for val in &all_occupancy.data {
         let limit = std::cmp::min(64, remaining);
         let mask = if limit == 64 {
@@ -275,8 +280,8 @@ fn generate_slider_moves_bitwise(
     let empty = BitBoardLarge { data: empty_data };
 
     let own_occupancy = match player {
-        Player::White => &board.white_occupancy,
-        Player::Black => &board.black_occupancy,
+        Player::White => &board.pieces.white_occupancy,
+        Player::Black => &board.pieces.black_occupancy,
     };
 
     for dir_info in directions {
@@ -321,11 +326,12 @@ pub fn kogge_stone_fill_inplace(
 ) {
     let mut shift_amt = 1;
 
-    let mask_base_idx = dir_info.id * board.side;
+    let mask_base_idx = dir_info.id * board.side();
 
-    while shift_amt < board.side {
+    while shift_amt < board.side() {
         let mask = unsafe {
             board
+                .geo
                 .cache
                 .validity_masks
                 .get_unchecked(mask_base_idx + shift_amt)
@@ -356,7 +362,13 @@ pub fn kogge_stone_fill_inplace(
         shift_amt *= 2;
     }
 
-    let mask = unsafe { board.cache.validity_masks.get_unchecked(mask_base_idx + 1) };
+    let mask = unsafe {
+        board
+            .geo
+            .cache
+            .validity_masks
+            .get_unchecked(mask_base_idx + 1)
+    };
 
     *g &= mask;
     if stride > 0 {
@@ -369,35 +381,35 @@ pub fn kogge_stone_fill_inplace(
 pub fn calculate_stride(board: &Board, dir: &[isize]) -> isize {
     let mut stride = 0;
     let mut multiplier = 1;
-    for i in 0..board.dimension {
+    for i in 0..board.dimension() {
         stride += dir[i] * multiplier as isize;
-        multiplier *= board.side;
+        multiplier *= board.side();
     }
     stride
 }
 
 fn generate_castling_moves(board: &Board, player: Player, moves: &mut MoveList) {
-    if board.side != 8 {
+    if board.side() != 8 {
         return;
     }
     let (rights_mask, rank) = match player {
         Player::White => (0x3, 0),
-        Player::Black => (0xC, board.side - 1),
+        Player::Black => (0xC, board.side() - 1),
     };
-    let my_rights = board.castling_rights & rights_mask;
+    let my_rights = board.state.castling_rights & rights_mask;
     if my_rights == 0 {
         return;
     }
 
     let king_file = 4;
-    let mut king_coords = vec![rank as u8; board.dimension];
+    let mut king_coords = vec![rank as u8; board.dimension()];
     king_coords[1] = king_file;
     let king_coord = Coordinate::new(king_coords.clone());
     if is_square_attacked(board, &king_coord, player.opponent()) {
         return;
     }
 
-    let all_occupancy = &board.white_occupancy | &board.black_occupancy;
+    let all_occupancy = &board.pieces.white_occupancy | &board.pieces.black_occupancy;
     let ks_mask = match player {
         Player::White => 0x1,
         Player::Black => 0x4,
@@ -477,11 +489,11 @@ fn generate_leaper_moves(
     moves: &mut MoveList,
 ) {
     let same_occupancy = match player {
-        Player::White => &board.white_occupancy,
-        Player::Black => &board.black_occupancy,
+        Player::White => &board.pieces.white_occupancy,
+        Player::Black => &board.pieces.black_occupancy,
     };
     for offset in offsets {
-        if let Some(target_coords) = apply_offset(&origin.values, offset, board.side) {
+        if let Some(target_coords) = apply_offset(&origin.values, offset, board.side()) {
             if let Some(target_idx) = board.coords_to_index(&target_coords) {
                 if !same_occupancy.get_bit(target_idx) {
                     moves.push(Move {
@@ -496,12 +508,12 @@ fn generate_leaper_moves(
 }
 
 fn generate_pawn_moves(board: &Board, origin: &Coordinate, player: Player, moves: &mut MoveList) {
-    let all_occupancy = &board.white_occupancy | &board.black_occupancy;
+    let all_occupancy = &board.pieces.white_occupancy | &board.pieces.black_occupancy;
     let enemy_occupancy = match player.opponent() {
-        Player::White => &board.white_occupancy,
-        Player::Black => &board.black_occupancy,
+        Player::White => &board.pieces.white_occupancy,
+        Player::Black => &board.pieces.black_occupancy,
     };
-    for movement_axis in 0..board.dimension {
+    for movement_axis in 0..board.dimension() {
         if movement_axis == 1 {
             continue;
         }
@@ -509,21 +521,21 @@ fn generate_pawn_moves(board: &Board, origin: &Coordinate, player: Player, moves
             Player::White => 1,
             Player::Black => -1,
         };
-        let mut forward_step = vec![0; board.dimension];
+        let mut forward_step = vec![0; board.dimension()];
         forward_step[movement_axis] = forward_dir;
-        if let Some(target) = apply_offset(&origin.values, &forward_step, board.side) {
+        if let Some(target) = apply_offset(&origin.values, &forward_step, board.side()) {
             if let Some(idx) = board.coords_to_index(&target) {
                 if !all_occupancy.get_bit(idx) {
-                    add_pawn_move(origin, &target, board.side, player, moves);
+                    add_pawn_move(origin, &target, board.side(), player, moves);
                     let is_start_rank = match player {
                         Player::White => origin.values[movement_axis] == 1,
-                        Player::Black => origin.values[movement_axis] as usize == board.side - 2,
+                        Player::Black => origin.values[movement_axis] as usize == board.side() - 2,
                     };
                     if is_start_rank {
-                        if let Some(target2) = apply_offset(&target, &forward_step, board.side) {
+                        if let Some(target2) = apply_offset(&target, &forward_step, board.side()) {
                             if let Some(idx2) = board.coords_to_index(&target2) {
                                 if !all_occupancy.get_bit(idx2) {
-                                    add_pawn_move(origin, &target2, board.side, player, moves);
+                                    add_pawn_move(origin, &target2, board.side(), player, moves);
                                 }
                             }
                         }
@@ -531,18 +543,18 @@ fn generate_pawn_moves(board: &Board, origin: &Coordinate, player: Player, moves
                 }
             }
         }
-        for capture_axis in 0..board.dimension {
+        for capture_axis in 0..board.dimension() {
             if capture_axis == movement_axis {
                 continue;
             }
             for s in [-1, 1] {
                 let mut cap_step = forward_step.clone();
                 cap_step[capture_axis] = s;
-                if let Some(target) = apply_offset(&origin.values, &cap_step, board.side) {
+                if let Some(target) = apply_offset(&origin.values, &cap_step, board.side()) {
                     if let Some(idx) = board.coords_to_index(&target) {
                         if enemy_occupancy.get_bit(idx) {
-                            add_pawn_move(origin, &target, board.side, player, moves);
-                        } else if let Some((ep_target, _)) = board.en_passant_target {
+                            add_pawn_move(origin, &target, board.side(), player, moves);
+                        } else if let Some((ep_target, _)) = board.state.en_passant_target {
                             if idx == ep_target {
                                 moves.push(Move {
                                     from: origin.clone(),

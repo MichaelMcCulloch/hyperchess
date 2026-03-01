@@ -66,7 +66,7 @@ impl Evaluator {
 
         let score = (mg_score * phase + eg_score * (start_phase - phase)) / start_phase;
 
-        if board.hash ^ board.zobrist.black_to_move == board.hash {
+        if board.state.hash ^ board.zobrist.black_to_move == board.state.hash {
             score
         } else {
             score
@@ -78,7 +78,7 @@ impl Evaluator {
         let mut eg_score = 0;
         let mut phase = 0;
 
-        let center = (board.side as f32 - 1.0) / 2.0;
+        let center = (board.side() as f32 - 1.0) / 2.0;
 
         for (idx, piece_type) in Self::iter_pieces(board, Player::White) {
             let (mg, eg, p) = Self::evaluate_piece(board, idx, piece_type, Player::White, center);
@@ -102,20 +102,20 @@ impl Evaluator {
         player: Player,
     ) -> impl Iterator<Item = (usize, PieceType)> + 'a {
         let occupancy = match player {
-            Player::White => &board.white_occupancy,
-            Player::Black => &board.black_occupancy,
+            Player::White => &board.pieces.white_occupancy,
+            Player::Black => &board.pieces.black_occupancy,
         };
 
         occupancy.iter_indices().map(move |idx| {
-            let pt = if board.pawns.get_bit(idx) {
+            let pt = if board.pieces.pawns.get_bit(idx) {
                 PieceType::Pawn
-            } else if board.knights.get_bit(idx) {
+            } else if board.pieces.knights.get_bit(idx) {
                 PieceType::Knight
-            } else if board.bishops.get_bit(idx) {
+            } else if board.pieces.bishops.get_bit(idx) {
                 PieceType::Bishop
-            } else if board.rooks.get_bit(idx) {
+            } else if board.pieces.rooks.get_bit(idx) {
                 PieceType::Rook
-            } else if board.queens.get_bit(idx) {
+            } else if board.pieces.queens.get_bit(idx) {
                 PieceType::Queen
             } else {
                 PieceType::King

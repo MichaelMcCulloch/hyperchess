@@ -16,7 +16,7 @@ fn test_castling_standard_8x8() {
     let side = 8;
     let dim = 2;
     let mut board = Board::new_empty(dim, side);
-    board.castling_rights = 0xF;
+    board.state.castling_rights = 0xF;
 
     let king_pos = coord_2d(0, 4);
     let rook_pos = coord_2d(0, 7);
@@ -64,7 +64,7 @@ fn test_castling_3d_blocked() {
     let side = 8;
     let dim = 3;
     let mut board = Board::new_empty(dim, side);
-    board.castling_rights = 0xF;
+    board.state.castling_rights = 0xF;
 
     let king_pos = coord_3d(0, 4, 0);
 

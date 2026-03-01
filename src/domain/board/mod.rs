@@ -3,6 +3,9 @@ pub mod bitboard_large;
 pub mod board_representation;
 pub mod cache;
 pub mod entity;
+pub mod geometry;
+pub mod pieces;
+pub mod position;
 pub mod u64_board;
 
 pub use bitboard::BitBoard;
@@ -13,4 +16,7 @@ pub use cache::BoardCache;
 pub use entity::Board;
 pub use entity::GenericBoard;
 pub use entity::UnmakeInfo;
+pub use geometry::{BoardGeometry, Geometry};
+pub use pieces::{PieceMap, Pieces};
+pub use position::PositionState;
 pub use u64_board::BitBoard64;

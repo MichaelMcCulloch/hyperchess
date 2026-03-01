@@ -310,8 +310,8 @@ impl MCTS {
 
                 let mut prior = 1.0;
                 let to_idx = current_state.coords_to_index(&mv.to.values).unwrap_or(0);
-                if current_state.black_occupancy.get_bit(to_idx)
-                    || current_state.white_occupancy.get_bit(to_idx)
+                if current_state.pieces.black_occupancy.get_bit(to_idx)
+                    || current_state.pieces.white_occupancy.get_bit(to_idx)
                 {
                     prior = 2.0;
                 }
@@ -438,7 +438,7 @@ impl MCTS {
         if let Some(king_pos) = state.get_king_coordinate(player_at_leaf) {
             if Rules::is_square_attacked(state, &king_pos, player_at_leaf.opponent()) {
                 if let Some(tt) = &self.tt {
-                    tt.store(state.hash, -CHECKMATE_SCORE, 255, Flag::Exact, None);
+                    tt.store(state.state.hash, -CHECKMATE_SCORE, 255, Flag::Exact, None);
                 }
 
                 if player_at_leaf == self.root_player {
@@ -450,7 +450,7 @@ impl MCTS {
         }
 
         if let Some(tt) = &self.tt {
-            tt.store(state.hash, 0, 255, Flag::Exact, None);
+            tt.store(state.state.hash, 0, 255, Flag::Exact, None);
         }
 
         0.5

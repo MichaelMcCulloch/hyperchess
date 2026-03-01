@@ -16,6 +16,7 @@ impl SEE {
         if let Some(target) = board.get_piece_at_index(to_idx) {
             value = Self::get_val(target.piece_type);
         } else if board
+            .state
             .en_passant_target
             .map(|(t, _)| t == to_idx)
             .unwrap_or(false)

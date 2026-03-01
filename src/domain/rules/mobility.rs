@@ -22,20 +22,20 @@ pub fn count_piece_mobility(board: &Board, index: usize, piece_type: PieceType) 
             return 0;
         }
         PieceType::Knight => {
-            return count_leaper_moves(board, &coord, player, &board.cache.knight_offsets);
+            return count_leaper_moves(board, &coord, player, &board.geo.cache.knight_offsets);
         }
         PieceType::King => {
-            return count_leaper_moves(board, &coord, player, &board.cache.king_offsets);
+            return count_leaper_moves(board, &coord, player, &board.geo.cache.king_offsets);
         }
         PieceType::Rook => {
-            return count_slider_moves(board, &coord, player, &board.cache.rook_directions);
+            return count_slider_moves(board, &coord, player, &board.geo.cache.rook_directions);
         }
         PieceType::Bishop => {
-            return count_slider_moves(board, &coord, player, &board.cache.bishop_directions);
+            return count_slider_moves(board, &coord, player, &board.geo.cache.bishop_directions);
         }
         PieceType::Queen => {
-            count += count_slider_moves(board, &coord, player, &board.cache.rook_directions);
-            count += count_slider_moves(board, &coord, player, &board.cache.bishop_directions);
+            count += count_slider_moves(board, &coord, player, &board.geo.cache.rook_directions);
+            count += count_slider_moves(board, &coord, player, &board.geo.cache.bishop_directions);
             return count;
         }
     }
@@ -49,11 +49,11 @@ fn count_leaper_moves(
 ) -> i32 {
     let mut count = 0;
     let same_occupancy = match player {
-        Player::White => &board.white_occupancy,
-        Player::Black => &board.black_occupancy,
+        Player::White => &board.pieces.white_occupancy,
+        Player::Black => &board.pieces.black_occupancy,
     };
     for offset in offsets {
-        if let Some(target) = apply_offset(&origin.values, offset, board.side) {
+        if let Some(target) = apply_offset(&origin.values, offset, board.side()) {
             if let Some(idx) = board.coords_to_index(&target) {
                 if !same_occupancy.get_bit(idx) {
                     count += 1;
@@ -72,18 +72,18 @@ fn count_slider_moves(
 ) -> i32 {
     let origin_idx = board.coords_to_index(&origin.values).unwrap();
     let mut count = 0;
-    let mut generator = board.white_occupancy.zero_like();
+    let mut generator = board.pieces.white_occupancy.zero_like();
     generator.set_bit(origin_idx);
 
-    let all_occupancy = &board.white_occupancy | &board.black_occupancy;
+    let all_occupancy = &board.pieces.white_occupancy | &board.pieces.black_occupancy;
     let own_occupancy = match player {
-        Player::White => &board.white_occupancy,
-        Player::Black => &board.black_occupancy,
+        Player::White => &board.pieces.white_occupancy,
+        Player::Black => &board.pieces.black_occupancy,
     };
 
     let empty = {
         let mut new_data = SmallVec::with_capacity(all_occupancy.data.len());
-        let mut remaining = board.total_cells;
+        let mut remaining = board.total_cells();
         for val in &all_occupancy.data {
             let limit = std::cmp::min(64, remaining);
             let mask = if limit == 64 {

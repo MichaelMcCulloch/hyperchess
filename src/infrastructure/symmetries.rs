@@ -41,25 +41,26 @@ impl SymmetryHandler {
 }
 
 fn permute(arr: &mut [usize]) -> Vec<Vec<usize>> {
-    let mut res = Vec::new();
-    heap_permute(arr.len(), arr, &mut res);
-    res
-}
-
-fn heap_permute(k: usize, arr: &mut [usize], res: &mut Vec<Vec<usize>>) {
-    if k == 1 {
-        res.push(arr.to_vec());
-    } else {
-        heap_permute(k - 1, arr, res);
-        for i in 0..k - 1 {
-            if k % 2 == 0 {
-                arr.swap(i, k - 1);
+    let n = arr.len();
+    let mut result = vec![arr.to_vec()];
+    let mut c = vec![0usize; n];
+    let mut i = 0;
+    while i < n {
+        if c[i] < i {
+            if i % 2 == 0 {
+                arr.swap(0, i);
             } else {
-                arr.swap(0, k - 1);
+                arr.swap(c[i], i);
             }
-            heap_permute(k - 1, arr, res);
+            result.push(arr.to_vec());
+            c[i] += 1;
+            i = 0;
+        } else {
+            c[i] = 0;
+            i += 1;
         }
     }
+    result
 }
 
 fn index_to_coords(mut index: usize, dim: usize, side: usize) -> Vec<usize> {

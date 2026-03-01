@@ -173,9 +173,10 @@ pub async fn take_turn(
 fn build_api_state(game: &Game) -> ApiGameState {
     let board = game.board();
     let pieces = board
+        .pieces
         .white_occupancy
         .iter_indices()
-        .chain(board.black_occupancy.iter_indices())
+        .chain(board.pieces.black_occupancy.iter_indices())
         .map(|idx| {
             let p = board.get_piece_at_index(idx).unwrap();
             let coords = board

@@ -1,4 +1,6 @@
-use crate::domain::board::{BoardRepresentation, GenericBoard};
+use crate::domain::board::board_representation::BoardRepresentation;
+use crate::domain::board::pieces::PieceMap;
+use crate::domain::board::position::PositionState;
 use crate::domain::models::Player;
 use rand::Rng;
 
@@ -37,9 +39,22 @@ impl ZobristKeys {
         }
     }
 
+    /// Compute hash from decomposed pieces and state (assumes White to move).
     pub fn get_hash<R: BoardRepresentation>(
         &self,
-        board: &GenericBoard<R>,
+        pieces: &PieceMap<R>,
+        state: &PositionState,
+        total_cells: usize,
+    ) -> u64 {
+        self.get_hash_with_player(pieces, state, total_cells, Player::White)
+    }
+
+    /// Compute hash from decomposed pieces, state, and current player.
+    pub fn get_hash_with_player<R: BoardRepresentation>(
+        &self,
+        pieces: &PieceMap<R>,
+        state: &PositionState,
+        total_cells: usize,
         current_player: Player,
     ) -> u64 {
         let mut hash = 0;
@@ -47,52 +62,52 @@ impl ZobristKeys {
             hash ^= self.black_to_move;
         }
 
-        if let Some((ep_target, _)) = board.en_passant_target {
+        if let Some((ep_target, _)) = state.en_passant_target {
             if ep_target < self.en_passant_keys.len() {
                 hash ^= self.en_passant_keys[ep_target];
             }
         }
 
-        let rights = board.castling_rights as usize;
+        let rights = state.castling_rights as usize;
         if rights < self.castling_keys.len() {
             hash ^= self.castling_keys[rights];
         }
 
-        for i in 0..board.total_cells {
-            if board.white_occupancy.get_bit(i) {
-                let offset = if board.pawns.get_bit(i) {
+        for i in 0..total_cells {
+            if pieces.white_occupancy.get_bit(i) {
+                let offset = if pieces.pawns.get_bit(i) {
                     0
-                } else if board.knights.get_bit(i) {
+                } else if pieces.knights.get_bit(i) {
                     1
-                } else if board.bishops.get_bit(i) {
+                } else if pieces.bishops.get_bit(i) {
                     2
-                } else if board.rooks.get_bit(i) {
+                } else if pieces.rooks.get_bit(i) {
                     3
-                } else if board.queens.get_bit(i) {
+                } else if pieces.queens.get_bit(i) {
                     4
-                } else if board.kings.get_bit(i) {
+                } else if pieces.kings.get_bit(i) {
                     5
                 } else {
                     continue;
                 };
-                hash ^= self.piece_keys[offset * board.total_cells + i];
-            } else if board.black_occupancy.get_bit(i) {
-                let offset = if board.pawns.get_bit(i) {
+                hash ^= self.piece_keys[offset * total_cells + i];
+            } else if pieces.black_occupancy.get_bit(i) {
+                let offset = if pieces.pawns.get_bit(i) {
                     6
-                } else if board.knights.get_bit(i) {
+                } else if pieces.knights.get_bit(i) {
                     7
-                } else if board.bishops.get_bit(i) {
+                } else if pieces.bishops.get_bit(i) {
                     8
-                } else if board.rooks.get_bit(i) {
+                } else if pieces.rooks.get_bit(i) {
                     9
-                } else if board.queens.get_bit(i) {
+                } else if pieces.queens.get_bit(i) {
                     10
-                } else if board.kings.get_bit(i) {
+                } else if pieces.kings.get_bit(i) {
                     11
                 } else {
                     continue;
                 };
-                hash ^= self.piece_keys[offset * board.total_cells + i];
+                hash ^= self.piece_keys[offset * total_cells + i];
             }
         }
         hash
