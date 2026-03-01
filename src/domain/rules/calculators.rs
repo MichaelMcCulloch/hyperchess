@@ -53,7 +53,7 @@ pub fn get_knight_offsets_calc(dimension: usize) -> Vec<Vec<isize>> {
                 for s2 in [-1, 1] {
                     let mut v = vec![0; dimension];
                     v[i] = 2 * s1;
-                    v[j] = 1 * s2;
+                    v[j] = s2;
                     offsets.push(v);
                 }
             }

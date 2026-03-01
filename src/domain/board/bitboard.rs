@@ -63,7 +63,7 @@ impl BitBoard {
         } else if total_cells <= 128 {
             BitBoard::Medium(0)
         } else {
-            let len = (total_cells + 63) / 64;
+            let len = total_cells.div_ceil(64);
             BitBoard::Large {
                 data: smallvec![0u64; len],
             }
@@ -306,7 +306,7 @@ impl ShrAssign<usize> for BitBoard {
     }
 }
 
-impl<'a, 'b> BitAnd<&'b BitBoard> for &'a BitBoard {
+impl<'b> BitAnd<&'b BitBoard> for &BitBoard {
     type Output = BitBoard;
 
     fn bitand(self, rhs: &'b BitBoard) -> BitBoard {
@@ -329,7 +329,7 @@ impl<'a, 'b> BitAnd<&'b BitBoard> for &'a BitBoard {
     }
 }
 
-impl<'a, 'b> BitOr<&'b BitBoard> for &'a BitBoard {
+impl<'b> BitOr<&'b BitBoard> for &BitBoard {
     type Output = BitBoard;
 
     fn bitor(self, rhs: &'b BitBoard) -> BitBoard {
@@ -352,7 +352,7 @@ impl<'a, 'b> BitOr<&'b BitBoard> for &'a BitBoard {
     }
 }
 
-impl<'a> Not for &'a BitBoard {
+impl Not for &BitBoard {
     type Output = BitBoard;
 
     fn not(self) -> BitBoard {
@@ -370,7 +370,7 @@ impl<'a> Not for &'a BitBoard {
     }
 }
 
-impl<'a> Shl<usize> for &'a BitBoard {
+impl Shl<usize> for &BitBoard {
     type Output = BitBoard;
     fn shl(self, shift: usize) -> BitBoard {
         let mut res = self.clone();
@@ -379,7 +379,7 @@ impl<'a> Shl<usize> for &'a BitBoard {
     }
 }
 
-impl<'a> Shr<usize> for &'a BitBoard {
+impl Shr<usize> for &BitBoard {
     type Output = BitBoard;
     fn shr(self, shift: usize) -> BitBoard {
         let mut res = self.clone();

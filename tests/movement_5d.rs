@@ -89,7 +89,7 @@ fn test_5d_knight_movement() {
         let non_zeros = diff.iter().filter(|&&d| d != 0).count();
         assert_eq!(non_zeros, 2, "Knight 5D move changes exactly 2 coords");
 
-        let abs_sum: usize = diff.iter().map(|&d| d.abs() as usize).sum();
+        let abs_sum: usize = diff.iter().map(|&d| d.unsigned_abs()).sum();
         assert_eq!(
             abs_sum, 3,
             "Knight move is +/-2 and +/-1 => sum of abs diffs is 3"

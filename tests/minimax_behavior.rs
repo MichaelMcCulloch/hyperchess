@@ -1,4 +1,4 @@
-use hyperchess::config::{AppConfig, MinimaxConfig};
+use hyperchess::config::AppConfig;
 use hyperchess::domain::board::Board;
 use hyperchess::domain::coordinate::Coordinate;
 use hyperchess::domain::models::{Piece, PieceType, Player};

@@ -62,10 +62,10 @@ impl ZobristKeys {
             hash ^= self.black_to_move;
         }
 
-        if let Some((ep_target, _)) = state.en_passant_target {
-            if ep_target < self.en_passant_keys.len() {
-                hash ^= self.en_passant_keys[ep_target];
-            }
+        if let Some((ep_target, _)) = state.en_passant_target
+            && ep_target < self.en_passant_keys.len()
+        {
+            hash ^= self.en_passant_keys[ep_target];
         }
 
         let rights = state.castling_rights as usize;

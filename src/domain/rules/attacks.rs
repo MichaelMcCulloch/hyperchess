@@ -16,22 +16,22 @@ pub fn is_square_attacked<R: BoardRepresentation>(
     };
 
     for offset in &board.geo.cache.knight_offsets {
-        if let Some(target_coord) = apply_offset(&square.values, offset, board.side()) {
-            if let Some(target_idx) = board.coords_to_index(&target_coord) {
-                if enemy_occupancy.get_bit(target_idx) && board.pieces.knights.get_bit(target_idx) {
-                    return true;
-                }
-            }
+        if let Some(target_coord) = apply_offset(&square.values, offset, board.side())
+            && let Some(target_idx) = board.coords_to_index(&target_coord)
+            && enemy_occupancy.get_bit(target_idx)
+            && board.pieces.knights.get_bit(target_idx)
+        {
+            return true;
         }
     }
 
     for offset in &board.geo.cache.king_offsets {
-        if let Some(target_coord) = apply_offset(&square.values, offset, board.side()) {
-            if let Some(target_idx) = board.coords_to_index(&target_coord) {
-                if enemy_occupancy.get_bit(target_idx) && board.pieces.kings.get_bit(target_idx) {
-                    return true;
-                }
-            }
+        if let Some(target_coord) = apply_offset(&square.values, offset, board.side())
+            && let Some(target_idx) = board.coords_to_index(&target_coord)
+            && enemy_occupancy.get_bit(target_idx)
+            && board.pieces.kings.get_bit(target_idx)
+        {
+            return true;
         }
     }
 
@@ -65,12 +65,12 @@ pub fn is_square_attacked<R: BoardRepresentation>(
     };
 
     for offset in pawn_attack_offsets {
-        if let Some(target_coord) = apply_offset(&square.values, offset, board.side()) {
-            if let Some(target_idx) = board.coords_to_index(&target_coord) {
-                if enemy_occupancy.get_bit(target_idx) && board.pieces.pawns.get_bit(target_idx) {
-                    return true;
-                }
-            }
+        if let Some(target_coord) = apply_offset(&square.values, offset, board.side())
+            && let Some(target_idx) = board.coords_to_index(&target_coord)
+            && enemy_occupancy.get_bit(target_idx)
+            && board.pieces.pawns.get_bit(target_idx)
+        {
+            return true;
         }
     }
 

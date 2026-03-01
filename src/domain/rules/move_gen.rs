@@ -8,6 +8,7 @@ use crate::domain::models::{Move, PieceType, Player};
 use crate::domain::rules::attacks::is_square_attacked;
 use crate::domain::rules::{MoveList, apply_offset};
 
+#[derive(Default)]
 struct MoveGenBuffer {
     generator: BitBoardLarge,
     g: BitBoardLarge,
@@ -15,19 +16,6 @@ struct MoveGenBuffer {
     shifted_g: BitBoardLarge,
     shifted_p: BitBoardLarge,
     temp: BitBoardLarge,
-}
-
-impl Default for MoveGenBuffer {
-    fn default() -> Self {
-        Self {
-            generator: BitBoardLarge::default(),
-            g: BitBoardLarge::default(),
-            p: BitBoardLarge::default(),
-            shifted_g: BitBoardLarge::default(),
-            shifted_p: BitBoardLarge::default(),
-            temp: BitBoardLarge::default(),
-        }
-    }
 }
 
 thread_local! {
@@ -81,10 +69,8 @@ pub fn generate_loud_moves(board: &mut Board, player: Player) -> MoveList {
             is_capture || is_promotion || is_ep_capture
         };
 
-        if is_loud {
-            if !leaves_king_in_check(board, player, &mv) {
-                moves.push(mv);
-            }
+        if is_loud && !leaves_king_in_check(board, player, &mv) {
+            moves.push(mv);
         }
     }
     moves
@@ -340,17 +326,17 @@ pub fn kogge_stone_fill_inplace(
         shifted_g.copy_from(g);
         *shifted_g &= mask;
         if stride > 0 {
-            *shifted_g <<= stride.abs() as usize * shift_amt;
+            *shifted_g <<= stride.unsigned_abs() * shift_amt;
         } else {
-            *shifted_g >>= stride.abs() as usize * shift_amt;
+            *shifted_g >>= stride.unsigned_abs() * shift_amt;
         }
 
         shifted_p.copy_from(p);
         *shifted_p &= mask;
         if stride > 0 {
-            *shifted_p <<= stride.abs() as usize * shift_amt;
+            *shifted_p <<= stride.unsigned_abs() * shift_amt;
         } else {
-            *shifted_p >>= stride.abs() as usize * shift_amt;
+            *shifted_p >>= stride.unsigned_abs() * shift_amt;
         }
 
         temp.copy_from(shifted_g);
@@ -372,9 +358,9 @@ pub fn kogge_stone_fill_inplace(
 
     *g &= mask;
     if stride > 0 {
-        *g <<= stride.abs() as usize;
+        *g <<= stride.unsigned_abs();
     } else {
-        *g >>= stride.abs() as usize;
+        *g >>= stride.unsigned_abs();
     }
 }
 
@@ -424,21 +410,21 @@ fn generate_castling_moves(board: &Board, player: Player, moves: &mut MoveList) 
         let f_idx = board.coords_to_index(&f_coords);
         let g_idx = board.coords_to_index(&g_coords);
         let mut blocked = true;
-        if let (Some(fi), Some(gi)) = (f_idx, g_idx) {
-            if !all_occupancy.get_bit(fi) && !all_occupancy.get_bit(gi) {
-                blocked = false;
-            }
+        if let (Some(fi), Some(gi)) = (f_idx, g_idx)
+            && !all_occupancy.get_bit(fi)
+            && !all_occupancy.get_bit(gi)
+        {
+            blocked = false;
         }
-        if !blocked {
-            if !is_square_attacked(board, &Coordinate::new(f_coords), player.opponent())
-                && !is_square_attacked(board, &Coordinate::new(g_coords.clone()), player.opponent())
-            {
-                moves.push(Move {
-                    from: king_coord.clone(),
-                    to: Coordinate::new(g_coords),
-                    promotion: None,
-                });
-            }
+        if !blocked
+            && !is_square_attacked(board, &Coordinate::new(f_coords), player.opponent())
+            && !is_square_attacked(board, &Coordinate::new(g_coords.clone()), player.opponent())
+        {
+            moves.push(Move {
+                from: king_coord.clone(),
+                to: Coordinate::new(g_coords),
+                promotion: None,
+            });
         }
     }
     let qs_mask = match player {
@@ -459,24 +445,22 @@ fn generate_castling_moves(board: &Board, player: Player, moves: &mut MoveList) 
         let c_idx = board.coords_to_index(&c_coords);
         let d_idx = board.coords_to_index(&d_coords);
         let mut blocked = true;
-        if let (Some(bi), Some(ci), Some(di)) = (b_idx, c_idx, d_idx) {
-            if !all_occupancy.get_bit(bi)
-                && !all_occupancy.get_bit(ci)
-                && !all_occupancy.get_bit(di)
-            {
-                blocked = false;
-            }
+        if let (Some(bi), Some(ci), Some(di)) = (b_idx, c_idx, d_idx)
+            && !all_occupancy.get_bit(bi)
+            && !all_occupancy.get_bit(ci)
+            && !all_occupancy.get_bit(di)
+        {
+            blocked = false;
         }
-        if !blocked {
-            if !is_square_attacked(board, &Coordinate::new(d_coords), player.opponent())
-                && !is_square_attacked(board, &Coordinate::new(c_coords.clone()), player.opponent())
-            {
-                moves.push(Move {
-                    from: king_coord.clone(),
-                    to: Coordinate::new(c_coords),
-                    promotion: None,
-                });
-            }
+        if !blocked
+            && !is_square_attacked(board, &Coordinate::new(d_coords), player.opponent())
+            && !is_square_attacked(board, &Coordinate::new(c_coords.clone()), player.opponent())
+        {
+            moves.push(Move {
+                from: king_coord.clone(),
+                to: Coordinate::new(c_coords),
+                promotion: None,
+            });
         }
     }
 }
@@ -493,16 +477,15 @@ fn generate_leaper_moves(
         Player::Black => &board.pieces.black_occupancy,
     };
     for offset in offsets {
-        if let Some(target_coords) = apply_offset(&origin.values, offset, board.side()) {
-            if let Some(target_idx) = board.coords_to_index(&target_coords) {
-                if !same_occupancy.get_bit(target_idx) {
-                    moves.push(Move {
-                        from: origin.clone(),
-                        to: Coordinate::new(target_coords),
-                        promotion: None,
-                    });
-                }
-            }
+        if let Some(target_coords) = apply_offset(&origin.values, offset, board.side())
+            && let Some(target_idx) = board.coords_to_index(&target_coords)
+            && !same_occupancy.get_bit(target_idx)
+        {
+            moves.push(Move {
+                from: origin.clone(),
+                to: Coordinate::new(target_coords),
+                promotion: None,
+            });
         }
     }
 }
@@ -523,24 +506,21 @@ fn generate_pawn_moves(board: &Board, origin: &Coordinate, player: Player, moves
         };
         let mut forward_step = vec![0; board.dimension()];
         forward_step[movement_axis] = forward_dir;
-        if let Some(target) = apply_offset(&origin.values, &forward_step, board.side()) {
-            if let Some(idx) = board.coords_to_index(&target) {
-                if !all_occupancy.get_bit(idx) {
-                    add_pawn_move(origin, &target, board.side(), player, moves);
-                    let is_start_rank = match player {
-                        Player::White => origin.values[movement_axis] == 1,
-                        Player::Black => origin.values[movement_axis] as usize == board.side() - 2,
-                    };
-                    if is_start_rank {
-                        if let Some(target2) = apply_offset(&target, &forward_step, board.side()) {
-                            if let Some(idx2) = board.coords_to_index(&target2) {
-                                if !all_occupancy.get_bit(idx2) {
-                                    add_pawn_move(origin, &target2, board.side(), player, moves);
-                                }
-                            }
-                        }
-                    }
-                }
+        if let Some(target) = apply_offset(&origin.values, &forward_step, board.side())
+            && let Some(idx) = board.coords_to_index(&target)
+            && !all_occupancy.get_bit(idx)
+        {
+            add_pawn_move(origin, &target, board.side(), player, moves);
+            let is_start_rank = match player {
+                Player::White => origin.values[movement_axis] == 1,
+                Player::Black => origin.values[movement_axis] as usize == board.side() - 2,
+            };
+            if is_start_rank
+                && let Some(target2) = apply_offset(&target, &forward_step, board.side())
+                && let Some(idx2) = board.coords_to_index(&target2)
+                && !all_occupancy.get_bit(idx2)
+            {
+                add_pawn_move(origin, &target2, board.side(), player, moves);
             }
         }
         for capture_axis in 0..board.dimension() {
@@ -550,19 +530,19 @@ fn generate_pawn_moves(board: &Board, origin: &Coordinate, player: Player, moves
             for s in [-1, 1] {
                 let mut cap_step = forward_step.clone();
                 cap_step[capture_axis] = s;
-                if let Some(target) = apply_offset(&origin.values, &cap_step, board.side()) {
-                    if let Some(idx) = board.coords_to_index(&target) {
-                        if enemy_occupancy.get_bit(idx) {
-                            add_pawn_move(origin, &target, board.side(), player, moves);
-                        } else if let Some((ep_target, _)) = board.state.en_passant_target {
-                            if idx == ep_target {
-                                moves.push(Move {
-                                    from: origin.clone(),
-                                    to: Coordinate::new(target),
-                                    promotion: None,
-                                });
-                            }
-                        }
+                if let Some(target) = apply_offset(&origin.values, &cap_step, board.side())
+                    && let Some(idx) = board.coords_to_index(&target)
+                {
+                    if enemy_occupancy.get_bit(idx) {
+                        add_pawn_move(origin, &target, board.side(), player, moves);
+                    } else if let Some((ep_target, _)) = board.state.en_passant_target
+                        && idx == ep_target
+                    {
+                        moves.push(Move {
+                            from: origin.clone(),
+                            to: Coordinate::new(target),
+                            promotion: None,
+                        });
                     }
                 }
             }

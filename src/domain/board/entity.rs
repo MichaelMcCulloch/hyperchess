@@ -276,10 +276,10 @@ impl<R: BoardRepresentation> GenericBoard<R> {
             self.state.hash ^= self.zobrist.castling_keys[self.state.castling_rights as usize];
         }
 
-        if let Some((ep, _)) = self.state.en_passant_target {
-            if ep < self.zobrist.en_passant_keys.len() {
-                self.state.hash ^= self.zobrist.en_passant_keys[ep];
-            }
+        if let Some((ep, _)) = self.state.en_passant_target
+            && ep < self.zobrist.en_passant_keys.len()
+        {
+            self.state.hash ^= self.zobrist.en_passant_keys[ep];
         }
 
         self.hash_xor_piece(from_idx, moving_piece);
@@ -289,16 +289,15 @@ impl<R: BoardRepresentation> GenericBoard<R> {
             self.hash_xor_piece(to_idx, target_p);
         }
 
-        if moving_piece.piece_type == PieceType::Pawn {
-            if let Some((target, victim)) = self.state.en_passant_target {
-                if to_idx == target {
-                    if let Some(victim_p) = self.pieces.get_piece_at_index(victim) {
-                        captured = Some((victim, victim_p));
-                        self.hash_xor_piece(victim, victim_p);
-                    }
-                    self.pieces.remove_piece_at_index(victim);
-                }
+        if moving_piece.piece_type == PieceType::Pawn
+            && let Some((target, victim)) = self.state.en_passant_target
+            && to_idx == target
+        {
+            if let Some(victim_p) = self.pieces.get_piece_at_index(victim) {
+                captured = Some((victim, victim_p));
+                self.hash_xor_piece(victim, victim_p);
             }
+            self.pieces.remove_piece_at_index(victim);
         }
 
         self.state.en_passant_target = None;
@@ -316,20 +315,20 @@ impl<R: BoardRepresentation> GenericBoard<R> {
                 .enumerate()
                 .any(|(i, &d)| i != double_step_axis.unwrap_or(999) && d != 0);
 
-            if let Some(axis) = double_step_axis {
-                if !any_other_movement {
-                    let dir = if mv.to.values[axis] > mv.from.values[axis] {
-                        1
-                    } else {
-                        -1
-                    };
-                    let mut target_vals = mv.from.values.clone();
-                    target_vals[axis] = (target_vals[axis] as isize + dir) as u8;
-                    if let Some(target_idx) = self.coords_to_index(&target_vals) {
-                        self.state.en_passant_target = Some((target_idx, to_idx));
-                        if target_idx < self.zobrist.en_passant_keys.len() {
-                            self.state.hash ^= self.zobrist.en_passant_keys[target_idx];
-                        }
+            if let Some(axis) = double_step_axis
+                && !any_other_movement
+            {
+                let dir = if mv.to.values[axis] > mv.from.values[axis] {
+                    1
+                } else {
+                    -1
+                };
+                let mut target_vals = mv.from.values.clone();
+                target_vals[axis] = (target_vals[axis] as isize + dir) as u8;
+                if let Some(target_idx) = self.coords_to_index(&target_vals) {
+                    self.state.en_passant_target = Some((target_idx, to_idx));
+                    if target_idx < self.zobrist.en_passant_keys.len() {
+                        self.state.hash ^= self.zobrist.en_passant_keys[target_idx];
                     }
                 }
             }
@@ -516,10 +515,10 @@ impl<R: BoardRepresentation> GenericBoard<R> {
 
         self.state.hash ^= self.zobrist.black_to_move;
 
-        if let Some((ep, _)) = saved_ep {
-            if ep < self.zobrist.en_passant_keys.len() {
-                self.state.hash ^= self.zobrist.en_passant_keys[ep];
-            }
+        if let Some((ep, _)) = saved_ep
+            && ep < self.zobrist.en_passant_keys.len()
+        {
+            self.state.hash ^= self.zobrist.en_passant_keys[ep];
         }
 
         UnmakeInfo {
@@ -584,25 +583,23 @@ impl<R: BoardRepresentation> GenericBoard<R> {
 
         for offset in pawn_attacker_offsets {
             if let Some(src) =
-                crate::domain::rules::Rules::apply_offset(&target_sq.values, &offset, self.geo.side)
+                crate::domain::rules::Rules::apply_offset(&target_sq.values, offset, self.geo.side)
+                && let Some(idx) = self.coords_to_index(&src)
+                && occupancy.get_bit(idx)
+                && self.pieces.pawns.get_bit(idx)
             {
-                if let Some(idx) = self.coords_to_index(&src) {
-                    if occupancy.get_bit(idx) && self.pieces.pawns.get_bit(idx) {
-                        return Some((100, idx));
-                    }
-                }
+                return Some((100, idx));
             }
         }
 
         for offset in &self.geo.cache.knight_offsets {
             if let Some(src) =
-                crate::domain::rules::Rules::apply_offset(&target_sq.values, &offset, self.geo.side)
+                crate::domain::rules::Rules::apply_offset(&target_sq.values, offset, self.geo.side)
+                && let Some(idx) = self.coords_to_index(&src)
+                && occupancy.get_bit(idx)
+                && self.pieces.knights.get_bit(idx)
             {
-                if let Some(idx) = self.coords_to_index(&src) {
-                    if occupancy.get_bit(idx) && self.pieces.knights.get_bit(idx) {
-                        return Some((320, idx));
-                    }
-                }
+                return Some((320, idx));
             }
         }
 
@@ -614,12 +611,10 @@ impl<R: BoardRepresentation> GenericBoard<R> {
                 dir,
                 attacker,
                 &[PieceType::Bishop],
-            ) {
-                if let Some(idx) =
-                    self.trace_ray_for_piece(target_sq, dir, attacker, PieceType::Bishop)
-                {
-                    return Some((330, idx));
-                }
+            ) && let Some(idx) =
+                self.trace_ray_for_piece(target_sq, dir, attacker, PieceType::Bishop)
+            {
+                return Some((330, idx));
             }
         }
 
@@ -631,12 +626,10 @@ impl<R: BoardRepresentation> GenericBoard<R> {
                 dir,
                 attacker,
                 &[PieceType::Rook],
-            ) {
-                if let Some(idx) =
-                    self.trace_ray_for_piece(target_sq, dir, attacker, PieceType::Rook)
-                {
-                    return Some((500, idx));
-                }
+            ) && let Some(idx) =
+                self.trace_ray_for_piece(target_sq, dir, attacker, PieceType::Rook)
+            {
+                return Some((500, idx));
             }
         }
 
@@ -657,13 +650,12 @@ impl<R: BoardRepresentation> GenericBoard<R> {
 
         for offset in &self.geo.cache.king_offsets {
             if let Some(src) =
-                crate::domain::rules::Rules::apply_offset(&target_sq.values, &offset, self.geo.side)
+                crate::domain::rules::Rules::apply_offset(&target_sq.values, offset, self.geo.side)
+                && let Some(idx) = self.coords_to_index(&src)
+                && occupancy.get_bit(idx)
+                && self.pieces.kings.get_bit(idx)
             {
-                if let Some(idx) = self.coords_to_index(&src) {
-                    if occupancy.get_bit(idx) && self.pieces.kings.get_bit(idx) {
-                        return Some((20000, idx));
-                    }
-                }
+                return Some((20000, idx));
             }
         }
 

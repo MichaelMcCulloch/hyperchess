@@ -92,7 +92,7 @@ impl BoardRepresentation for BitBoardLarge {
 
     fn new_empty(dimension: usize, side: usize) -> Self {
         let total_cells = side.pow(dimension as u32);
-        let len = (total_cells + 63) / 64;
+        let len = total_cells.div_ceil(64);
         BitBoardLarge {
             data: smallvec![0u64; len],
         }
@@ -257,7 +257,7 @@ impl ShrAssign<usize> for BitBoardLarge {
     }
 }
 
-impl<'a, 'b> BitAnd<&'b BitBoardLarge> for &'a BitBoardLarge {
+impl<'b> BitAnd<&'b BitBoardLarge> for &BitBoardLarge {
     type Output = BitBoardLarge;
 
     fn bitand(self, rhs: &'b BitBoardLarge) -> BitBoardLarge {
@@ -272,7 +272,7 @@ impl<'a, 'b> BitAnd<&'b BitBoardLarge> for &'a BitBoardLarge {
     }
 }
 
-impl<'a, 'b> BitOr<&'b BitBoardLarge> for &'a BitBoardLarge {
+impl<'b> BitOr<&'b BitBoardLarge> for &BitBoardLarge {
     type Output = BitBoardLarge;
 
     fn bitor(self, rhs: &'b BitBoardLarge) -> BitBoardLarge {
@@ -287,7 +287,7 @@ impl<'a, 'b> BitOr<&'b BitBoardLarge> for &'a BitBoardLarge {
     }
 }
 
-impl<'a> Not for &'a BitBoardLarge {
+impl Not for &BitBoardLarge {
     type Output = BitBoardLarge;
 
     fn not(self) -> BitBoardLarge {
@@ -299,7 +299,7 @@ impl<'a> Not for &'a BitBoardLarge {
     }
 }
 
-impl<'a> Shl<usize> for &'a BitBoardLarge {
+impl Shl<usize> for &BitBoardLarge {
     type Output = BitBoardLarge;
     fn shl(self, shift: usize) -> BitBoardLarge {
         let mut res = self.clone();
@@ -308,7 +308,7 @@ impl<'a> Shl<usize> for &'a BitBoardLarge {
     }
 }
 
-impl<'a> Shr<usize> for &'a BitBoardLarge {
+impl Shr<usize> for &BitBoardLarge {
     type Output = BitBoardLarge;
     fn shr(self, shift: usize) -> BitBoardLarge {
         let mut res = self.clone();

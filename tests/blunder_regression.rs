@@ -41,14 +41,12 @@ fn replay(board: &mut Board, moves: &[&str]) {
 #[test]
 fn test_no_blunder_allows_forced_mate() {
     let moves = [
-        "e2e4", "e7e5", "g1f3", "b8c6", "b1c3", "g8f6", "f1b5", "c6d4",
-        "b5a4", "c7c6", "d2d3", "a7a5", "f3e5", "d7d6", "e5f3", "d4f3",
-        "d1f3", "c8g4", "f3e3", "b7b5", "c3b5", "c6b5", "a4b5", "g4d7",
-        "a2a4", "f8e7", "e3d4", "e8g8", "c1d2", "f6e8", "b5d7", "d8d7",
-        "f2f4", "e8f6", "c2c4", "d6d5", "c4d5", "a8c8", "d4b6", "e7c5",
-        "b6a5", "f6d5", "d3d4", "d5f4", "d4c5", "c8c5", "a5b6", "f4g2",
-        "e1e2", "d7g4", "e2f2", "g2h4", "b6b3", "g4g2", "f2e3", "h4f5",
-        // move 29
+        "e2e4", "e7e5", "g1f3", "b8c6", "b1c3", "g8f6", "f1b5", "c6d4", "b5a4", "c7c6", "d2d3",
+        "a7a5", "f3e5", "d7d6", "e5f3", "d4f3", "d1f3", "c8g4", "f3e3", "b7b5", "c3b5", "c6b5",
+        "a4b5", "g4d7", "a2a4", "f8e7", "e3d4", "e8g8", "c1d2", "f6e8", "b5d7", "d8d7", "f2f4",
+        "e8f6", "c2c4", "d6d5", "c4d5", "a8c8", "d4b6", "e7c5", "b6a5", "f6d5", "d3d4", "d5f4",
+        "d4c5", "c8c5", "a5b6", "f4g2", "e1e2", "d7g4", "e2f2", "g2h4", "b6b3", "g4g2", "f2e3",
+        "h4f5", // move 29
         "e4f5", "c5e5",
     ];
 
@@ -57,7 +55,11 @@ fn test_no_blunder_allows_forced_mate() {
 
     // White to move, king on e3, in check from Re5
     let white_king = board.get_king_coordinate(Player::White).unwrap();
-    assert_eq!(white_king, Coordinate::new(vec![2, 4]), "White king should be on e3");
+    assert_eq!(
+        white_king,
+        Coordinate::new(vec![2, 4]),
+        "White king should be on e3"
+    );
     assert!(
         Rules::is_square_attacked(&board, &white_king, Player::Black),
         "White should be in check"
@@ -65,7 +67,11 @@ fn test_no_blunder_allows_forced_mate() {
 
     // White has 3 legal moves: Kf4, Kd3, Kd4
     let legal = Rules::generate_legal_moves(&mut board.clone(), Player::White);
-    assert_eq!(legal.len(), 3, "White should have exactly 3 legal king moves");
+    assert_eq!(
+        legal.len(),
+        3,
+        "White should have exactly 3 legal king moves"
+    );
 
     // The engine with depth >= 5 should see the forced mate after Kd4
     // and avoid it. Depth 6 gives a safety margin.

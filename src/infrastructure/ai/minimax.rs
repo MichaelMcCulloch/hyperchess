@@ -42,10 +42,10 @@ impl MinimaxBot {
     fn evaluate(&self, board: &Board, player_at_leaf: Option<Player>) -> i32 {
         let score = Evaluator::evaluate(board);
 
-        if let Some(p) = player_at_leaf {
-            if p == Player::Black {
-                return -score;
-            }
+        if let Some(p) = player_at_leaf
+            && p == Player::Black
+        {
+            return -score;
         }
         score
     }
@@ -79,10 +79,11 @@ impl MinimaxBot {
             let from_idx = board.coords_to_index(&mv.from.values).unwrap_or(0);
             let to_idx = board.coords_to_index(&mv.to.values).unwrap_or(0);
 
-            if let Some(tm) = tt_move {
-                if tm.from_idx as usize == from_idx && tm.to_idx as usize == to_idx {
-                    return -2_000_000_000;
-                }
+            if let Some(tm) = tt_move
+                && tm.from_idx as usize == from_idx
+                && tm.to_idx as usize == to_idx
+            {
+                return -2_000_000_000;
             }
 
             let enemy_occupancy = match player {
@@ -109,15 +110,15 @@ impl MinimaxBot {
             }
 
             if let Some(ks) = killers {
-                if let Some(k) = &ks[0] {
-                    if k == mv {
-                        return -500_000;
-                    }
+                if let Some(k) = &ks[0]
+                    && k == mv
+                {
+                    return -500_000;
                 }
-                if let Some(k) = &ks[1] {
-                    if k == mv {
-                        return -400_000;
-                    }
+                if let Some(k) = &ks[1]
+                    && k == mv
+                {
+                    return -400_000;
                 }
             }
 
@@ -347,17 +348,19 @@ impl MinimaxBot {
 
             // ========== INITIALIZATION ==========
             if stack[d].phase == SearchPhase::Init {
-                if self.nodes_searched.fetch_add(1, Ordering::Relaxed) % TIMEOUT_CHECK_INTERVAL == 0
+                if self
+                    .nodes_searched
+                    .fetch_add(1, Ordering::Relaxed)
+                    .is_multiple_of(TIMEOUT_CHECK_INTERVAL)
+                    && start_time.elapsed() > self.time_limit
                 {
-                    if start_time.elapsed() > self.time_limit {
-                        self.stop_flag.store(true, Ordering::Relaxed);
-                        return_value = 0;
-                        stack.pop();
-                        if stack.is_empty() {
-                            return return_value;
-                        }
-                        continue;
+                    self.stop_flag.store(true, Ordering::Relaxed);
+                    return_value = 0;
+                    stack.pop();
+                    if stack.is_empty() {
+                        return return_value;
                     }
+                    continue;
                 }
                 if self.stop_flag.load(Ordering::Relaxed) {
                     return_value = 0;
@@ -453,15 +456,15 @@ impl MinimaxBot {
                 let mut moves = Rules::generate_pseudo_legal_moves(board, stack[d].player);
 
                 if moves.is_empty() {
-                    if let Some(king_pos) = board.get_king_coordinate(stack[d].player) {
-                        if Rules::is_square_attacked(board, &king_pos, stack[d].player.opponent()) {
-                            return_value = -CHECKMATE_SCORE + (self.depth - stack[d].depth) as i32;
-                            stack.pop();
-                            if stack.is_empty() {
-                                return return_value;
-                            }
-                            continue;
+                    if let Some(king_pos) = board.get_king_coordinate(stack[d].player)
+                        && Rules::is_square_attacked(board, &king_pos, stack[d].player.opponent())
+                    {
+                        return_value = -CHECKMATE_SCORE + (self.depth - stack[d].depth) as i32;
+                        stack.pop();
+                        if stack.is_empty() {
+                            return return_value;
                         }
+                        continue;
                     }
                     return_value = 0;
                     stack.pop();
@@ -521,11 +524,11 @@ impl MinimaxBot {
                     };
 
                     // Legality check
-                    if let Some(king_pos) = board.get_king_coordinate(stack[d].player) {
-                        if Rules::is_square_attacked(board, &king_pos, stack[d].player.opponent()) {
-                            board.unmake_move(&mv, info);
-                            continue;
-                        }
+                    if let Some(king_pos) = board.get_king_coordinate(stack[d].player)
+                        && Rules::is_square_attacked(board, &king_pos, stack[d].player.opponent())
+                    {
+                        board.unmake_move(&mv, info);
+                        continue;
                     }
                     stack[d].legal_count += 1;
                     let legal_idx = stack[d].legal_count - 1; // 0-based legal move index

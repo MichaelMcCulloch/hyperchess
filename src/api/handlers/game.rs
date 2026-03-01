@@ -40,7 +40,7 @@ pub async fn create_game(
             } else {
                 Box::new(
                     MinimaxBot::new(
-                        &config,
+                        config,
                         dimension,
                         side,
                     )
@@ -217,12 +217,11 @@ fn build_api_state(game: &Game) -> ApiGameState {
 
             let opp_moves = Rules::generate_legal_moves(&mut temp_board, opponent);
 
-            if opp_moves.is_empty() {
-                if let Some(k_pos) = temp_board.get_king_coordinate(opponent) {
-                    if Rules::is_square_attacked(&temp_board, &k_pos, current_player) {
-                        consequence = MoveConsequence::Victory;
-                    }
-                }
+            if opp_moves.is_empty()
+                && let Some(k_pos) = temp_board.get_king_coordinate(opponent)
+                && Rules::is_square_attacked(&temp_board, &k_pos, current_player)
+            {
+                consequence = MoveConsequence::Victory;
             }
 
             temp_board.unmake_move(&mv, info);

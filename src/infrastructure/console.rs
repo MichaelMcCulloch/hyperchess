@@ -6,6 +6,12 @@ use std::io::{self, Write};
 
 pub struct HumanConsolePlayer;
 
+impl Default for HumanConsolePlayer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HumanConsolePlayer {
     pub fn new() -> Self {
         Self
@@ -98,7 +104,7 @@ impl PlayerStrategy for HumanConsolePlayer {
             let mut input = String::new();
             io::stdin().read_line(&mut input).unwrap();
 
-            let parts: Vec<&str> = input.trim().split_whitespace().collect();
+            let parts: Vec<&str> = input.split_whitespace().collect();
             if parts.len() < 2 {
                 println!("Please provide two coordinates: From To");
                 continue;

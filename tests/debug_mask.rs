@@ -65,10 +65,10 @@ mod tests {
             .find(|d| d.offsets == dir)
         {
             let mask_idx = info.id * board.side() + 1;
-            if let Some(mask) = board.geo.cache.validity_masks.get(mask_idx) {
-                if let Some(bits) = mask.data.get(0) {
-                    println!("Mask (0,-1) step 1: {:016b}", bits);
-                }
+            if let Some(mask) = board.geo.cache.validity_masks.get(mask_idx)
+                && let Some(bits) = mask.data.first()
+            {
+                println!("Mask (0,-1) step 1: {:016b}", bits);
             }
         }
 

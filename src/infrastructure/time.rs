@@ -3,6 +3,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub struct SystemClock;
 
+impl Default for SystemClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SystemClock {
     pub fn new() -> Self {
         Self

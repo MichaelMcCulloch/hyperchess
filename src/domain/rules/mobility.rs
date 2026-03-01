@@ -18,25 +18,21 @@ pub fn count_piece_mobility(board: &Board, index: usize, piece_type: PieceType) 
     let mut count = 0;
 
     match piece_type {
-        PieceType::Pawn => {
-            return 0;
-        }
+        PieceType::Pawn => 0,
         PieceType::Knight => {
-            return count_leaper_moves(board, &coord, player, &board.geo.cache.knight_offsets);
+            count_leaper_moves(board, &coord, player, &board.geo.cache.knight_offsets)
         }
-        PieceType::King => {
-            return count_leaper_moves(board, &coord, player, &board.geo.cache.king_offsets);
-        }
+        PieceType::King => count_leaper_moves(board, &coord, player, &board.geo.cache.king_offsets),
         PieceType::Rook => {
-            return count_slider_moves(board, &coord, player, &board.geo.cache.rook_directions);
+            count_slider_moves(board, &coord, player, &board.geo.cache.rook_directions)
         }
         PieceType::Bishop => {
-            return count_slider_moves(board, &coord, player, &board.geo.cache.bishop_directions);
+            count_slider_moves(board, &coord, player, &board.geo.cache.bishop_directions)
         }
         PieceType::Queen => {
             count += count_slider_moves(board, &coord, player, &board.geo.cache.rook_directions);
             count += count_slider_moves(board, &coord, player, &board.geo.cache.bishop_directions);
-            return count;
+            count
         }
     }
 }
@@ -53,12 +49,11 @@ fn count_leaper_moves(
         Player::Black => &board.pieces.black_occupancy,
     };
     for offset in offsets {
-        if let Some(target) = apply_offset(&origin.values, offset, board.side()) {
-            if let Some(idx) = board.coords_to_index(&target) {
-                if !same_occupancy.get_bit(idx) {
-                    count += 1;
-                }
-            }
+        if let Some(target) = apply_offset(&origin.values, offset, board.side())
+            && let Some(idx) = board.coords_to_index(&target)
+            && !same_occupancy.get_bit(idx)
+        {
+            count += 1;
         }
     }
     count

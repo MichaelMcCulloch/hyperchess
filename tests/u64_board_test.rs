@@ -20,7 +20,7 @@ fn test_u64_board_initialization() {
     board.pieces.white_occupancy.set_bit(10);
     board.pieces.black_occupancy.set_bit(20);
 
-    let combined = board.pieces.white_occupancy.clone() | &board.pieces.black_occupancy;
+    let combined = board.pieces.white_occupancy | board.pieces.black_occupancy;
     assert!(combined.get_bit(10));
     assert!(combined.get_bit(20));
     assert_eq!(combined.count_ones(), 2);

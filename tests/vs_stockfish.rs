@@ -58,7 +58,11 @@ fn uci_to_move(s: &str) -> Move {
     } else {
         None
     };
-    Move { from, to, promotion }
+    Move {
+        from,
+        to,
+        promotion,
+    }
 }
 
 struct Stockfish {
@@ -118,10 +122,7 @@ impl Stockfish {
         if moves.is_empty() {
             self.send("position startpos");
         } else {
-            self.send(&format!(
-                "position startpos moves {}",
-                moves.join(" ")
-            ));
+            self.send(&format!("position startpos moves {}", moves.join(" ")));
         }
         self.send(&format!("go movetime {}", move_time_ms));
 
@@ -190,7 +191,7 @@ fn print_position(board: &Board, move_number: usize, last_white: &str, last_blac
     // Eval
     let eval = Evaluator::evaluate(board);
     let bar = eval_bar(eval);
-    println!("  Eval: {} {}",  format_eval(eval), bar);
+    println!("  Eval: {} {}", format_eval(eval), bar);
     println!();
 
     // Last move info
@@ -225,7 +226,7 @@ fn eval_bar(cp: i32) -> String {
         "\x1b[37mWhite slightly better\x1b[0m"
     } else if pawns < 0.0 && pawns > -1.0 {
         "\x1b[31mBlack slightly better\x1b[0m"
-    } else if pawns >= 1.0 && pawns < 3.0 {
+    } else if (1.0..3.0).contains(&pawns) {
         "\x1b[1;37mWhite is winning\x1b[0m"
     } else if pawns <= -1.0 && pawns > -3.0 {
         "\x1b[1;31mBlack is winning\x1b[0m"
@@ -235,9 +236,7 @@ fn eval_bar(cp: i32) -> String {
         "\x1b[1;31mBlack is crushing\x1b[0m"
     };
 
-    format!(
-        "\x1b[1;37mW\x1b[0m [{bar}] \x1b[1;31mB\x1b[0m  {verdict}",
-    )
+    format!("\x1b[1;37mW\x1b[0m [{bar}] \x1b[1;31mB\x1b[0m  {verdict}",)
 }
 
 /// Validate that a UCI move from Stockfish is legal on our board.
@@ -248,16 +247,12 @@ fn validate_and_apply_sf_move(board: &mut Board, uci_mv: &str, player: Player) -
     // Find the matching legal move (handles promotion matching).
     let matched = legal_moves
         .iter()
-        .find(|m| {
-            m.from == parsed.from
-                && m.to == parsed.to
-                && m.promotion == parsed.promotion
-        })
+        .find(|m| m.from == parsed.from && m.to == parsed.to && m.promotion == parsed.promotion)
         .unwrap_or_else(|| {
             panic!(
                 "Stockfish move {} is not legal on our board!\nLegal moves: {:?}",
                 uci_mv,
-                legal_moves.iter().map(|m| move_to_uci(m)).collect::<Vec<_>>()
+                legal_moves.iter().map(move_to_uci).collect::<Vec<_>>()
             );
         })
         .clone();
@@ -302,7 +297,10 @@ fn vs_stockfish_full_game() {
         // Check for draw by repetition
         if board.is_repetition() {
             print_position(&board, move_number, &last_white, &last_black);
-            println!("  \x1b[1;33m½-½ Draw by repetition after {} moves.\x1b[0m", move_number);
+            println!(
+                "  \x1b[1;33m½-½ Draw by repetition after {} moves.\x1b[0m",
+                move_number
+            );
             print_pgn(&pgn_moves);
             return;
         }
@@ -321,14 +319,23 @@ fn vs_stockfish_full_game() {
                 let winner = player.opponent();
                 match winner {
                     Player::White => {
-                        println!("  \x1b[1;32m1-0 CHECKMATE! HyperChess WINS after {} moves!\x1b[0m", move_number);
+                        println!(
+                            "  \x1b[1;32m1-0 CHECKMATE! HyperChess WINS after {} moves!\x1b[0m",
+                            move_number
+                        );
                     }
                     Player::Black => {
-                        println!("  \x1b[1;31m0-1 CHECKMATE. Stockfish wins after {} moves.\x1b[0m", move_number);
+                        println!(
+                            "  \x1b[1;31m0-1 CHECKMATE. Stockfish wins after {} moves.\x1b[0m",
+                            move_number
+                        );
                     }
                 }
             } else {
-                println!("  \x1b[1;33m½-½ STALEMATE after {} moves.\x1b[0m", move_number);
+                println!(
+                    "  \x1b[1;33m½-½ STALEMATE after {} moves.\x1b[0m",
+                    move_number
+                );
             }
             print_pgn(&pgn_moves);
             return;
@@ -337,7 +344,10 @@ fn vs_stockfish_full_game() {
         // 50-move rule approximation
         if board.state.history.len() > 200 {
             print_position(&board, move_number, &last_white, &last_black);
-            println!("  \x1b[1;33m½-½ Draw by 50-move rule ({} half-moves).\x1b[0m", board.state.history.len());
+            println!(
+                "  \x1b[1;33m½-½ Draw by 50-move rule ({} half-moves).\x1b[0m",
+                board.state.history.len()
+            );
             print_pgn(&pgn_moves);
             return;
         }
@@ -372,7 +382,11 @@ fn vs_stockfish_full_game() {
                 print_position(&board, move_number, &last_white, &last_black);
 
                 // Print compact move log
-                let start = if pgn_moves.len() > 20 { pgn_moves.len() - 20 } else { 0 };
+                let start = if pgn_moves.len() > 20 {
+                    pgn_moves.len() - 20
+                } else {
+                    0
+                };
                 print!("  Moves: ");
                 for token in &pgn_moves[start..] {
                     print!("{} ", token);
@@ -385,7 +399,10 @@ fn vs_stockfish_full_game() {
     }
 
     print_position(&board, move_number, &last_white, &last_black);
-    println!("  \x1b[1;33m½-½ Draw by adjudication ({} moves).\x1b[0m", max_moves);
+    println!(
+        "  \x1b[1;33m½-½ Draw by adjudication ({} moves).\x1b[0m",
+        max_moves
+    );
     print_pgn(&pgn_moves);
 }
 

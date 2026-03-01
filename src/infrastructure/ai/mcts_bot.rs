@@ -21,7 +21,7 @@ pub struct MctsBot {
 
 impl MctsBot {
     pub fn new(config: &AppConfig) -> Self {
-        let mcts_config = config.mcts.clone().unwrap_or_else(|| MctsConfig {
+        let mcts_config = config.mcts.clone().unwrap_or(MctsConfig {
             iterations: 1000,
             depth: 50,
             iter_per_thread: 10.0,

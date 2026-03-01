@@ -2,7 +2,7 @@ use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct AppConfig {
     pub minimax: MinimaxConfig,
     pub mcts: Option<MctsConfig>,
@@ -86,60 +86,60 @@ impl AppConfig {
     }
 
     fn merge_env(&mut self) {
-        if let Ok(val) = std::env::var("HYPERCHESS_MINIMAX_DEPTH") {
-            if let Ok(parsed) = val.parse() {
-                self.minimax.depth = parsed;
-            }
+        if let Ok(val) = std::env::var("HYPERCHESS_MINIMAX_DEPTH")
+            && let Ok(parsed) = val.parse()
+        {
+            self.minimax.depth = parsed;
         }
-        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_DEPTH") {
-            if let Ok(parsed) = val.parse() {
-                let mcts = self.mcts.get_or_insert(MctsConfig::default());
-                mcts.depth = parsed;
-            }
+        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_DEPTH")
+            && let Ok(parsed) = val.parse()
+        {
+            let mcts = self.mcts.get_or_insert(MctsConfig::default());
+            mcts.depth = parsed;
         }
-        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_ITERATIONS") {
-            if let Ok(parsed) = val.parse() {
-                let mcts = self.mcts.get_or_insert(MctsConfig::default());
-                mcts.iterations = parsed;
-            }
+        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_ITERATIONS")
+            && let Ok(parsed) = val.parse()
+        {
+            let mcts = self.mcts.get_or_insert(MctsConfig::default());
+            mcts.iterations = parsed;
         }
-        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_ITER_PER_THREAD") {
-            if let Ok(parsed) = val.parse() {
-                let mcts = self.mcts.get_or_insert(MctsConfig::default());
-                mcts.iter_per_thread = parsed;
-            }
+        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_ITER_PER_THREAD")
+            && let Ok(parsed) = val.parse()
+        {
+            let mcts = self.mcts.get_or_insert(MctsConfig::default());
+            mcts.iter_per_thread = parsed;
         }
-        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_PRIOR_WEIGHT") {
-            if let Ok(parsed) = val.parse() {
-                let mcts = self.mcts.get_or_insert(MctsConfig::default());
-                mcts.prior_weight = parsed;
-            }
+        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_PRIOR_WEIGHT")
+            && let Ok(parsed) = val.parse()
+        {
+            let mcts = self.mcts.get_or_insert(MctsConfig::default());
+            mcts.prior_weight = parsed;
         }
-        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_ROLLOUT_DEPTH") {
-            if let Ok(parsed) = val.parse() {
-                let mcts = self.mcts.get_or_insert(MctsConfig::default());
-                mcts.rollout_depth = parsed;
-            }
+        if let Ok(val) = std::env::var("HYPERCHESS_MCTS_ROLLOUT_DEPTH")
+            && let Ok(parsed) = val.parse()
+        {
+            let mcts = self.mcts.get_or_insert(MctsConfig::default());
+            mcts.rollout_depth = parsed;
         }
-        if let Ok(val) = std::env::var("HYPERCHESS_COMPUTE_MEMORY") {
-            if let Ok(parsed) = val.parse() {
-                self.compute.memory = parsed;
-            }
+        if let Ok(val) = std::env::var("HYPERCHESS_COMPUTE_MEMORY")
+            && let Ok(parsed) = val.parse()
+        {
+            self.compute.memory = parsed;
         }
-        if let Ok(val) = std::env::var("HYPERCHESS_COMPUTE_MINUTES") {
-            if let Ok(parsed) = val.parse() {
-                self.compute.minutes = parsed;
-            }
+        if let Ok(val) = std::env::var("HYPERCHESS_COMPUTE_MINUTES")
+            && let Ok(parsed) = val.parse()
+        {
+            self.compute.minutes = parsed;
         }
-        if let Ok(val) = std::env::var("HYPERCHESS_COMPUTE_CONCURRENCY") {
-            if let Ok(parsed) = val.parse() {
-                self.compute.concurrency = parsed;
-            }
+        if let Ok(val) = std::env::var("HYPERCHESS_COMPUTE_CONCURRENCY")
+            && let Ok(parsed) = val.parse()
+        {
+            self.compute.concurrency = parsed;
         }
-        if let Ok(val) = std::env::var("HYPERCHESS_API_PORT") {
-            if let Ok(parsed) = val.parse() {
-                self.api.port = parsed;
-            }
+        if let Ok(val) = std::env::var("HYPERCHESS_API_PORT")
+            && let Ok(parsed) = val.parse()
+        {
+            self.api.port = parsed;
         }
     }
 }
@@ -161,16 +161,6 @@ impl Default for ApiConfig {
 impl Default for MinimaxConfig {
     fn default() -> Self {
         Self { depth: 4 }
-    }
-}
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            minimax: MinimaxConfig::default(),
-            mcts: None,
-            compute: ComputeConfig::default(),
-            api: ApiConfig::default(),
-        }
     }
 }
 

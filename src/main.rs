@@ -28,10 +28,10 @@ fn run_cli() {
     let mut player_white_type = "h";
     let mut player_black_type = "c";
 
-    if args.len() > 1 {
-        if let Ok(d) = args[1].parse::<usize>() {
-            dimension = d;
-        }
+    if args.len() > 1
+        && let Ok(d) = args[1].parse::<usize>()
+    {
+        dimension = d;
     }
     if args.len() > 2 {
         let mode = args[2].as_str();
@@ -40,17 +40,17 @@ fn run_cli() {
             player_black_type = &mode[1..2];
         }
     }
-    if args.len() > 3 {
-        if let Ok(d) = args[3].parse::<usize>() {
-            config.minimax.depth = d;
-        }
+    if args.len() > 3
+        && let Ok(d) = args[3].parse::<usize>()
+    {
+        config.minimax.depth = d;
     }
 
     let create_bot = |config: &AppConfig| -> Box<dyn PlayerStrategy> {
         if config.mcts.is_some() {
             Box::new(MctsBot::new(config))
         } else {
-            Box::new(MinimaxBot::new(&config, dimension, side))
+            Box::new(MinimaxBot::new(config, dimension, side))
         }
     };
 

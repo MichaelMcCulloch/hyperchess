@@ -56,7 +56,7 @@ impl MCTS {
         let moves = if let Some(m) = root_moves {
             m
         } else {
-            let pseudo = Rules::generate_pseudo_legal_moves(&mut root_clone, root_player);
+            let pseudo = Rules::generate_pseudo_legal_moves(&root_clone, root_player);
             let mut valid = MoveList::new();
             for mv in pseudo {
                 if !Rules::leaves_king_in_check(&mut root_clone, root_player, &mv) {
@@ -145,7 +145,7 @@ impl MCTS {
 
         let root_moves = {
             let mut root_clone = root_state.clone();
-            let pseudo = Rules::generate_pseudo_legal_moves(&mut root_clone, self.root_player);
+            let pseudo = Rules::generate_pseudo_legal_moves(&root_clone, self.root_player);
             let mut valid = MoveList::new();
             for mv in pseudo {
                 if !Rules::leaves_king_in_check(&mut root_clone, self.root_player, &mv) {
@@ -435,17 +435,17 @@ impl MCTS {
             return 0.5;
         }
 
-        if let Some(king_pos) = state.get_king_coordinate(player_at_leaf) {
-            if Rules::is_square_attacked(state, &king_pos, player_at_leaf.opponent()) {
-                if let Some(tt) = &self.tt {
-                    tt.store(state.state.hash, -CHECKMATE_SCORE, 255, Flag::Exact, None);
-                }
+        if let Some(king_pos) = state.get_king_coordinate(player_at_leaf)
+            && Rules::is_square_attacked(state, &king_pos, player_at_leaf.opponent())
+        {
+            if let Some(tt) = &self.tt {
+                tt.store(state.state.hash, -CHECKMATE_SCORE, 255, Flag::Exact, None);
+            }
 
-                if player_at_leaf == self.root_player {
-                    return 0.0;
-                } else {
-                    return 1.0;
-                }
+            if player_at_leaf == self.root_player {
+                return 0.0;
+            } else {
+                return 1.0;
             }
         }
 

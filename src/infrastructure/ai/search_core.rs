@@ -105,37 +105,27 @@ pub fn q_search(
 
         // --- Initialization (first entry) ---
         if stack[depth].move_idx == usize::MAX {
-            if nodes_searched.fetch_add(1, Ordering::Relaxed) % 4096 == 0 {
-                if stop_flag.load(Ordering::Relaxed) {
-                    return_value = 0;
-                    stack.pop();
-                    if stack.is_empty() {
-                        return return_value;
-                    }
-                    continue;
+            if nodes_searched
+                .fetch_add(1, Ordering::Relaxed)
+                .is_multiple_of(4096)
+                && stop_flag.load(Ordering::Relaxed)
+            {
+                return_value = 0;
+                stack.pop();
+                if stack.is_empty() {
+                    return return_value;
                 }
+                continue;
             }
 
             let hash = board.state.hash;
             stack[depth].hash = hash;
 
-            if let Some(t) = tt {
-                if let Some((tt_score, _, tt_flag, _)) = t.get(hash) {
-                    match tt_flag {
-                        Flag::Exact => {
-                            return_value = tt_score;
-                            stack.pop();
-                            if stack.is_empty() {
-                                return return_value;
-                            }
-                            continue;
-                        }
-                        Flag::LowerBound => {
-                            stack[depth].alpha = stack[depth].alpha.max(tt_score);
-                        }
-                        Flag::UpperBound => {}
-                    }
-                    if stack[depth].alpha >= stack[depth].beta {
+            if let Some(t) = tt
+                && let Some((tt_score, _, tt_flag, _)) = t.get(hash)
+            {
+                match tt_flag {
+                    Flag::Exact => {
                         return_value = tt_score;
                         stack.pop();
                         if stack.is_empty() {
@@ -143,6 +133,18 @@ pub fn q_search(
                         }
                         continue;
                     }
+                    Flag::LowerBound => {
+                        stack[depth].alpha = stack[depth].alpha.max(tt_score);
+                    }
+                    Flag::UpperBound => {}
+                }
+                if stack[depth].alpha >= stack[depth].beta {
+                    return_value = tt_score;
+                    stack.pop();
+                    if stack.is_empty() {
+                        return return_value;
+                    }
+                    continue;
                 }
             }
 
@@ -355,25 +357,15 @@ pub fn minimax_shallow(
             let hash = board.state.hash;
             stack[d].hash = hash;
 
-            if let Some(t) = tt {
-                if let Some((tt_score, tt_depth, tt_flag, best_m)) = t.get(hash) {
-                    if let Some(pm) = best_m {
-                        stack[d].tt_move_coords = Some((pm.from_idx, pm.to_idx));
-                    }
-                    if tt_depth as usize >= stack[d].depth {
-                        match tt_flag {
-                            Flag::Exact => {
-                                return_value = tt_score;
-                                stack.pop();
-                                if stack.is_empty() {
-                                    return return_value;
-                                }
-                                continue;
-                            }
-                            Flag::LowerBound => stack[d].alpha = stack[d].alpha.max(tt_score),
-                            Flag::UpperBound => stack[d].beta = stack[d].beta.min(tt_score),
-                        }
-                        if stack[d].alpha >= stack[d].beta {
+            if let Some(t) = tt
+                && let Some((tt_score, tt_depth, tt_flag, best_m)) = t.get(hash)
+            {
+                if let Some(pm) = best_m {
+                    stack[d].tt_move_coords = Some((pm.from_idx, pm.to_idx));
+                }
+                if tt_depth as usize >= stack[d].depth {
+                    match tt_flag {
+                        Flag::Exact => {
                             return_value = tt_score;
                             stack.pop();
                             if stack.is_empty() {
@@ -381,6 +373,16 @@ pub fn minimax_shallow(
                             }
                             continue;
                         }
+                        Flag::LowerBound => stack[d].alpha = stack[d].alpha.max(tt_score),
+                        Flag::UpperBound => stack[d].beta = stack[d].beta.min(tt_score),
+                    }
+                    if stack[d].alpha >= stack[d].beta {
+                        return_value = tt_score;
+                        stack.pop();
+                        if stack.is_empty() {
+                            return return_value;
+                        }
+                        continue;
                     }
                 }
             }
@@ -406,15 +408,15 @@ pub fn minimax_shallow(
 
             let moves = Rules::generate_legal_moves(board, stack[d].player);
             if moves.is_empty() {
-                if let Some(king_pos) = board.get_king_coordinate(stack[d].player) {
-                    if Rules::is_square_attacked(board, &king_pos, stack[d].player.opponent()) {
-                        return_value = -30000 + (100 - stack[d].depth as i32);
-                        stack.pop();
-                        if stack.is_empty() {
-                            return return_value;
-                        }
-                        continue;
+                if let Some(king_pos) = board.get_king_coordinate(stack[d].player)
+                    && Rules::is_square_attacked(board, &king_pos, stack[d].player.opponent())
+                {
+                    return_value = -30000 + (100 - stack[d].depth as i32);
+                    stack.pop();
+                    if stack.is_empty() {
+                        return return_value;
                     }
+                    continue;
                 }
                 return_value = 0;
                 stack.pop();
