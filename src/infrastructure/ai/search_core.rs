@@ -202,6 +202,18 @@ pub fn q_search(
                     stack[depth].alpha = stand_pat;
                 }
 
+                // Delta pruning: if stand_pat + the best possible capture gain
+                // (queen value + promotion bonus) still can't reach alpha, prune.
+                let delta_margin = VAL_QUEEN + 200; // queen + promotion margin
+                if stand_pat + delta_margin < stack[depth].alpha {
+                    return_value = stack[depth].alpha;
+                    stack.pop();
+                    if stack.is_empty() {
+                        return return_value;
+                    }
+                    continue;
+                }
+
                 let loud = Rules::generate_loud_moves(board, stack[depth].player);
                 let mut sorted: SmallVec<[(Move, i32); 8]> = loud
                     .into_iter()

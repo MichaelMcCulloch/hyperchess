@@ -18,6 +18,17 @@ const TIMEOUT_CHECK_INTERVAL: usize = 2048;
 
 const MAX_HISTORY: i32 = 2000;
 
+/// Razor margins by depth (indexed by depth: 1, 2, 3).
+/// If static_eval + margin < alpha, drop to qsearch.
+const RAZOR_MARGIN: [i32; 4] = [0, 300, 500, 700];
+
+/// Multi-cut: at non-PV cut nodes, try the first MC_M moves at reduced depth.
+/// If MC_C of them beat beta, prune the entire node.
+const MC_M: usize = 6; // number of moves to try
+const MC_C: usize = 3; // cutoff threshold
+const MC_DEPTH_MIN: usize = 5; // minimum depth to apply multi-cut
+const MC_REDUCTION: usize = 4; // depth reduction for verification
+
 pub struct MinimaxBot {
     depth: usize,
     time_limit: Duration,
@@ -73,6 +84,9 @@ impl MinimaxBot {
         tt_move: Option<PackedMove>,
         killers: Option<&[Option<Move>; 2]>,
         history: &[Vec<i32>],
+        countermove: Option<&Move>,
+        cont_history: &[Vec<i32>],
+        prev_move_idx: Option<usize>,
         player: Player,
     ) {
         moves.sort_by_cached_key(|mv| {
@@ -122,15 +136,29 @@ impl MinimaxBot {
                 }
             }
 
-            if from_idx < history[0].len() && to_idx < history[0].len() {
-                let hist_idx = from_idx * board.total_cells() + to_idx;
-                if hist_idx < history[0].len() {
-                    let score = history[player as usize][hist_idx];
-                    return -score;
+            // Countermove bonus
+            if let Some(cm) = countermove
+                && cm == mv
+            {
+                return -350_000;
+            }
+
+            // Combine history + continuation history for quiet move ordering
+            let mut quiet_score: i32 = 0;
+            let hist_idx = from_idx * board.total_cells() + to_idx;
+
+            if hist_idx < history[0].len() {
+                quiet_score += history[player as usize][hist_idx];
+            }
+
+            if let Some(prev_idx) = prev_move_idx {
+                let cont_idx = prev_idx * board.total_cells() + to_idx;
+                if cont_idx < cont_history[player as usize].len() {
+                    quiet_score += cont_history[player as usize][cont_idx];
                 }
             }
 
-            0
+            -quiet_score
         });
     }
 
@@ -147,11 +175,16 @@ impl MinimaxBot {
         allow_null: bool,
         killers: &mut [[Option<Move>; 2]],
         history: &mut [Vec<i32>],
+        countermoves: &mut [Vec<Option<Move>>],
+        cont_history: &mut [Vec<i32>],
+        prev_move_to_idx: Option<usize>,
     ) -> i32 {
         let mut stack: Vec<SearchFrame> = Vec::with_capacity(depth + 1);
         let mut return_value: i32 = 0;
 
-        stack.push(SearchFrame::new(depth, alpha, beta, player, allow_null));
+        let mut initial = SearchFrame::new(depth, alpha, beta, player, allow_null);
+        initial.prev_move_to_idx = prev_move_to_idx;
+        stack.push(initial);
 
         'outer: loop {
             let d = stack.len() - 1;
@@ -185,24 +218,28 @@ impl MinimaxBot {
                     let reduction = stack[d].current_reduction;
 
                     if move_index > 0 {
+                        let ext = stack[d].current_extension;
+                        let re_search_to = board.coords_to_index(&mv.to.values);
                         // This was a scout/LMR search
                         if score > stack[d].alpha && reduction > 0 {
                             // LMR re-search needed: search at full depth with scout window
                             stack[d].phase = SearchPhase::LmrReSearchReturn;
                             stack[d].pending_unmake = Some((mv, info));
 
-                            let child_depth = stack[d].depth - 1;
+                            let child_depth = stack[d].depth - 1 + ext;
                             let child_alpha = -stack[d].alpha - 1;
                             let child_beta = -stack[d].alpha;
                             let child_player = stack[d].player.opponent();
 
-                            stack.push(SearchFrame::new(
+                            let mut child = SearchFrame::new(
                                 child_depth,
                                 child_alpha,
                                 child_beta,
                                 child_player,
                                 true,
-                            ));
+                            );
+                            child.prev_move_to_idx = re_search_to;
+                            stack.push(child);
                             continue 'outer;
                         }
 
@@ -211,24 +248,35 @@ impl MinimaxBot {
                             stack[d].phase = SearchPhase::PvsReSearchReturn;
                             stack[d].pending_unmake = Some((mv, info));
 
-                            let child_depth = stack[d].depth - 1;
+                            let child_depth = stack[d].depth - 1 + ext;
                             let child_alpha = -stack[d].beta;
                             let child_beta = -stack[d].alpha;
                             let child_player = stack[d].player.opponent();
 
-                            stack.push(SearchFrame::new(
+                            let mut child = SearchFrame::new(
                                 child_depth,
                                 child_alpha,
                                 child_beta,
                                 child_player,
                                 true,
-                            ));
+                            );
+                            child.prev_move_to_idx = re_search_to;
+                            stack.push(child);
                             continue 'outer;
                         }
                     }
 
                     // Process the score
-                    self.process_move_result(&mut stack[d], board, &mv, score, killers, history);
+                    self.process_move_result(
+                        &mut stack[d],
+                        board,
+                        &mv,
+                        score,
+                        killers,
+                        history,
+                        countermoves,
+                        cont_history,
+                    );
                     board.unmake_move(&mv, info);
 
                     if self.stop_flag.load(Ordering::Relaxed) {
@@ -257,30 +305,40 @@ impl MinimaxBot {
 
                 SearchPhase::LmrReSearchReturn => {
                     let score = -return_value;
-                    let (ref mv, _) = *stack[d].pending_unmake.as_ref().unwrap();
+                    let to_vals = stack[d]
+                        .pending_unmake
+                        .as_ref()
+                        .unwrap()
+                        .0
+                        .to
+                        .values
+                        .clone();
 
                     if score > stack[d].alpha && score < stack[d].beta {
                         // PVS re-search needed
                         stack[d].phase = SearchPhase::PvsReSearchReturn;
 
-                        let child_depth = stack[d].depth - 1;
+                        let re_to = board.coords_to_index(&to_vals);
+                        let child_depth = stack[d].depth - 1 + stack[d].current_extension;
                         let child_alpha = -stack[d].beta;
                         let child_beta = -stack[d].alpha;
                         let child_player = stack[d].player.opponent();
 
-                        stack.push(SearchFrame::new(
+                        let mut child = SearchFrame::new(
                             child_depth,
                             child_alpha,
                             child_beta,
                             child_player,
                             true,
-                        ));
+                        );
+                        child.prev_move_to_idx = re_to;
+                        stack.push(child);
                         continue 'outer;
                     }
 
                     // Process the score from LMR re-search
-                    let mv_clone = mv.clone();
                     let (mv, info) = stack[d].pending_unmake.take().unwrap();
+                    let mv_clone = mv.clone();
 
                     self.process_move_result(
                         &mut stack[d],
@@ -289,6 +347,8 @@ impl MinimaxBot {
                         score,
                         killers,
                         history,
+                        countermoves,
+                        cont_history,
                     );
                     board.unmake_move(&mv, info);
 
@@ -314,11 +374,50 @@ impl MinimaxBot {
                     stack[d].phase = SearchPhase::ProcessMoves;
                 }
 
+                SearchPhase::IidReturn => {
+                    // IID search complete. Re-probe TT for the move it found.
+                    let hash = stack[d].hash;
+                    if let Some((_, _, _, best_m)) = self.tt.get(hash) {
+                        stack[d].tt_move = best_m;
+                    }
+                    // Now proceed to check detection → null move → razor → generate moves
+                    // We need to go through the rest of Init logic, so set phase
+                    // and jump to the in-check detection.
+                    stack[d].phase = SearchPhase::GenerateMoves;
+                    // Detect in-check at entry
+                    stack[d].in_check_at_entry =
+                        if let Some(king_pos) = board.get_king_coordinate(stack[d].player) {
+                            Rules::is_square_attacked(board, &king_pos, stack[d].player.opponent())
+                        } else {
+                            false
+                        };
+                    // fall through to GenerateMoves
+                }
+
+                SearchPhase::SingularSearchReturn => {
+                    // Verification search returned. If the score is below singular_beta,
+                    // the TT move is singular — give it an extra extension ply.
+                    if return_value < stack[d].singular_beta {
+                        stack[d].singular_extension = 1;
+                    }
+                    stack[d].phase = SearchPhase::ProcessMoves;
+                    // fall through to ProcessMoves
+                }
+
                 SearchPhase::PvsReSearchReturn => {
                     let score = -return_value;
                     let (mv, info) = stack[d].pending_unmake.take().unwrap();
 
-                    self.process_move_result(&mut stack[d], board, &mv, score, killers, history);
+                    self.process_move_result(
+                        &mut stack[d],
+                        board,
+                        &mv,
+                        score,
+                        killers,
+                        history,
+                        countermoves,
+                        cont_history,
+                    );
                     board.unmake_move(&mv, info);
 
                     if self.stop_flag.load(Ordering::Relaxed) {
@@ -412,37 +511,74 @@ impl MinimaxBot {
                     continue;
                 }
 
+                // Internal Iterative Deepening: at PV nodes with no TT move
+                // and sufficient depth, do a reduced search to get a move to try first.
+                let is_pv = stack[d].beta - stack[d].alpha > 1;
+                if is_pv && stack[d].tt_move.is_none() && stack[d].depth >= 5 {
+                    stack[d].phase = SearchPhase::IidReturn;
+
+                    let iid_depth = stack[d].depth - 2;
+                    let child_alpha = stack[d].alpha;
+                    let child_beta = stack[d].beta;
+                    let child_player = stack[d].player;
+
+                    stack.push(SearchFrame::new(
+                        iid_depth,
+                        child_alpha,
+                        child_beta,
+                        child_player,
+                        stack[d].allow_null,
+                    ));
+                    continue 'outer;
+                }
+
+                // Detect in-check at entry (used by null move, razor, etc.)
+                stack[d].in_check_at_entry =
+                    if let Some(king_pos) = board.get_king_coordinate(stack[d].player) {
+                        Rules::is_square_attacked(board, &king_pos, stack[d].player.opponent())
+                    } else {
+                        false
+                    };
+
                 // Null move pruning
                 if stack[d].allow_null && stack[d].depth >= 3 {
                     let static_eval = self.evaluate(board, Some(stack[d].player));
-                    if static_eval >= stack[d].beta {
-                        let in_check = if let Some(king_pos) =
-                            board.get_king_coordinate(stack[d].player)
-                        {
-                            Rules::is_square_attacked(board, &king_pos, stack[d].player.opponent())
-                        } else {
-                            false
-                        };
+                    if static_eval >= stack[d].beta && !stack[d].in_check_at_entry {
+                        let r = if stack[d].depth > 6 { 3 } else { 2 };
+                        let null_info = board.make_null_move();
+                        stack[d].null_move_info = Some(null_info);
+                        stack[d].phase = SearchPhase::NullMoveReturn;
 
-                        if !in_check {
-                            let r = if stack[d].depth > 6 { 3 } else { 2 };
-                            let null_info = board.make_null_move();
-                            stack[d].null_move_info = Some(null_info);
-                            stack[d].phase = SearchPhase::NullMoveReturn;
+                        let child_depth = stack[d].depth - 1 - r;
+                        let child_alpha = -stack[d].beta;
+                        let child_beta = -stack[d].beta + 1;
+                        let child_player = stack[d].player.opponent();
 
-                            let child_depth = stack[d].depth - 1 - r;
-                            let child_alpha = -stack[d].beta;
-                            let child_beta = -stack[d].beta + 1;
-                            let child_player = stack[d].player.opponent();
+                        stack.push(SearchFrame::new(
+                            child_depth,
+                            child_alpha,
+                            child_beta,
+                            child_player,
+                            false,
+                        ));
+                        continue 'outer;
+                    }
+                }
 
-                            stack.push(SearchFrame::new(
-                                child_depth,
-                                child_alpha,
-                                child_beta,
-                                child_player,
-                                false,
-                            ));
-                            continue 'outer;
+                // Razor pruning: at shallow depths, if static eval is far below
+                // alpha, drop straight to qsearch.
+                if stack[d].depth <= 3 && !stack[d].in_check_at_entry {
+                    let static_eval = self.evaluate(board, Some(stack[d].player));
+                    if static_eval + RAZOR_MARGIN[stack[d].depth] < stack[d].alpha {
+                        let qval =
+                            self.q_search(board, stack[d].alpha, stack[d].beta, stack[d].player);
+                        if qval < stack[d].alpha {
+                            return_value = qval;
+                            stack.pop();
+                            if stack.is_empty() {
+                                return return_value;
+                            }
+                            continue;
                         }
                     }
                 }
@@ -482,16 +618,23 @@ impl MinimaxBot {
                     }
                 }
 
-                // In-check detection
-                stack[d].in_check =
-                    if let Some(king_pos) = board.get_king_coordinate(stack[d].player) {
-                        Rules::is_square_attacked(board, &king_pos, stack[d].player.opponent())
-                    } else {
-                        false
-                    };
+                // Reuse the in-check detection from Init phase
+                stack[d].in_check = stack[d].in_check_at_entry;
 
                 let my_killers = if stack[d].depth < killers.len() {
                     Some(&killers[stack[d].depth])
+                } else {
+                    None
+                };
+
+                // Look up countermove for this position
+                let cm = if let Some(prev_to) = stack[d].prev_move_to_idx {
+                    let opp = stack[d].player.opponent() as usize;
+                    if prev_to < countermoves[opp].len() {
+                        countermoves[opp][prev_to].as_ref()
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -502,11 +645,110 @@ impl MinimaxBot {
                     stack[d].tt_move,
                     my_killers,
                     history,
+                    cm,
+                    cont_history,
+                    stack[d].prev_move_to_idx,
                     stack[d].player,
                 );
 
                 stack[d].moves = moves;
                 stack[d].move_idx = 0;
+
+                // Multi-cut pruning: at non-PV cut nodes with sufficient depth,
+                // try the first MC_M moves at reduced depth. If MC_C of them
+                // beat beta, this node almost certainly fails high — prune it.
+                let is_pv_node = stack[d].beta - stack[d].alpha > 1;
+                if !is_pv_node
+                    && stack[d].depth >= MC_DEPTH_MIN
+                    && !stack[d].in_check
+                    && stack[d].allow_null
+                {
+                    let mc_depth = stack[d].depth.saturating_sub(MC_REDUCTION);
+                    let mut cutoffs = 0;
+                    let tries = stack[d].moves.len().min(MC_M);
+
+                    for mi in 0..tries {
+                        let mv = stack[d].moves[mi].clone();
+                        if let Ok(info) = board.apply_move(&mv) {
+                            // Legality check
+                            let illegal = if let Some(kp) =
+                                board.get_king_coordinate(stack[d].player)
+                            {
+                                Rules::is_square_attacked(board, &kp, stack[d].player.opponent())
+                            } else {
+                                false
+                            };
+                            if !illegal {
+                                let child_score = -self.minimax(
+                                    board,
+                                    mc_depth,
+                                    -stack[d].beta,
+                                    -stack[d].beta + 1,
+                                    stack[d].player.opponent(),
+                                    start_time,
+                                    false,
+                                    killers,
+                                    history,
+                                    countermoves,
+                                    cont_history,
+                                    board.coords_to_index(&mv.to.values),
+                                );
+                                if child_score >= stack[d].beta {
+                                    cutoffs += 1;
+                                }
+                            }
+                            board.unmake_move(&mv, info);
+
+                            if cutoffs >= MC_C {
+                                return_value = stack[d].beta;
+                                stack.pop();
+                                if stack.is_empty() {
+                                    return return_value;
+                                }
+                                continue 'outer;
+                            }
+                        }
+                    }
+                }
+
+                // Singular extension verification:
+                // If we have a TT move at sufficient depth with a non-upper-bound score,
+                // verify it's singular by searching all other moves at reduced depth.
+                // If they all fail low by a margin, extend the TT move.
+                if stack[d].depth >= 8
+                    && stack[d].tt_move.is_some()
+                    && !stack[d].in_check
+                    && let Some((tt_score, tt_depth, tt_flag, _)) = self.tt.get(stack[d].hash)
+                    && tt_depth as usize >= stack[d].depth - 3
+                    && (tt_flag == Flag::Exact || tt_flag == Flag::LowerBound)
+                    && tt_score.abs() < CHECKMATE_SCORE - 100
+                {
+                    stack[d].singular_beta = tt_score - 2 * stack[d].depth as i32;
+                    stack[d].singular_tt_move = stack[d].tt_move;
+                    stack[d].phase = SearchPhase::SingularSearchReturn;
+
+                    // Do a reduced-depth search excluding the TT move
+                    // We'll do this manually: search all moves except TT move at reduced depth
+                    // Using a separate minimax call is expensive in iterative framework.
+                    // Instead, we'll use the TT-populated shallow search approach:
+                    // search at depth/2 with the singular beta as the window.
+                    let se_depth = stack[d].depth / 2;
+                    let se_alpha = stack[d].singular_beta - 1;
+                    let se_beta = stack[d].singular_beta;
+
+                    stack.push(SearchFrame::new(
+                        se_depth,
+                        se_alpha,
+                        se_beta,
+                        stack[d].player,
+                        false, // no null move in verification
+                    ));
+                    // The singular verification child will search the full position.
+                    // The TT move will get its TT cutoff; if others all fail low,
+                    // the result will be < singular_beta.
+                    continue 'outer;
+                }
+
                 stack[d].phase = SearchPhase::ProcessMoves;
                 // fall through
             }
@@ -536,8 +778,35 @@ impl MinimaxBot {
                     let is_capture = info.captured.is_some();
                     let is_promotion = mv.promotion.is_some();
 
+                    // Check extension: if this move gives check, extend depth by 1
+                    let gives_check = if let Some(opp_king) =
+                        board.get_king_coordinate(stack[d].player.opponent())
+                    {
+                        Rules::is_square_attacked(board, &opp_king, stack[d].player)
+                    } else {
+                        false
+                    };
+                    let mut extension: usize = if gives_check { 1 } else { 0 };
+
+                    // Apply singular extension to the TT move (always first after sorting)
+                    if legal_idx == 0
+                        && stack[d].singular_extension > 0
+                        && let Some(tm) = stack[d].singular_tt_move
+                    {
+                        let from_idx = board.coords_to_index(&mv.from.values).unwrap_or(usize::MAX);
+                        let to_idx = board.coords_to_index(&mv.to.values).unwrap_or(usize::MAX);
+                        if tm.from_idx as usize == from_idx && tm.to_idx as usize == to_idx {
+                            extension += stack[d].singular_extension;
+                        }
+                    }
+
                     // Futility pruning
-                    if stack[d].do_futility && !is_capture && !is_promotion && !stack[d].in_check {
+                    if stack[d].do_futility
+                        && !is_capture
+                        && !is_promotion
+                        && !stack[d].in_check
+                        && !gives_check
+                    {
                         board.unmake_move(&mv, info);
                         continue;
                     }
@@ -549,46 +818,54 @@ impl MinimaxBot {
                         && !is_capture
                         && !is_promotion
                         && !stack[d].in_check
+                        && !gives_check
                     {
                         reduction = if stack[d].depth > 6 { 2 } else { 1 };
-                        if stack[d].depth - 1 < reduction {
+                        if stack[d].depth - 1 + extension < reduction {
                             reduction = 0;
                         }
                     }
 
                     stack[d].current_move_index = legal_idx;
                     stack[d].current_reduction = reduction;
+                    stack[d].current_extension = extension;
+                    let move_to_idx = board.coords_to_index(&mv.to.values);
                     stack[d].pending_unmake = Some((mv, info));
                     stack[d].phase = SearchPhase::MoveSearchReturn;
 
                     let child_player = stack[d].player.opponent();
+                    let base_depth = stack[d].depth - 1 + extension;
 
                     if legal_idx == 0 {
                         // PV move: full window
-                        let child_depth = stack[d].depth - 1;
+                        let child_depth = base_depth;
                         let child_alpha = -stack[d].beta;
                         let child_beta = -stack[d].alpha;
 
-                        stack.push(SearchFrame::new(
+                        let mut child = SearchFrame::new(
                             child_depth,
                             child_alpha,
                             child_beta,
                             child_player,
                             true,
-                        ));
+                        );
+                        child.prev_move_to_idx = move_to_idx;
+                        stack.push(child);
                     } else {
                         // Scout/LMR search: null window
-                        let child_depth = stack[d].depth - 1 - reduction;
+                        let child_depth = base_depth - reduction;
                         let child_alpha = -stack[d].alpha - 1;
                         let child_beta = -stack[d].alpha;
 
-                        stack.push(SearchFrame::new(
+                        let mut child = SearchFrame::new(
                             child_depth,
                             child_alpha,
                             child_beta,
                             child_player,
                             true,
-                        ));
+                        );
+                        child.prev_move_to_idx = move_to_idx;
+                        stack.push(child);
                     }
                     continue 'outer;
                 }
@@ -627,6 +904,8 @@ impl MinimaxBot {
         score: i32,
         killers: &mut [[Option<Move>; 2]],
         history: &mut [Vec<i32>],
+        countermoves: &mut [Vec<Option<Move>>],
+        cont_history: &mut [Vec<i32>],
     ) {
         if score > frame.best_score {
             frame.best_score = score;
@@ -666,9 +945,33 @@ impl MinimaxBot {
                 .unwrap_or(false);
             let is_promotion = mv.promotion.is_some();
 
-            if !is_capture && !is_promotion && frame.depth < killers.len() {
-                killers[frame.depth][1] = killers[frame.depth][0].clone();
-                killers[frame.depth][0] = Some(mv.clone());
+            if !is_capture && !is_promotion {
+                // Killer moves
+                if frame.depth < killers.len() {
+                    killers[frame.depth][1] = killers[frame.depth][0].clone();
+                    killers[frame.depth][0] = Some(mv.clone());
+                }
+
+                // Countermove: store this move as the refutation of the previous move
+                if let Some(prev_to) = frame.prev_move_to_idx {
+                    let opp = frame.player.opponent() as usize;
+                    if prev_to < countermoves[opp].len() {
+                        countermoves[opp][prev_to] = Some(mv.clone());
+                    }
+                }
+
+                // Continuation history: update score for (prev_move_to, this_move_to) pair
+                let to_idx = board.coords_to_index(&mv.to.values).unwrap_or(0);
+                if let Some(prev_to) = frame.prev_move_to_idx {
+                    let cont_idx = prev_to * board.total_cells() + to_idx;
+                    if cont_idx < cont_history[frame.player as usize].len() {
+                        let bonus = (frame.depth * frame.depth) as i32;
+                        let current = cont_history[frame.player as usize][cont_idx];
+                        if current + bonus < MAX_HISTORY {
+                            cont_history[frame.player as usize][cont_idx] += bonus;
+                        }
+                    }
+                }
             }
         }
     }
@@ -718,6 +1021,8 @@ impl MinimaxBot {
 enum SearchPhase {
     Init,
     NullMoveReturn,
+    IidReturn,
+    SingularSearchReturn,
     GenerateMoves,
     ProcessMoves,
     MoveSearchReturn,
@@ -741,11 +1046,19 @@ struct SearchFrame {
     best_move_obj: Option<Move>,
     legal_count: usize,
     in_check: bool,
+    in_check_at_entry: bool,
     do_futility: bool,
     current_move_index: usize,
     current_reduction: usize,
+    current_extension: usize,
     pending_unmake: Option<(Move, UnmakeInfo)>,
     null_move_info: Option<UnmakeInfo>,
+    /// The to-index of the move that led to this node (from parent).
+    prev_move_to_idx: Option<usize>,
+    /// Singular extension fields
+    singular_beta: i32,
+    singular_tt_move: Option<PackedMove>,
+    singular_extension: usize,
 }
 
 impl SearchFrame {
@@ -766,11 +1079,17 @@ impl SearchFrame {
             best_move_obj: None,
             legal_count: 0,
             in_check: false,
+            in_check_at_entry: false,
             do_futility: false,
             current_move_index: 0,
             current_reduction: 0,
+            current_extension: 0,
             pending_unmake: None,
             null_move_info: None,
+            prev_move_to_idx: None,
+            singular_beta: 0,
+            singular_tt_move: None,
+            singular_extension: 0,
         }
     }
 }
@@ -847,8 +1166,11 @@ impl PlayerStrategy for MinimaxBot {
                 let mut prev_score = 0;
                 let mut killers = (0..=self.depth).map(|_| [None, None]).collect::<Vec<_>>();
 
-                let hist_size = local_board.total_cells() * local_board.total_cells();
-                let mut history = vec![vec![0; hist_size], vec![0; hist_size]];
+                let total_cells = local_board.total_cells();
+                let hist_size = total_cells * total_cells;
+                let mut history = vec![vec![0i32; hist_size], vec![0i32; hist_size]];
+                let mut countermoves = vec![vec![None; total_cells], vec![None; total_cells]];
+                let mut cont_history = vec![vec![0i32; hist_size], vec![0i32; hist_size]];
 
                 for d in 1..=self.depth {
                     let mut delta = 50;
@@ -871,6 +1193,7 @@ impl PlayerStrategy for MinimaxBot {
                         let mut failed_low = false;
 
                         for mv in &my_moves {
+                            let mv_to_idx = local_board.coords_to_index(&mv.to.values);
                             let info = local_board.apply_move(mv).unwrap();
                             let score = -self.minimax(
                                 &mut local_board,
@@ -882,6 +1205,9 @@ impl PlayerStrategy for MinimaxBot {
                                 true,
                                 &mut killers,
                                 &mut history,
+                                &mut countermoves,
+                                &mut cont_history,
+                                mv_to_idx,
                             );
                             local_board.unmake_move(mv, info);
 

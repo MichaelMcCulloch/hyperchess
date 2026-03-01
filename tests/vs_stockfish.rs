@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
 use hyperchess::config::AppConfig;
+use hyperchess::config::MctsConfig;
 use hyperchess::domain::board::Board;
 use hyperchess::domain::coordinate::Coordinate;
 use hyperchess::domain::models::{Move, PieceType, Player};
@@ -9,6 +10,7 @@ use hyperchess::domain::rules::Rules;
 use hyperchess::domain::services::PlayerStrategy;
 use hyperchess::infrastructure::ai::MinimaxBot;
 use hyperchess::infrastructure::ai::eval::Evaluator;
+use hyperchess::infrastructure::ai::mcts_bot::MctsBot;
 use hyperchess::infrastructure::display::render_board;
 
 /// Convert an internal Coordinate (2D, 0-indexed [rank, file]) to UCI square string.
@@ -175,12 +177,21 @@ fn format_eval(cp: i32) -> String {
 }
 
 /// Print the board, the move list so far, and the eval bar.
-fn print_position(board: &Board, move_number: usize, last_white: &str, last_black: &str) {
+fn print_position(
+    board: &Board,
+    move_number: usize,
+    last_white: &str,
+    last_black: &str,
+    label: &str,
+) {
     // Clear screen for a clean redraw
     print!("\x1b[2J\x1b[H");
 
+    let header = format!("  HyperChess [{}] (W)  vs  Stockfish 20 (B)", label);
+    let pad = 50usize.saturating_sub(header.len());
+    let padded = format!("{}{}", header, " ".repeat(pad));
     println!("\x1b[1;36m╔══════════════════════════════════════════════════╗\x1b[0m");
-    println!("\x1b[1;36m║  HyperChess (White)  vs  Stockfish 20 (Black)   ║\x1b[0m");
+    println!("\x1b[1;36m║{}║\x1b[0m", padded);
     println!("\x1b[1;36m╚══════════════════════════════════════════════════╝\x1b[0m");
     println!();
 
@@ -261,18 +272,8 @@ fn validate_and_apply_sf_move(board: &mut Board, uci_mv: &str, player: Player) -
     matched
 }
 
-#[test]
-#[ignore] // Run with: cargo test vs_stockfish -- --ignored --nocapture
-fn vs_stockfish_full_game() {
-    // ── Config: crank HyperChess to its strongest ──
-    let mut config = AppConfig::default();
-    config.minimax.depth = 10;
-    config.compute.minutes = 2;
-    config.compute.concurrency = 30;
-    config.compute.memory = 4096;
-
+fn play_vs_stockfish(mut bot: Box<dyn PlayerStrategy>, label: &str) {
     let mut board = Board::new(2, 8);
-    let mut bot = MinimaxBot::new(&config, 2, 8);
     let mut sf = Stockfish::new(20); // Skill Level 20 = max
 
     let mut uci_history: Vec<String> = Vec::new();
@@ -283,7 +284,7 @@ fn vs_stockfish_full_game() {
     let max_moves = 300; // Safety valve
 
     // Show initial position
-    print_position(&board, 0, "—", "—");
+    print_position(&board, 0, "—", "—", label);
     println!("  Game starting...\n");
     std::thread::sleep(std::time::Duration::from_secs(2));
 
@@ -296,7 +297,7 @@ fn vs_stockfish_full_game() {
 
         // Check for draw by repetition
         if board.is_repetition() {
-            print_position(&board, move_number, &last_white, &last_black);
+            print_position(&board, move_number, &last_white, &last_black, label);
             println!(
                 "  \x1b[1;33m½-½ Draw by repetition after {} moves.\x1b[0m",
                 move_number
@@ -313,7 +314,7 @@ fn vs_stockfish_full_game() {
                 .map(|k| Rules::is_square_attacked(&board, &k, player.opponent()))
                 .unwrap_or(false);
 
-            print_position(&board, move_number, &last_white, &last_black);
+            print_position(&board, move_number, &last_white, &last_black, label);
 
             if in_check {
                 let winner = player.opponent();
@@ -343,7 +344,7 @@ fn vs_stockfish_full_game() {
 
         // 50-move rule approximation
         if board.state.history.len() > 200 {
-            print_position(&board, move_number, &last_white, &last_black);
+            print_position(&board, move_number, &last_white, &last_black, label);
             println!(
                 "  \x1b[1;33m½-½ Draw by 50-move rule ({} half-moves).\x1b[0m",
                 board.state.history.len()
@@ -367,7 +368,7 @@ fn vs_stockfish_full_game() {
             Player::Black => {
                 let sf_uci = sf.best_move(&uci_history, 5000);
                 if sf_uci == "(none)" {
-                    print_position(&board, move_number, &last_white, &last_black);
+                    print_position(&board, move_number, &last_white, &last_black, label);
                     println!("  \x1b[1;32m1-0 Stockfish has no move. HyperChess WINS!\x1b[0m");
                     print_pgn(&pgn_moves);
                     return;
@@ -379,7 +380,7 @@ fn vs_stockfish_full_game() {
                 pgn_moves.push(sf_uci);
 
                 // Render after each full move
-                print_position(&board, move_number, &last_white, &last_black);
+                print_position(&board, move_number, &last_white, &last_black, label);
 
                 // Print compact move log
                 let start = if pgn_moves.len() > 20 {
@@ -398,12 +399,45 @@ fn vs_stockfish_full_game() {
         }
     }
 
-    print_position(&board, move_number, &last_white, &last_black);
+    print_position(&board, move_number, &last_white, &last_black, label);
     println!(
         "  \x1b[1;33m½-½ Draw by adjudication ({} moves).\x1b[0m",
         max_moves
     );
     print_pgn(&pgn_moves);
+}
+
+#[test]
+#[ignore] // Run with: cargo test vs_stockfish_full_game -- --ignored --nocapture
+fn vs_stockfish_full_game() {
+    let mut config = AppConfig::default();
+    config.minimax.depth = 10;
+    config.compute.minutes = 2;
+    config.compute.concurrency = 30;
+    config.compute.memory = 4096;
+
+    let bot = Box::new(MinimaxBot::new(&config, 2, 8));
+    play_vs_stockfish(bot, "Minimax d20");
+}
+
+#[test]
+#[ignore] // Run with: cargo test vs_stockfish_mcts -- --ignored --nocapture
+fn vs_stockfish_mcts() {
+    let mut config = AppConfig::default();
+    config.minimax.depth = 20;
+    config.compute.minutes = 2;
+    config.compute.concurrency = 30;
+    config.compute.memory = 4096;
+    config.mcts = Some(MctsConfig {
+        depth: 50,
+        iterations: 100_000,
+        iter_per_thread: 10.0,
+        prior_weight: 1.4142,
+        rollout_depth: 0,
+    });
+
+    let bot = Box::new(MctsBot::new(&config));
+    play_vs_stockfish(bot, "MCTS+Minimax");
 }
 
 fn print_pgn(moves: &[String]) {
