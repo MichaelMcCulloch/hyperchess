@@ -2,9 +2,9 @@
 depth = 10
 
 [compute]
-minutes = 2
-concurrency = 30
-memory = 4096
+minutes = 1
+concurrency = 4
+memory = 16384
 
 [api]
 port = 3123

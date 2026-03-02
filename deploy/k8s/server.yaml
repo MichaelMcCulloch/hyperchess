@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hyperchess-server
+  namespace: hyperchess
+  labels:
+    app: hyperchess-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hyperchess-server
+  template:
+    metadata:
+      labels:
+        app: hyperchess-server
+    spec:
+      containers:
+        - name: hyperchess-server
+          image: hyperchess-server:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3123
+          resources:
+            limits:
+              cpu: "4"
+              memory: 16384Mi
+            requests:
+              cpu: "1"
+              memory: 4096Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hyperchess-server
+  namespace: hyperchess
+spec:
+  selector:
+    app: hyperchess-server
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3123
+  type: ClusterIP
