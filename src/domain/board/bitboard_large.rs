@@ -915,6 +915,24 @@ impl BoardRepresentation for BitBoardLarge {
         self.lo = 1;
         self.hi = 0;
     }
+
+    #[inline]
+    fn intersects_any(&self, other: &Self) -> bool {
+        if self.lo > self.hi || other.lo > other.hi {
+            return false;
+        }
+        let lo = (self.lo as usize).max(other.lo as usize);
+        let hi = (self.hi as usize).min(other.hi as usize);
+        if lo > hi {
+            return false;
+        }
+        for i in lo..=hi {
+            if self.data[i] & other.data[i] != 0 {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 impl BitAndAssign<&BitBoardLarge> for BitBoardLarge {

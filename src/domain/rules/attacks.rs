@@ -32,23 +32,32 @@ pub fn is_square_attacked_idx<R: BoardRepresentation>(
         }
     }
 
-    // King attacks via precomputed targets
-    for &target_idx in &board.geo.cache.king_targets[sq_idx] {
-        if enemy_occupancy.get_bit(target_idx) && board.pieces.kings.get_bit(target_idx) {
-            return true;
+    // King attacks: O(1) check via cached king index instead of iterating all targets
+    if let Some(king_idx) = board.pieces.king_index(by_player) {
+        for &target_idx in &board.geo.cache.king_targets[sq_idx] {
+            if target_idx == king_idx {
+                return true;
+            }
         }
     }
 
     // Slider attacks via index-based ray walking
-    for dir_info in &board.geo.cache.rook_directions {
-        if scan_ray_rook_queen(board, sq_idx, dir_info, by_player) {
-            return true;
+    // Early-exit: skip ray scans if no enemy pieces of the relevant type exist
+    let has_enemy_queens = enemy_occupancy.intersects_any(&board.pieces.queens);
+
+    if has_enemy_queens || enemy_occupancy.intersects_any(&board.pieces.rooks) {
+        for dir_info in &board.geo.cache.rook_directions {
+            if scan_ray_rook_queen(board, sq_idx, dir_info, enemy_occupancy) {
+                return true;
+            }
         }
     }
 
-    for dir_info in &board.geo.cache.bishop_directions {
-        if scan_ray_bishop_queen(board, sq_idx, dir_info, by_player) {
-            return true;
+    if has_enemy_queens || enemy_occupancy.intersects_any(&board.pieces.bishops) {
+        for dir_info in &board.geo.cache.bishop_directions {
+            if scan_ray_bishop_queen(board, sq_idx, dir_info, enemy_occupancy) {
+                return true;
+            }
         }
     }
 
@@ -72,14 +81,10 @@ pub fn scan_ray_rook_queen<R: BoardRepresentation>(
     board: &GenericBoard<R>,
     origin_idx: usize,
     dir_info: &DirectionInfo,
-    attacker: Player,
+    enemy_occupancy: &R,
 ) -> bool {
     let stride = dir_info.stride;
     let mask = &board.geo.cache.validity_masks[dir_info.id * board.side() + 1];
-    let enemy_occupancy = match attacker {
-        Player::White => &board.pieces.white_occupancy,
-        Player::Black => &board.pieces.black_occupancy,
-    };
 
     let mut idx = origin_idx;
     loop {
@@ -87,7 +92,7 @@ pub fn scan_ray_rook_queen<R: BoardRepresentation>(
             return false;
         }
         idx = (idx as isize + stride) as usize;
-        if board.pieces.white_occupancy.get_bit(idx) || board.pieces.black_occupancy.get_bit(idx) {
+        if board.pieces.all_occupancy.get_bit(idx) {
             return enemy_occupancy.get_bit(idx)
                 && (board.pieces.rooks.get_bit(idx) || board.pieces.queens.get_bit(idx));
         }
@@ -100,14 +105,10 @@ pub fn scan_ray_bishop_queen<R: BoardRepresentation>(
     board: &GenericBoard<R>,
     origin_idx: usize,
     dir_info: &DirectionInfo,
-    attacker: Player,
+    enemy_occupancy: &R,
 ) -> bool {
     let stride = dir_info.stride;
     let mask = &board.geo.cache.validity_masks[dir_info.id * board.side() + 1];
-    let enemy_occupancy = match attacker {
-        Player::White => &board.pieces.white_occupancy,
-        Player::Black => &board.pieces.black_occupancy,
-    };
 
     let mut idx = origin_idx;
     loop {
@@ -115,7 +116,7 @@ pub fn scan_ray_bishop_queen<R: BoardRepresentation>(
             return false;
         }
         idx = (idx as isize + stride) as usize;
-        if board.pieces.white_occupancy.get_bit(idx) || board.pieces.black_occupancy.get_bit(idx) {
+        if board.pieces.all_occupancy.get_bit(idx) {
             return enemy_occupancy.get_bit(idx)
                 && (board.pieces.bishops.get_bit(idx) || board.pieces.queens.get_bit(idx));
         }
@@ -144,7 +145,7 @@ pub fn scan_ray_for_threat_idx<R: BoardRepresentation>(
             return false;
         }
         idx = (idx as isize + stride) as usize;
-        if board.pieces.white_occupancy.get_bit(idx) || board.pieces.black_occupancy.get_bit(idx) {
+        if board.pieces.all_occupancy.get_bit(idx) {
             if enemy_occupancy.get_bit(idx) {
                 for &t in threat_types {
                     let found = match t {

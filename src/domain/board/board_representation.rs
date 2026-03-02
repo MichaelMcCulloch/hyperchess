@@ -39,4 +39,7 @@ pub trait BoardRepresentation:
     fn copy_from(&mut self, other: &Self);
     fn zero_like(&self) -> Self;
     fn ensure_capacity_and_clear(&mut self, template: &Self);
+
+    /// Returns true if `self & other` has any set bits. Avoids full allocation.
+    fn intersects_any(&self, other: &Self) -> bool;
 }

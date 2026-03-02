@@ -49,6 +49,11 @@ impl BoardRepresentation for BitBoard64 {
     fn ensure_capacity_and_clear(&mut self, _template: &Self) {
         self.0 = 0;
     }
+
+    #[inline]
+    fn intersects_any(&self, other: &Self) -> bool {
+        self.0 & other.0 != 0
+    }
 }
 
 impl BitAnd for BitBoard64 {

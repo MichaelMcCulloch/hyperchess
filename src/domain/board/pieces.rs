@@ -8,6 +8,8 @@ use crate::domain::models::{Piece, PieceType, Player};
 pub struct PieceMap<R: BoardRepresentation> {
     pub white_occupancy: R,
     pub black_occupancy: R,
+    /// Combined `white_occupancy | black_occupancy`, maintained incrementally.
+    pub all_occupancy: R,
     pub pawns: R,
     pub rooks: R,
     pub knights: R,
@@ -27,6 +29,7 @@ impl<R: BoardRepresentation> PieceMap<R> {
         Self {
             white_occupancy: empty.clone(),
             black_occupancy: empty.clone(),
+            all_occupancy: empty.clone(),
             pawns: empty.clone(),
             rooks: empty.clone(),
             knights: empty.clone(),
@@ -71,6 +74,7 @@ impl<R: BoardRepresentation> PieceMap<R> {
             Player::White => self.white_occupancy.set_bit(index),
             Player::Black => self.black_occupancy.set_bit(index),
         }
+        self.all_occupancy.set_bit(index);
 
         match piece.piece_type {
             PieceType::Pawn => self.pawns.set_bit(index),
@@ -96,6 +100,7 @@ impl<R: BoardRepresentation> PieceMap<R> {
         }
         self.white_occupancy.clear_bit(index);
         self.black_occupancy.clear_bit(index);
+        self.all_occupancy.clear_bit(index);
         self.pawns.clear_bit(index);
         self.rooks.clear_bit(index);
         self.knights.clear_bit(index);

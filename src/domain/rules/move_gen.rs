@@ -1,20 +1,9 @@
-use std::cell::UnsafeCell;
-
 use crate::domain::board::cache::DirectionInfo;
 use crate::domain::board::{BitBoardLarge, Board};
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{Move, PieceType, Player};
 use crate::domain::rules::MoveList;
 use crate::domain::rules::attacks::is_square_attacked;
-
-#[derive(Default)]
-struct MoveGenBuffer {
-    all_occupancy: BitBoardLarge,
-}
-
-thread_local! {
-    static MOVE_GEN_BUFFER: UnsafeCell<MoveGenBuffer> = UnsafeCell::new(MoveGenBuffer::default());
-}
 
 pub fn generate_legal_moves(board: &mut Board, player: Player) -> MoveList {
     let mut moves = MoveList::new();
@@ -91,98 +80,83 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
         Player::Black => &board.pieces.black_occupancy,
     };
 
-    // SAFETY: thread_local guarantees single-threaded access; no re-entrant calls.
-    MOVE_GEN_BUFFER.with(|buffer_cell| {
-        let buffer = unsafe { &mut *buffer_cell.get() };
+    let all_occupancy = &board.pieces.all_occupancy;
 
-        let template = &board.pieces.white_occupancy;
-        buffer.all_occupancy.ensure_capacity_and_clear(template);
+    for i in occupancy.iter_indices() {
+        let coord = Coordinate::new(board.geo.cache.index_to_coords[i].clone());
 
-        // Compute all_occupancy once for pawn move generation
-        board
-            .pieces
-            .white_occupancy
-            .or_into(&board.pieces.black_occupancy, &mut buffer.all_occupancy);
-        buffer.all_occupancy.recompute_range();
+        let piece_type = if board.pieces.pawns.get_bit(i) {
+            PieceType::Pawn
+        } else if board.pieces.knights.get_bit(i) {
+            PieceType::Knight
+        } else if board.pieces.bishops.get_bit(i) {
+            PieceType::Bishop
+        } else if board.pieces.rooks.get_bit(i) {
+            PieceType::Rook
+        } else if board.pieces.queens.get_bit(i) {
+            PieceType::Queen
+        } else if board.pieces.kings.get_bit(i) {
+            PieceType::King
+        } else {
+            continue;
+        };
 
-        let all_occupancy = &buffer.all_occupancy;
-
-        for i in occupancy.iter_indices() {
-            let coord = Coordinate::new(board.geo.cache.index_to_coords[i].clone());
-
-            let piece_type = if board.pieces.pawns.get_bit(i) {
-                PieceType::Pawn
-            } else if board.pieces.knights.get_bit(i) {
-                PieceType::Knight
-            } else if board.pieces.bishops.get_bit(i) {
-                PieceType::Bishop
-            } else if board.pieces.rooks.get_bit(i) {
-                PieceType::Rook
-            } else if board.pieces.queens.get_bit(i) {
-                PieceType::Queen
-            } else if board.pieces.kings.get_bit(i) {
-                PieceType::King
-            } else {
-                continue;
-            };
-
-            match piece_type {
-                PieceType::Pawn => {
-                    generate_pawn_moves(board, &coord, i, player, all_occupancy, &mut moves)
-                }
-                PieceType::Knight => generate_leaper_moves(
-                    board,
-                    i,
-                    &coord,
-                    player,
-                    &board.geo.cache.knight_targets[i],
-                    &mut moves,
-                ),
-                PieceType::King => generate_leaper_moves(
-                    board,
-                    i,
-                    &coord,
-                    player,
-                    &board.geo.cache.king_targets[i],
-                    &mut moves,
-                ),
-                PieceType::Rook => generate_slider_moves_scalar(
+        match piece_type {
+            PieceType::Pawn => {
+                generate_pawn_moves(board, &coord, i, player, all_occupancy, &mut moves)
+            }
+            PieceType::Knight => generate_leaper_moves(
+                board,
+                i,
+                &coord,
+                player,
+                &board.geo.cache.knight_targets[i],
+                &mut moves,
+            ),
+            PieceType::King => generate_leaper_moves(
+                board,
+                i,
+                &coord,
+                player,
+                &board.geo.cache.king_targets[i],
+                &mut moves,
+            ),
+            PieceType::Rook => generate_slider_moves_scalar(
+                board,
+                i,
+                &coord,
+                player,
+                &board.geo.cache.rook_directions,
+                &mut moves,
+            ),
+            PieceType::Bishop => generate_slider_moves_scalar(
+                board,
+                i,
+                &coord,
+                player,
+                &board.geo.cache.bishop_directions,
+                &mut moves,
+            ),
+            PieceType::Queen => {
+                generate_slider_moves_scalar(
                     board,
                     i,
                     &coord,
                     player,
                     &board.geo.cache.rook_directions,
                     &mut moves,
-                ),
-                PieceType::Bishop => generate_slider_moves_scalar(
+                );
+                generate_slider_moves_scalar(
                     board,
                     i,
                     &coord,
                     player,
                     &board.geo.cache.bishop_directions,
                     &mut moves,
-                ),
-                PieceType::Queen => {
-                    generate_slider_moves_scalar(
-                        board,
-                        i,
-                        &coord,
-                        player,
-                        &board.geo.cache.rook_directions,
-                        &mut moves,
-                    );
-                    generate_slider_moves_scalar(
-                        board,
-                        i,
-                        &coord,
-                        player,
-                        &board.geo.cache.bishop_directions,
-                        &mut moves,
-                    );
-                }
+                );
             }
         }
-    });
+    }
     moves
 }
 
@@ -231,9 +205,7 @@ fn generate_slider_moves_scalar(
             });
 
             // Hit any piece (must be enemy since we checked own above) — capture, stop
-            if board.pieces.white_occupancy.get_bit(idx)
-                || board.pieces.black_occupancy.get_bit(idx)
-            {
+            if board.pieces.all_occupancy.get_bit(idx) {
                 break;
             }
         }
@@ -275,9 +247,7 @@ pub fn count_slider_mobility_scalar(
 
             count += 1;
 
-            if board.pieces.white_occupancy.get_bit(idx)
-                || board.pieces.black_occupancy.get_bit(idx)
-            {
+            if board.pieces.all_occupancy.get_bit(idx) {
                 break;
             }
         }

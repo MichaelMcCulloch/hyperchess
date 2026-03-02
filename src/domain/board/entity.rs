@@ -685,7 +685,7 @@ impl<R: BoardRepresentation> GenericBoard<R> {
         pt: PieceType,
     ) -> Option<usize> {
         let mut current = origin_coord.values.clone();
-        let occupancy = self.pieces.white_occupancy.clone() | &self.pieces.black_occupancy;
+        let occupancy = &self.pieces.all_occupancy;
         let my_occ = match owner {
             Player::White => &self.pieces.white_occupancy,
             Player::Black => &self.pieces.black_occupancy,

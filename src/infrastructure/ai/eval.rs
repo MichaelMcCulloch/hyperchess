@@ -528,9 +528,7 @@ impl Evaluator {
             if friendly_occ.get_bit(idx) && board.pieces.pawns.get_bit(idx) {
                 return true;
             }
-            if board.pieces.white_occupancy.get_bit(idx)
-                || board.pieces.black_occupancy.get_bit(idx)
-            {
+            if board.pieces.all_occupancy.get_bit(idx) {
                 return false;
             }
         }
@@ -585,7 +583,7 @@ impl Evaluator {
         (mg, eg)
     }
 
-    fn get_pawn_indices(board: &Board, player: Player) -> Vec<usize> {
+    fn get_pawn_indices(board: &Board, player: Player) -> SmallVec<[usize; 16]> {
         let occ = match player {
             Player::White => &board.pieces.white_occupancy,
             Player::Black => &board.pieces.black_occupancy,

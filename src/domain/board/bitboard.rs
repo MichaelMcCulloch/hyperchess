@@ -53,6 +53,10 @@ impl BoardRepresentation for BitBoard {
     fn ensure_capacity_and_clear(&mut self, template: &Self) {
         self.ensure_capacity_and_clear(template)
     }
+
+    fn intersects_any(&self, other: &Self) -> bool {
+        self.intersects_any(other)
+    }
 }
 
 impl BitBoard {
@@ -168,6 +172,17 @@ impl BitBoard {
                 }
             }
             (this, that) => *this = that.zero_like(),
+        }
+    }
+
+    pub fn intersects_any(&self, other: &Self) -> bool {
+        match (self, other) {
+            (BitBoard::Small(a), BitBoard::Small(b)) => a & b != 0,
+            (BitBoard::Medium(a), BitBoard::Medium(b)) => a & b != 0,
+            (BitBoard::Large { data: a }, BitBoard::Large { data: b }) => {
+                a.iter().zip(b.iter()).any(|(x, y)| x & y != 0)
+            }
+            _ => false,
         }
     }
 }
