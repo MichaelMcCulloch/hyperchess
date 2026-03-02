@@ -18,6 +18,17 @@ spec:
       containers:
         - name: hyperchess-server
           image: registry.semanticallyinvalid.net/michaelmcculloch/hyperchess/server:latest
+          env:
+          - name: HYPERCHESS_MINIMAX_DEPTH
+            value: "10"
+          - name: HYPERCHESS_COMPUTE_MEMORY
+            value: "16384"
+          - name: HYPERCHESS_COMPUTE_MINUTES
+            value: "1"
+          - name: HYPERCHESS_COMPUTE_CONCURRENCY
+            value: "4"
+          - name: HYPERCHESS_API_PORT
+            value: "3123"
           imagePullPolicy: Always
           ports:
             - containerPort: 3123
