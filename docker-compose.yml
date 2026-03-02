@@ -1,14 +1,53 @@
 services:
-  server:
-    build: .
+  redis:
+    image: redis:7-alpine
     ports:
-      - "3000:3000"
+      - "6379:6379"
     restart: unless-stopped
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    ports:
+      - "3123:3123"
+    environment:
+      HYPERCHESS_MINIMAX_DEPTH: "6"
+      HYPERCHESS_COMPUTE_MEMORY: "1024"
+      HYPERCHESS_COMPUTE_MINUTES: "1"
+      HYPERCHESS_COMPUTE_CONCURRENCY: "2"
+      HYPERCHESS_API_PORT: "3123"
+      HYPERCHESS_DISTRIBUTED_ENABLED: "true"
+      HYPERCHESS_MODE: "gateway"
+      HYPERCHESS_REDIS_URL: "redis://redis:6379"
+      HYPERCHESS_WORKER_DNS: "worker"
+      HYPERCHESS_GRPC_PORT: "50051"
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      HYPERCHESS_MINIMAX_DEPTH: "6"
+      HYPERCHESS_COMPUTE_MEMORY: "1024"
+      HYPERCHESS_COMPUTE_MINUTES: "1"
+      HYPERCHESS_COMPUTE_CONCURRENCY: "2"
+      HYPERCHESS_DISTRIBUTED_ENABLED: "true"
+      HYPERCHESS_MODE: "worker"
+      HYPERCHESS_GRPC_PORT: "50051"
+    depends_on:
+      - redis
+    restart: unless-stopped
+    deploy:
+      replicas: 2
 
   client:
     build: ./client
     ports:
       - "8080:80"
     depends_on:
-      - server
+      - gateway
     restart: unless-stopped

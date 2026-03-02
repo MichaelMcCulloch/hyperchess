@@ -3,6 +3,7 @@ use crate::domain::board::pieces::PieceMap;
 use crate::domain::board::position::PositionState;
 use crate::domain::models::Player;
 use rand::Rng;
+use rand::SeedableRng;
 
 #[derive(Debug, Clone)]
 pub struct ZobristKeys {
@@ -13,8 +14,11 @@ pub struct ZobristKeys {
 }
 
 impl ZobristKeys {
+    /// Create deterministic Zobrist keys seeded from total_cells.
+    /// All nodes in a distributed cluster will generate identical keys
+    /// for the same board dimensions, ensuring hash compatibility.
     pub fn new(total_cells: usize) -> Self {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(total_cells as u64);
         let size = 12 * total_cells;
         let mut piece_keys = Vec::with_capacity(size);
         for _ in 0..size {

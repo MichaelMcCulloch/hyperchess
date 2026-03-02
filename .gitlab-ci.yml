@@ -31,8 +31,8 @@ feed_repo_md:
 test_server:
   stage: test
   script:
-    - docker build --target builder -t server-builder .
-    - docker run server-builder cargo test --release -- --test-threads=1
+    - docker build --target builder -f Dockerfile.gateway -t server-builder .
+    - docker run server-builder cargo test --release --features distributed -- --test-threads=1
 
 build_client:
   stage: build
@@ -44,12 +44,22 @@ build_client:
   only:
     - master
 
-build_server:
+build_gateway:
   stage: build
   before_script:
   - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
   script:
-    - docker build -t $CI_REGISTRY_IMAGE/server .
-    - docker push $CI_REGISTRY_IMAGE/server
+    - docker build -f Dockerfile.gateway -t $CI_REGISTRY_IMAGE/gateway .
+    - docker push $CI_REGISTRY_IMAGE/gateway
+  only:
+    - master
+
+build_worker:
+  stage: build
+  before_script:
+  - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+  script:
+    - docker build -f Dockerfile.worker -t $CI_REGISTRY_IMAGE/worker .
+    - docker push $CI_REGISTRY_IMAGE/worker
   only:
     - master

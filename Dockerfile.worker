@@ -1,4 +1,4 @@
-# Build stage — standalone single-binary (no distributed features)
+# Build stage
 FROM rust:latest AS builder
 
 # Install build dependencies
@@ -14,7 +14,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY .cargo .cargo
 
-# Copy proto files and build.rs (needed for build)
+# Copy proto files and build.rs (needed for dependency build)
 COPY proto proto
 COPY build.rs build.rs
 
@@ -24,7 +24,7 @@ RUN mkdir -p src/bin && \
     echo "fn main() {}" > src/bin/gateway.rs && \
     echo "fn main() {}" > src/bin/worker.rs && \
     touch src/lib.rs && \
-    cargo build --release --features api --bin hyperchess || true
+    cargo build --release --features distributed --bin hyperchess-worker || true
 
 # Remove dummy files
 RUN rm -rf src
@@ -32,15 +32,14 @@ RUN rm -rf src
 # Copy actual source code
 COPY . .
 # Update timestamps to force rebuild
-RUN touch src/main.rs src/lib.rs
+RUN touch src/main.rs src/lib.rs src/bin/worker.rs
 
-# Build the application
-RUN cargo build --release --features api --bin hyperchess
+# Build the worker binary
+RUN cargo build --release --features distributed --bin hyperchess-worker
 
 # Runtime stage
 FROM debian:bookworm-slim
 
-# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \
@@ -48,9 +47,8 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy binary from builder
-COPY --from=builder /app/target/release/hyperchess .
+COPY --from=builder /app/target/release/hyperchess-worker .
 
-EXPOSE 3123
+EXPOSE 50051
 
-CMD ["./hyperchess"]
+CMD ["./hyperchess-worker"]

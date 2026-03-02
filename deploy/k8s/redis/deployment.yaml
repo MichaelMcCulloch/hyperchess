@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hyperchess-redis
+  namespace: hyperchess
+  labels:
+    app: hyperchess-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hyperchess-redis
+  template:
+    metadata:
+      labels:
+        app: hyperchess-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              memory: "128Mi"
+            limits:
+              memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hyperchess-redis
+  namespace: hyperchess
+spec:
+  selector:
+    app: hyperchess-redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+  type: ClusterIP

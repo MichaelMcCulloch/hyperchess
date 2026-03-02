@@ -4,7 +4,9 @@ use crate::domain::models::{Piece, PieceType, Player};
 
 /// Hot-path mutable piece placement data. Cloned per-thread during parallel search
 /// and mutated millions of times. Kept minimal for cache locality.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(bound(serialize = "R: serde::Serialize"))]
+#[serde(bound(deserialize = "R: serde::de::DeserializeOwned"))]
 pub struct PieceMap<R: BoardRepresentation> {
     pub white_occupancy: R,
     pub black_occupancy: R,

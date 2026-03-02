@@ -19,6 +19,16 @@ use crate::config::AppConfig;
 
 #[derive(Clone)]
 pub struct AppState {
+    /// In-memory game store (used in standalone mode, or as local bot cache in gateway mode).
     pub games: GameStore,
     pub config: AppConfig,
+
+    /// Redis session store (gateway mode only).
+    #[cfg(feature = "distributed")]
+    pub redis: Option<Arc<super::redis_store::RedisSessionStore>>,
+
+    /// Distributed search coordinator (gateway mode only).
+    #[cfg(feature = "distributed")]
+    pub coordinator:
+        Option<Arc<crate::infrastructure::distributed::coordinator::DistributedSearch>>,
 }

@@ -1,23 +1,23 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: hyperchess-gateway
+  name: hyperchess-worker
   namespace: hyperchess
   labels:
-    app: hyperchess-gateway
+    app: hyperchess-worker
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
-      app: hyperchess-gateway
+      app: hyperchess-worker
   template:
     metadata:
       labels:
-        app: hyperchess-gateway
+        app: hyperchess-worker
     spec:
       containers:
-        - name: hyperchess-gateway
-          image: registry.semanticallyinvalid.net/michaelmcculloch/hyperchess/gateway:latest
+        - name: hyperchess-worker
+          image: registry.semanticallyinvalid.net/michaelmcculloch/hyperchess/worker:latest
           env:
           - name: HYPERCHESS_MINIMAX_DEPTH
             value: "10"
@@ -32,11 +32,7 @@ spec:
           - name: HYPERCHESS_DISTRIBUTED_ENABLED
             value: "true"
           - name: HYPERCHESS_MODE
-            value: "gateway"
-          - name: HYPERCHESS_REDIS_URL
-            value: "redis://hyperchess-redis:6379"
-          - name: HYPERCHESS_WORKER_DNS
-            value: "hyperchess-workers.hyperchess.svc.cluster.local"
+            value: "worker"
           - name: HYPERCHESS_GRPC_PORT
             value: "50051"
           - name: POD_IP
@@ -45,30 +41,31 @@ spec:
                 fieldPath: status.podIP
           imagePullPolicy: Always
           ports:
-            - containerPort: 3123
-              name: http
+            - containerPort: 50051
+              name: grpc
           readinessProbe:
             tcpSocket:
-              port: 3123
+              port: 50051
             initialDelaySeconds: 2
             periodSeconds: 5
           livenessProbe:
             tcpSocket:
-              port: 3123
+              port: 50051
             initialDelaySeconds: 5
             periodSeconds: 10
           resources: {}
 ---
+# Headless service for gRPC worker discovery via DNS
 apiVersion: v1
 kind: Service
 metadata:
-  name: hyperchess-server
+  name: hyperchess-workers
   namespace: hyperchess
 spec:
+  clusterIP: None
   selector:
-    app: hyperchess-gateway
+    app: hyperchess-worker
   ports:
-    - protocol: TCP
-      port: 80
-      targetPort: 3123
-  type: ClusterIP
+    - name: grpc
+      port: 50051
+      targetPort: 50051

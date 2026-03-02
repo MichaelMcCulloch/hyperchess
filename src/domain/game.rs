@@ -6,6 +6,7 @@ pub enum GameError {
     InvalidMove(String),
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Game {
     board: Board,
     turn: Player,

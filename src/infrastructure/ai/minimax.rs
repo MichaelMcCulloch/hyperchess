@@ -50,6 +50,207 @@ impl MinimaxBot {
         }
     }
 
+    /// Create a MinimaxBot from explicit parameters (used by distributed workers).
+    pub fn new_from_params(
+        depth: usize,
+        time_limit: Duration,
+        memory_mb: usize,
+        num_threads: usize,
+    ) -> Self {
+        Self {
+            depth,
+            time_limit,
+            tt: Arc::new(LockFreeTT::new(memory_mb)),
+            stop_flag: Arc::new(AtomicBool::new(false)),
+            nodes_searched: Arc::new(AtomicUsize::new(0)),
+            num_threads: num_threads.max(1),
+        }
+    }
+
+    /// Search only a specified subset of root moves (used by distributed workers).
+    /// Returns (best_move, score, nodes_searched, completed).
+    pub fn search_subset(
+        &mut self,
+        board: &Board,
+        player: Player,
+        root_moves: Vec<Move>,
+    ) -> (Move, i32, u64, bool) {
+        if root_moves.is_empty() {
+            // Should not happen, but return a safe default
+            return (
+                Move {
+                    from: crate::domain::coordinate::Coordinate::new(smallvec::smallvec![0]),
+                    to: crate::domain::coordinate::Coordinate::new(smallvec::smallvec![0]),
+                    promotion: None,
+                },
+                -i32::MAX,
+                0,
+                true,
+            );
+        }
+
+        self.nodes_searched.store(0, Ordering::Relaxed);
+        self.stop_flag.store(false, Ordering::Relaxed);
+        let start_time = Instant::now();
+
+        let nodes_counter = self.nodes_searched.clone();
+        let stop_flag = self.stop_flag.clone();
+        let search_active = Arc::new(AtomicBool::new(true));
+        let search_active_clone = search_active.clone();
+
+        // Monitoring thread
+        thread::spawn(move || {
+            let mut last_nodes = 0;
+            let mut last_time = Instant::now();
+            while search_active_clone.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(500));
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                let current_nodes = nodes_counter.load(Ordering::Relaxed);
+                let now = Instant::now();
+                let duration = now.duration_since(last_time).as_secs_f64();
+                if duration > 0.0 {
+                    let nps = (current_nodes - last_nodes) as f64 / duration;
+                    let nps_fmt = if nps > 1_000_000.0 {
+                        format!("{:.2} MN/s", nps / 1_000_000.0)
+                    } else {
+                        format!("{:.2} kN/s", nps / 1_000.0)
+                    };
+                    eprint!(
+                        "\r[worker] nodes {} nps {} time {:.1}s  ",
+                        current_nodes,
+                        nps_fmt,
+                        start_time.elapsed().as_secs_f32()
+                    );
+                    use std::io::Write;
+                    std::io::stderr().flush().unwrap_or(());
+                }
+                last_nodes = current_nodes;
+                last_time = now;
+            }
+        });
+
+        let results: Vec<(Move, i32)> = (0..self.num_threads)
+            .into_par_iter()
+            .map(|thread_idx| {
+                let mut local_board = board.clone();
+                let mut local_best_move = None;
+                let mut local_best_score = -i32::MAX;
+
+                let mut my_moves = root_moves.clone();
+                if thread_idx > 0 {
+                    use rand::seq::SliceRandom;
+                    let mut rng = rand::thread_rng();
+                    my_moves.shuffle(&mut rng);
+                }
+
+                let mut prev_score = 0;
+                let mut killers = (0..=self.depth).map(|_| [None, None]).collect::<Vec<_>>();
+                let total_cells = local_board.total_cells();
+                let hist_size = total_cells * total_cells;
+                let mut history = vec![vec![0i32; hist_size], vec![0i32; hist_size]];
+                let mut countermoves = vec![vec![None; total_cells], vec![None; total_cells]];
+                let mut cont_history = vec![vec![0i32; hist_size], vec![0i32; hist_size]];
+
+                for d in 1..=self.depth {
+                    let mut delta = 50;
+                    let (mut alpha, mut beta) = if d > 4 {
+                        (prev_score - delta, prev_score + delta)
+                    } else {
+                        (-i32::MAX, i32::MAX)
+                    };
+
+                    loop {
+                        let mut best_score_this_iter = -i32::MAX;
+                        let mut best_move_this_iter = None;
+                        let mut alpha_inner = alpha;
+                        let mut failed_high = false;
+                        let mut failed_low = false;
+
+                        for mv in &my_moves {
+                            let mv_to_idx = local_board.coords_to_index(&mv.to.values);
+                            let info = local_board.apply_move(mv).unwrap();
+                            let score = -self.minimax(
+                                &mut local_board,
+                                d - 1,
+                                -beta,
+                                -alpha_inner,
+                                player.opponent(),
+                                start_time,
+                                true,
+                                &mut killers,
+                                &mut history,
+                                &mut countermoves,
+                                &mut cont_history,
+                                mv_to_idx,
+                            );
+                            local_board.unmake_move(mv, info);
+
+                            if self.stop_flag.load(Ordering::Relaxed) {
+                                break;
+                            }
+
+                            if score > best_score_this_iter {
+                                best_score_this_iter = score;
+                                best_move_this_iter = Some(mv.clone());
+                            }
+                            if score > alpha_inner {
+                                alpha_inner = score;
+                            }
+                            if score >= beta {
+                                failed_high = true;
+                                break;
+                            }
+                        }
+
+                        if self.stop_flag.load(Ordering::Relaxed) {
+                            local_best_score = best_score_this_iter;
+                            break;
+                        }
+
+                        if best_score_this_iter <= alpha {
+                            failed_low = true;
+                        }
+
+                        if d > 4 {
+                            if failed_low {
+                                beta = (alpha + beta) / 2;
+                                alpha -= delta;
+                                delta += delta / 2;
+                                continue;
+                            }
+                            if failed_high {
+                                beta += delta;
+                                delta += delta / 2;
+                                continue;
+                            }
+                        }
+
+                        local_best_score = best_score_this_iter;
+                        local_best_move = best_move_this_iter;
+                        prev_score = local_best_score;
+                        break;
+                    }
+                    if self.stop_flag.load(Ordering::Relaxed) {
+                        break;
+                    }
+                }
+
+                (
+                    local_best_move.unwrap_or(my_moves[0].clone()),
+                    local_best_score,
+                )
+            })
+            .collect();
+
+        search_active.store(false, Ordering::Relaxed);
+        let total_nodes = self.nodes_searched.load(Ordering::Relaxed) as u64;
+        let completed = !self.stop_flag.load(Ordering::Relaxed);
+        let best = results.into_iter().max_by_key(|r| r.1).unwrap();
+        (best.0, best.1, total_nodes, completed)
+    }
+
     fn evaluate(&self, board: &Board, player_at_leaf: Option<Player>) -> i32 {
         let score = Evaluator::evaluate(board);
 

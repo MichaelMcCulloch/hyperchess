@@ -160,7 +160,7 @@ unsafe fn simd_or_into(dst: *mut u64, a: *const u64, b: *const u64, count: usize
 /// Tracks `lo`/`hi` (inclusive range of potentially non-zero u64 words)
 /// to avoid scanning the full data array on shifts and other operations.
 /// Invariant: all words outside `lo..=hi` are zero. `lo > hi` means all-zero.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct BitBoardLarge {
     pub data: SmallVec<[u64; 8]>,
     /// Lowest index that may be non-zero (inclusive).

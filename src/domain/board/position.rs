@@ -1,7 +1,7 @@
 /// Mutable game-rule state that changes with each move.
 /// Separated from PieceMap so functions that only need piece layout
 /// (e.g., evaluation, mobility) don't pay for this data.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PositionState {
     pub hash: u64,
     pub history: Vec<u64>,

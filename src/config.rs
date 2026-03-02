@@ -5,9 +5,32 @@ use std::path::Path;
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct AppConfig {
     pub minimax: MinimaxConfig,
-
     pub compute: ComputeConfig,
     pub api: ApiConfig,
+    #[serde(default)]
+    pub distributed: DistributedConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct DistributedConfig {
+    pub enabled: bool,
+    /// "gateway" or "worker"
+    pub mode: String,
+    pub redis_url: String,
+    pub worker_dns: String,
+    pub grpc_port: u16,
+}
+
+impl Default for DistributedConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: "standalone".to_string(),
+            redis_url: "redis://127.0.0.1:6379".to_string(),
+            worker_dns: String::new(),
+            grpc_port: 50051,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -48,6 +71,12 @@ impl AppConfig {
             config.compute.minutes, config.compute.concurrency, config.compute.memory
         );
         eprintln!("  API Port: {}", config.api.port);
+        if config.distributed.enabled {
+            eprintln!("  Distributed: {} mode", config.distributed.mode);
+            eprintln!("  Redis: {}", config.distributed.redis_url);
+            eprintln!("  Worker DNS: {}", config.distributed.worker_dns);
+            eprintln!("  gRPC Port: {}", config.distributed.grpc_port);
+        }
         eprintln!("----------------------------------------");
 
         config
@@ -78,6 +107,23 @@ impl AppConfig {
             && let Ok(parsed) = val.parse()
         {
             self.api.port = parsed;
+        }
+        if let Ok(val) = std::env::var("HYPERCHESS_DISTRIBUTED_ENABLED") {
+            self.distributed.enabled = val == "true" || val == "1";
+        }
+        if let Ok(val) = std::env::var("HYPERCHESS_MODE") {
+            self.distributed.mode = val;
+        }
+        if let Ok(val) = std::env::var("HYPERCHESS_REDIS_URL") {
+            self.distributed.redis_url = val;
+        }
+        if let Ok(val) = std::env::var("HYPERCHESS_WORKER_DNS") {
+            self.distributed.worker_dns = val;
+        }
+        if let Ok(val) = std::env::var("HYPERCHESS_GRPC_PORT")
+            && let Ok(parsed) = val.parse()
+        {
+            self.distributed.grpc_port = parsed;
         }
     }
 }

@@ -26,6 +26,47 @@ pub struct GenericBoard<R: BoardRepresentation = BitBoard> {
     pub state: PositionState,
 }
 
+/// Wire format for serializing GenericBoard across the network.
+/// Reconstructs immutable `geo` and `zobrist` from (dimension, side) on deserialization.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(bound(serialize = "R: serde::Serialize"))]
+#[serde(bound(deserialize = "R: serde::de::DeserializeOwned"))]
+struct BoardWire<R: BoardRepresentation> {
+    dimension: usize,
+    side: usize,
+    pieces: PieceMap<R>,
+    state: PositionState,
+}
+
+impl<R: BoardRepresentation + serde::Serialize> serde::Serialize for GenericBoard<R> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let wire = BoardWire {
+            dimension: self.geo.dimension,
+            side: self.geo.side,
+            pieces: self.pieces.clone(),
+            state: self.state.clone(),
+        };
+        serde::Serialize::serialize(&wire, serializer)
+    }
+}
+
+impl<'de, R: BoardRepresentation + serde::de::DeserializeOwned> serde::Deserialize<'de>
+    for GenericBoard<R>
+{
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = <BoardWire<R> as serde::Deserialize>::deserialize(deserializer)?;
+        let total_cells = wire.side.pow(wire.dimension as u32);
+        let geo = Arc::new(BoardGeometry::new(wire.dimension, wire.side));
+        let zobrist = Arc::new(ZobristKeys::new(total_cells));
+        Ok(GenericBoard {
+            geo,
+            zobrist,
+            pieces: wire.pieces,
+            state: wire.state,
+        })
+    }
+}
+
 pub type Board = GenericBoard<crate::domain::board::BitBoardLarge>;
 
 impl<R: BoardRepresentation> GenericBoard<R> {
