@@ -4,8 +4,8 @@ use crate::domain::board::cache::DirectionInfo;
 use crate::domain::board::{BitBoardLarge, Board};
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{Move, PieceType, Player};
+use crate::domain::rules::MoveList;
 use crate::domain::rules::attacks::is_square_attacked;
-use crate::domain::rules::{MoveList, apply_offset};
 
 #[derive(Default)]
 struct MoveGenBuffer {
@@ -14,7 +14,6 @@ struct MoveGenBuffer {
     p: BitBoardLarge,
     shifted_g: BitBoardLarge,
     shifted_p: BitBoardLarge,
-    temp: BitBoardLarge,
     all_occupancy: BitBoardLarge,
     empty: BitBoardLarge,
 }
@@ -141,14 +140,12 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
             p,
             shifted_g,
             shifted_p,
-            temp: _,
             all_occupancy,
             empty,
         } = &mut *buffer;
 
         for i in occupancy.iter_indices() {
-            let coord_vals = board.index_to_coords(i);
-            let coord = Coordinate::new(coord_vals.clone());
+            let coord = Coordinate::new(board.geo.cache.index_to_coords[i].clone());
 
             let piece_type = if board.pieces.pawns.get_bit(i) {
                 PieceType::Pawn
@@ -168,7 +165,7 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
 
             match piece_type {
                 PieceType::Pawn => {
-                    generate_pawn_moves(board, &coord, player, all_occupancy, &mut moves)
+                    generate_pawn_moves(board, &coord, i, player, all_occupancy, &mut moves)
                 }
                 PieceType::Knight => generate_leaper_moves(
                     board,
@@ -282,15 +279,7 @@ fn generate_slider_moves_bitwise(
         g.copy_from(generator);
         p.copy_from(empty);
 
-        kogge_stone_fill_inplace(
-            g,
-            p,
-            dir_info.stride,
-            board,
-            dir_info,
-            shifted_g,
-            shifted_p,
-        );
+        kogge_stone_fill_inplace(g, p, dir_info.stride, board, dir_info, shifted_g, shifted_p);
 
         for to_idx in g.iter_indices() {
             if to_idx == origin_idx {
@@ -300,10 +289,9 @@ fn generate_slider_moves_bitwise(
                 continue;
             }
 
-            let to_coords = board.index_to_coords(to_idx);
             moves.push(Move {
                 from: origin_coord.clone(),
-                to: Coordinate::new(to_coords),
+                to: Coordinate::new(board.geo.cache.index_to_coords[to_idx].clone()),
                 promotion: None,
             });
         }
@@ -333,18 +321,13 @@ pub fn kogge_stone_fill_inplace(
                 .get_unchecked(mask_base_idx + shift_amt)
         };
 
-        shifted_g.copy_and(g, mask);
+        let total_shift = stride.unsigned_abs() * shift_amt;
         if stride > 0 {
-            *shifted_g <<= stride.unsigned_abs() * shift_amt;
+            shifted_g.copy_and_shl(g, mask, total_shift);
+            shifted_p.copy_and_shl(p, mask, total_shift);
         } else {
-            *shifted_g >>= stride.unsigned_abs() * shift_amt;
-        }
-
-        shifted_p.copy_and(p, mask);
-        if stride > 0 {
-            *shifted_p <<= stride.unsigned_abs() * shift_amt;
-        } else {
-            *shifted_p >>= stride.unsigned_abs() * shift_amt;
+            shifted_g.copy_and_shr(g, mask, total_shift);
+            shifted_p.copy_and_shr(p, mask, total_shift);
         }
 
         g.or_and_assign(shifted_g, p);
@@ -485,10 +468,9 @@ fn generate_leaper_moves(
     };
     for &target_idx in targets {
         if !same_occupancy.get_bit(target_idx) {
-            let to_coords = board.index_to_coords(target_idx);
             moves.push(Move {
                 from: origin.clone(),
-                to: Coordinate::new(to_coords),
+                to: Coordinate::new(board.geo.cache.index_to_coords[target_idx].clone()),
                 promotion: None,
             });
         }
@@ -498,75 +480,105 @@ fn generate_leaper_moves(
 fn generate_pawn_moves(
     board: &Board,
     origin: &Coordinate,
+    origin_idx: usize,
     player: Player,
     all_occupancy: &BitBoardLarge,
     moves: &mut MoveList,
 ) {
+    let side = board.side();
+    let total_cells = board.total_cells();
     let enemy_occupancy = match player.opponent() {
         Player::White => &board.pieces.white_occupancy,
         Player::Black => &board.pieces.black_occupancy,
     };
+
+    let forward_sign: isize = match player {
+        Player::White => 1,
+        Player::Black => -1,
+    };
+
+    // Precompute axis strides: stride[k] = side^k
+    let mut axis_stride = 1usize;
     for movement_axis in 0..board.dimension() {
+        let cur_stride = axis_stride;
+        axis_stride *= side;
+
         if movement_axis == 1 {
             continue;
         }
-        let forward_dir = match player {
-            Player::White => 1,
-            Player::Black => -1,
+
+        let coord_val = origin.values[movement_axis];
+        let forward_target_coord = coord_val as isize + forward_sign;
+        if forward_target_coord < 0 || forward_target_coord >= side as isize {
+            continue;
+        }
+
+        let forward_idx = (origin_idx as isize + forward_sign * cur_stride as isize) as usize;
+        if forward_idx >= total_cells || all_occupancy.get_bit(forward_idx) {
+            continue;
+        }
+
+        add_pawn_move_idx(origin, forward_idx, board, player, moves);
+
+        let is_start_rank = match player {
+            Player::White => coord_val == 1,
+            Player::Black => coord_val as usize == side - 2,
         };
-        let mut forward_step = vec![0; board.dimension()];
-        forward_step[movement_axis] = forward_dir;
-        if let Some(target) = apply_offset(&origin.values, &forward_step, board.side())
-            && let Some(idx) = board.coords_to_index(&target)
-            && !all_occupancy.get_bit(idx)
-        {
-            add_pawn_move(origin, &target, board.side(), player, moves);
-            let is_start_rank = match player {
-                Player::White => origin.values[movement_axis] == 1,
-                Player::Black => origin.values[movement_axis] as usize == board.side() - 2,
-            };
-            if is_start_rank
-                && let Some(target2) = apply_offset(&target, &forward_step, board.side())
-                && let Some(idx2) = board.coords_to_index(&target2)
-                && !all_occupancy.get_bit(idx2)
-            {
-                add_pawn_move(origin, &target2, board.side(), player, moves);
+        if is_start_rank {
+            let double_idx =
+                (origin_idx as isize + forward_sign * 2 * cur_stride as isize) as usize;
+            if double_idx < total_cells && !all_occupancy.get_bit(double_idx) {
+                add_pawn_move_idx(origin, double_idx, board, player, moves);
             }
         }
+
+        // Captures: for each other axis, try ±1 on that axis combined with forward on movement_axis
+        let mut cap_axis_stride = 1usize;
         for capture_axis in 0..board.dimension() {
+            let cap_stride = cap_axis_stride;
+            cap_axis_stride *= side;
+
             if capture_axis == movement_axis {
                 continue;
             }
-            for s in [-1, 1] {
-                let mut cap_step = forward_step.clone();
-                cap_step[capture_axis] = s;
-                if let Some(target) = apply_offset(&origin.values, &cap_step, board.side())
-                    && let Some(idx) = board.coords_to_index(&target)
+            let cap_coord = origin.values[capture_axis];
+            for s in [-1isize, 1isize] {
+                let cap_target_coord = cap_coord as isize + s;
+                if cap_target_coord < 0 || cap_target_coord >= side as isize {
+                    continue;
+                }
+                let target_idx = (origin_idx as isize
+                    + forward_sign * cur_stride as isize
+                    + s * cap_stride as isize) as usize;
+                if target_idx >= total_cells {
+                    continue;
+                }
+                if enemy_occupancy.get_bit(target_idx) {
+                    add_pawn_move_idx(origin, target_idx, board, player, moves);
+                } else if let Some((ep_target, _)) = board.state.en_passant_target
+                    && target_idx == ep_target
                 {
-                    if enemy_occupancy.get_bit(idx) {
-                        add_pawn_move(origin, &target, board.side(), player, moves);
-                    } else if let Some((ep_target, _)) = board.state.en_passant_target
-                        && idx == ep_target
-                    {
-                        moves.push(Move {
-                            from: origin.clone(),
-                            to: Coordinate::new(target),
-                            promotion: None,
-                        });
-                    }
+                    moves.push(Move {
+                        from: origin.clone(),
+                        to: Coordinate::new(board.geo.cache.index_to_coords[target_idx].clone()),
+                        promotion: None,
+                    });
                 }
             }
         }
     }
 }
 
-fn add_pawn_move(
+#[inline]
+fn add_pawn_move_idx(
     from: &Coordinate,
-    to_vals: &[u8],
-    side: usize,
+    to_idx: usize,
+    board: &Board,
     player: Player,
     moves: &mut MoveList,
 ) {
+    let to_vals = &board.geo.cache.index_to_coords[to_idx];
+    let side = board.side();
     let is_promotion = (0..to_vals.len()).all(|i| {
         if i == 1 {
             true
@@ -577,7 +589,7 @@ fn add_pawn_move(
             }
         }
     });
-    let to = Coordinate::new(to_vals.to_vec());
+    let to = Coordinate::new(to_vals.clone());
     if is_promotion {
         for t in [
             PieceType::Queen,

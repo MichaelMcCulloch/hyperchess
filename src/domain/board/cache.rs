@@ -31,6 +31,10 @@ pub struct GenericBoardCache<R: BoardRepresentation> {
     pub king_targets: Vec<SmallVec<[usize; 16]>>,
     pub white_pawn_capture_targets: Vec<SmallVec<[usize; 16]>>,
     pub black_pawn_capture_targets: Vec<SmallVec<[usize; 16]>>,
+
+    /// Precomputed distance-from-center for PST evaluation.
+    /// `center_dist[cell_index]` = sum of |coord[i] - center| truncated to i32.
+    pub center_dist: Vec<i32>,
 }
 
 pub type BoardCache = GenericBoardCache<BitBoard>;
@@ -144,6 +148,16 @@ impl<R: BoardRepresentation> GenericBoardCache<R> {
         let white_pawn_capture_targets = precompute_targets(&white_pawn_capture_offsets);
         let black_pawn_capture_targets = precompute_targets(&black_pawn_capture_offsets);
 
+        // Precompute center distance for PST
+        let center = (side as f32 - 1.0) / 2.0;
+        let center_dist: Vec<i32> = (0..total_cells)
+            .map(|i| {
+                let coords = &index_to_coords[i];
+                let dist: f32 = coords.iter().map(|&c| (c as f32 - center).abs()).sum();
+                dist as i32
+            })
+            .collect();
+
         Self {
             index_to_coords,
             validity_masks,
@@ -157,6 +171,7 @@ impl<R: BoardRepresentation> GenericBoardCache<R> {
             king_targets,
             white_pawn_capture_targets,
             black_pawn_capture_targets,
+            center_dist,
         }
     }
 }

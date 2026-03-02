@@ -19,14 +19,23 @@ unsafe fn simd_and_assign(dst: *mut u64, src: *const u64, count: usize) {
             while i + 4 <= count {
                 let a = _mm256_loadu_si256((dst as *const u8).add(i * 8) as *const __m256i);
                 let b = _mm256_loadu_si256((src as *const u8).add(i * 8) as *const __m256i);
-                _mm256_storeu_si256((dst as *mut u8).add(i * 8) as *mut __m256i, _mm256_and_si256(a, b));
+                _mm256_storeu_si256(
+                    (dst as *mut u8).add(i * 8) as *mut __m256i,
+                    _mm256_and_si256(a, b),
+                );
                 i += 4;
             }
-            while i < count { *dst.add(i) &= *src.add(i); i += 1; }
-            return;
+            while i < count {
+                *dst.add(i) &= *src.add(i);
+                i += 1;
+            }
         }
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-        { for i in 0..count { *dst.add(i) &= *src.add(i); } }
+        {
+            for i in 0..count {
+                *dst.add(i) &= *src.add(i);
+            }
+        }
     }
 }
 
@@ -40,14 +49,23 @@ unsafe fn simd_or_assign(dst: *mut u64, src: *const u64, count: usize) {
             while i + 4 <= count {
                 let a = _mm256_loadu_si256((dst as *const u8).add(i * 8) as *const __m256i);
                 let b = _mm256_loadu_si256((src as *const u8).add(i * 8) as *const __m256i);
-                _mm256_storeu_si256((dst as *mut u8).add(i * 8) as *mut __m256i, _mm256_or_si256(a, b));
+                _mm256_storeu_si256(
+                    (dst as *mut u8).add(i * 8) as *mut __m256i,
+                    _mm256_or_si256(a, b),
+                );
                 i += 4;
             }
-            while i < count { *dst.add(i) |= *src.add(i); i += 1; }
-            return;
+            while i < count {
+                *dst.add(i) |= *src.add(i);
+                i += 1;
+            }
         }
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-        { for i in 0..count { *dst.add(i) |= *src.add(i); } }
+        {
+            for i in 0..count {
+                *dst.add(i) |= *src.add(i);
+            }
+        }
     }
 }
 
@@ -62,14 +80,23 @@ unsafe fn simd_andnot_assign(dst: *mut u64, src: *const u64, count: usize) {
                 let a = _mm256_loadu_si256((dst as *const u8).add(i * 8) as *const __m256i);
                 let b = _mm256_loadu_si256((src as *const u8).add(i * 8) as *const __m256i);
                 // andnot(b, a) = !b & a — we want dst & !src
-                _mm256_storeu_si256((dst as *mut u8).add(i * 8) as *mut __m256i, _mm256_andnot_si256(b, a));
+                _mm256_storeu_si256(
+                    (dst as *mut u8).add(i * 8) as *mut __m256i,
+                    _mm256_andnot_si256(b, a),
+                );
                 i += 4;
             }
-            while i < count { *dst.add(i) &= !*src.add(i); i += 1; }
-            return;
+            while i < count {
+                *dst.add(i) &= !*src.add(i);
+                i += 1;
+            }
         }
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-        { for i in 0..count { *dst.add(i) &= !*src.add(i); } }
+        {
+            for i in 0..count {
+                *dst.add(i) &= !*src.add(i);
+            }
+        }
     }
 }
 
@@ -85,11 +112,17 @@ unsafe fn simd_zero(dst: *mut u64, count: usize) {
                 _mm256_storeu_si256((dst as *mut u8).add(i * 8) as *mut __m256i, zero);
                 i += 4;
             }
-            while i < count { *dst.add(i) = 0; i += 1; }
-            return;
+            while i < count {
+                *dst.add(i) = 0;
+                i += 1;
+            }
         }
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-        { for i in 0..count { *dst.add(i) = 0; } }
+        {
+            for i in 0..count {
+                *dst.add(i) = 0;
+            }
+        }
     }
 }
 
@@ -103,14 +136,23 @@ unsafe fn simd_or_into(dst: *mut u64, a: *const u64, b: *const u64, count: usize
             while i + 4 <= count {
                 let va = _mm256_loadu_si256((a as *const u8).add(i * 8) as *const __m256i);
                 let vb = _mm256_loadu_si256((b as *const u8).add(i * 8) as *const __m256i);
-                _mm256_storeu_si256((dst as *mut u8).add(i * 8) as *mut __m256i, _mm256_or_si256(va, vb));
+                _mm256_storeu_si256(
+                    (dst as *mut u8).add(i * 8) as *mut __m256i,
+                    _mm256_or_si256(va, vb),
+                );
                 i += 4;
             }
-            while i < count { *dst.add(i) = *a.add(i) | *b.add(i); i += 1; }
-            return;
+            while i < count {
+                *dst.add(i) = *a.add(i) | *b.add(i);
+                i += 1;
+            }
         }
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-        { for i in 0..count { *dst.add(i) = *a.add(i) | *b.add(i); } }
+        {
+            for i in 0..count {
+                *dst.add(i) = *a.add(i) | *b.add(i);
+            }
+        }
     }
 }
 
@@ -255,7 +297,9 @@ impl BitBoardLarge {
         }
         let ptr = self.data.as_mut_ptr();
         let rptr = rhs.data.as_ptr();
-        unsafe { simd_andnot_assign(ptr.add(lo), rptr.add(lo), hi - lo + 1); }
+        unsafe {
+            simd_andnot_assign(ptr.add(lo), rptr.add(lo), hi - lo + 1);
+        }
         // Range may have shrunk but we keep conservative bounds
     }
 
@@ -294,7 +338,9 @@ impl BitBoardLarge {
         if dhi < alen && dhi < blen {
             let aptr = self.data.as_ptr();
             let bptr = other.data.as_ptr();
-            unsafe { simd_or_into(dptr.add(dlo), aptr.add(dlo), bptr.add(dlo), dhi - dlo + 1); }
+            unsafe {
+                simd_or_into(dptr.add(dlo), aptr.add(dlo), bptr.add(dlo), dhi - dlo + 1);
+            }
         } else {
             // Fallback: one is shorter
             let aptr = self.data.as_ptr();
@@ -338,7 +384,9 @@ impl BitBoardLarge {
             if self.lo <= self.hi {
                 let slo = self.lo as usize;
                 let shi = self.hi as usize;
-                unsafe { simd_zero(self.data.as_mut_ptr().add(slo), shi - slo + 1); }
+                unsafe {
+                    simd_zero(self.data.as_mut_ptr().add(slo), shi - slo + 1);
+                }
             }
             self.lo = 1;
             self.hi = 0;
@@ -350,7 +398,9 @@ impl BitBoardLarge {
             if self.lo <= self.hi {
                 let slo = self.lo as usize;
                 let shi = self.hi as usize;
-                unsafe { simd_zero(self.data.as_mut_ptr().add(slo), shi - slo + 1); }
+                unsafe {
+                    simd_zero(self.data.as_mut_ptr().add(slo), shi - slo + 1);
+                }
             }
             self.lo = 1;
             self.hi = 0;
@@ -365,11 +415,15 @@ impl BitBoardLarge {
             let shi = self.hi as usize;
             let zero_below = lo.saturating_sub(slo).min(shi - slo + 1);
             if zero_below > 0 {
-                unsafe { simd_zero(dptr.add(slo), zero_below); }
+                unsafe {
+                    simd_zero(dptr.add(slo), zero_below);
+                }
             }
             let above_start = (hi + 1).max(slo);
             if above_start <= shi {
-                unsafe { simd_zero(dptr.add(above_start), shi - above_start + 1); }
+                unsafe {
+                    simd_zero(dptr.add(above_start), shi - above_start + 1);
+                }
             }
         }
 
@@ -384,7 +438,10 @@ impl BitBoardLarge {
                 let off = lo + i;
                 let va = _mm256_loadu_si256((aptr as *const u8).add(off * 8) as *const __m256i);
                 let vb = _mm256_loadu_si256((bptr as *const u8).add(off * 8) as *const __m256i);
-                _mm256_storeu_si256((dptr as *mut u8).add(off * 8) as *mut __m256i, _mm256_and_si256(va, vb));
+                _mm256_storeu_si256(
+                    (dptr as *mut u8).add(off * 8) as *mut __m256i,
+                    _mm256_and_si256(va, vb),
+                );
                 i += 4;
             }
             while i < count {
@@ -402,6 +459,208 @@ impl BitBoardLarge {
 
         self.lo = lo as u16;
         self.hi = hi as u16;
+    }
+
+    /// Fused `self = (a & b) << shift`. Computes AND and left-shift in one pass.
+    #[inline]
+    pub fn copy_and_shl(&mut self, a: &Self, b: &Self, shift: usize) {
+        if a.lo > a.hi || b.lo > b.hi {
+            self.clear_active_range();
+            return;
+        }
+        let src_lo = std::cmp::max(a.lo as usize, b.lo as usize);
+        let src_hi = std::cmp::min(a.hi as usize, b.hi as usize);
+        if src_lo > src_hi {
+            self.clear_active_range();
+            return;
+        }
+
+        let len = self.data.len();
+        let chunks_shift = shift / 64;
+        let bits_shift = shift % 64;
+
+        let dst_lo = src_lo + chunks_shift;
+        if dst_lo >= len {
+            self.clear_active_range();
+            return;
+        }
+        let mut dst_hi = (src_hi + chunks_shift).min(len - 1);
+
+        let dptr = self.data.as_mut_ptr();
+        let aptr = a.data.as_ptr();
+        let bptr = b.data.as_ptr();
+
+        // Clear old active range outside new destination range
+        self.clear_outside_range(dst_lo, dst_hi + 1); // +1 because carry might extend
+
+        if bits_shift == 0 {
+            // Pure chunk shift — just AND and place
+            for src_i in src_lo..=src_hi {
+                let dst_i = src_i + chunks_shift;
+                if dst_i >= len {
+                    break;
+                }
+                unsafe {
+                    *dptr.add(dst_i) = *aptr.add(src_i) & *bptr.add(src_i);
+                }
+            }
+        } else {
+            let inv_shift = 64 - bits_shift;
+            // Check if carry from top word extends dst_hi
+            let top_and = unsafe { *aptr.add(src_hi) & *bptr.add(src_hi) };
+            let top_carry = top_and >> inv_shift;
+            if top_carry != 0 && dst_hi + 1 < len {
+                dst_hi += 1;
+                unsafe {
+                    *dptr.add(dst_hi) = top_carry;
+                }
+            }
+            // Process words top-down to handle carry correctly
+            // Each dst word = (and_word[src_i] << bits_shift) | (and_word[src_i-1] >> inv_shift)
+            for src_i in (src_lo..=src_hi).rev() {
+                let dst_i = src_i + chunks_shift;
+                if dst_i >= len {
+                    continue;
+                }
+                let and_val = unsafe { *aptr.add(src_i) & *bptr.add(src_i) };
+                let prev_and = if src_i > src_lo {
+                    unsafe { *aptr.add(src_i - 1) & *bptr.add(src_i - 1) }
+                } else {
+                    0
+                };
+                unsafe {
+                    *dptr.add(dst_i) = (and_val << bits_shift) | (prev_and >> inv_shift);
+                }
+            }
+        }
+
+        self.lo = dst_lo as u16;
+        self.hi = dst_hi as u16;
+    }
+
+    /// Fused `self = (a & b) >> shift`. Computes AND and right-shift in one pass.
+    #[inline]
+    pub fn copy_and_shr(&mut self, a: &Self, b: &Self, shift: usize) {
+        if a.lo > a.hi || b.lo > b.hi {
+            self.clear_active_range();
+            return;
+        }
+        let src_lo = std::cmp::max(a.lo as usize, b.lo as usize);
+        let src_hi = std::cmp::min(a.hi as usize, b.hi as usize);
+        if src_lo > src_hi {
+            self.clear_active_range();
+            return;
+        }
+
+        let chunks_shift = shift / 64;
+        let bits_shift = shift % 64;
+
+        if src_lo < chunks_shift && src_hi < chunks_shift {
+            self.clear_active_range();
+            return;
+        }
+        let dst_hi = src_hi.saturating_sub(chunks_shift);
+        let mut dst_lo = src_lo.saturating_sub(chunks_shift);
+
+        let dptr = self.data.as_mut_ptr();
+        let aptr = a.data.as_ptr();
+        let bptr = b.data.as_ptr();
+
+        // Clear old active range outside new destination
+        let clear_hi = if bits_shift > 0 && dst_lo > 0 {
+            dst_lo - 1
+        } else {
+            dst_lo
+        };
+        self.clear_outside_range(clear_hi, dst_hi);
+
+        if bits_shift == 0 {
+            for src_i in src_lo..=src_hi {
+                if src_i < chunks_shift {
+                    continue;
+                }
+                let dst_i = src_i - chunks_shift;
+                unsafe {
+                    *dptr.add(dst_i) = *aptr.add(src_i) & *bptr.add(src_i);
+                }
+            }
+        } else {
+            let inv_shift = 64 - bits_shift;
+            // Check if carry from bottom word extends dst_lo downward
+            let effective_src_lo = if src_lo >= chunks_shift {
+                src_lo
+            } else {
+                chunks_shift
+            };
+            let bot_and = unsafe { *aptr.add(effective_src_lo) & *bptr.add(effective_src_lo) };
+            let bot_carry = bot_and << inv_shift;
+            if bot_carry != 0
+                && effective_src_lo >= chunks_shift
+                && (effective_src_lo - chunks_shift) > 0
+            {
+                dst_lo = effective_src_lo - chunks_shift - 1;
+                unsafe {
+                    *dptr.add(dst_lo) = bot_carry;
+                }
+            }
+            // Process words bottom-up
+            for src_i in src_lo..=src_hi {
+                if src_i < chunks_shift {
+                    continue;
+                }
+                let dst_i = src_i - chunks_shift;
+                let and_val = unsafe { *aptr.add(src_i) & *bptr.add(src_i) };
+                let next_and = if src_i < src_hi {
+                    unsafe { *aptr.add(src_i + 1) & *bptr.add(src_i + 1) }
+                } else {
+                    0
+                };
+                unsafe {
+                    *dptr.add(dst_i) = (and_val >> bits_shift) | (next_and << inv_shift);
+                }
+            }
+        }
+
+        self.lo = dst_lo as u16;
+        self.hi = dst_hi as u16;
+    }
+
+    /// Helper: clear current active range to zero, set lo>hi.
+    #[inline]
+    fn clear_active_range(&mut self) {
+        if self.lo <= self.hi {
+            let slo = self.lo as usize;
+            let shi = self.hi as usize;
+            unsafe {
+                simd_zero(self.data.as_mut_ptr().add(slo), shi - slo + 1);
+            }
+        }
+        self.lo = 1;
+        self.hi = 0;
+    }
+
+    /// Helper: zero words in the old active range that fall outside [new_lo, new_hi].
+    #[inline]
+    fn clear_outside_range(&mut self, new_lo: usize, new_hi: usize) {
+        if self.lo <= self.hi {
+            let slo = self.lo as usize;
+            let shi = self.hi as usize;
+            let dptr = self.data.as_mut_ptr();
+            // Zero below new_lo
+            let below = new_lo.min(shi + 1).saturating_sub(slo);
+            if below > 0 {
+                unsafe {
+                    simd_zero(dptr.add(slo), below);
+                }
+            }
+            // Zero above new_hi
+            let above_start = (new_hi + 1).max(slo);
+            if above_start <= shi {
+                unsafe {
+                    simd_zero(dptr.add(above_start), shi - above_start + 1);
+                }
+            }
+        }
     }
 
     /// Fused `self |= (a & b)` — avoids materializing the AND result.
@@ -564,7 +823,9 @@ impl BoardRepresentation for BitBoardLarge {
             if self.lo <= self.hi {
                 let lo = self.lo as usize;
                 let hi = self.hi as usize;
-                unsafe { simd_zero(self.data.as_mut_ptr().add(lo), hi - lo + 1); }
+                unsafe {
+                    simd_zero(self.data.as_mut_ptr().add(lo), hi - lo + 1);
+                }
             }
         } else {
             let olo = other.lo as usize;
@@ -575,11 +836,18 @@ impl BoardRepresentation for BitBoardLarge {
                 let shi = self.hi as usize;
                 let clear_below = std::cmp::min(olo, shi + 1).saturating_sub(slo);
                 if clear_below > 0 {
-                    unsafe { simd_zero(self.data.as_mut_ptr().add(slo), clear_below); }
+                    unsafe {
+                        simd_zero(self.data.as_mut_ptr().add(slo), clear_below);
+                    }
                 }
                 let above_start = (ohi + 1).max(slo);
                 if above_start <= shi {
-                    unsafe { simd_zero(self.data.as_mut_ptr().add(above_start), shi - above_start + 1); }
+                    unsafe {
+                        simd_zero(
+                            self.data.as_mut_ptr().add(above_start),
+                            shi - above_start + 1,
+                        );
+                    }
                 }
             }
             // Copy active range
@@ -601,11 +869,15 @@ impl BoardRepresentation for BitBoardLarge {
         if self.data.len() != template.data.len() {
             self.data.resize(template.data.len(), 0);
             let len = self.data.len();
-            unsafe { simd_zero(self.data.as_mut_ptr(), len); }
+            unsafe {
+                simd_zero(self.data.as_mut_ptr(), len);
+            }
         } else if self.lo <= self.hi {
             let lo = self.lo as usize;
             let hi = self.hi as usize;
-            unsafe { simd_zero(self.data.as_mut_ptr().add(lo), hi - lo + 1); }
+            unsafe {
+                simd_zero(self.data.as_mut_ptr().add(lo), hi - lo + 1);
+            }
         }
         self.lo = 1;
         self.hi = 0;
@@ -627,7 +899,9 @@ impl BitAndAssign<&BitBoardLarge> for BitBoardLarge {
         let ptr = self.data.as_mut_ptr();
 
         if rhs_empty {
-            unsafe { simd_zero(ptr.add(lo), hi - lo + 1); }
+            unsafe {
+                simd_zero(ptr.add(lo), hi - lo + 1);
+            }
             self.lo = 1;
             self.hi = 0;
             return;
@@ -640,21 +914,29 @@ impl BitAndAssign<&BitBoardLarge> for BitBoardLarge {
         // Zero words in self's range that are below the intersection
         let zero_below = std::cmp::min(int_lo, hi + 1).saturating_sub(lo);
         if zero_below > 0 {
-            unsafe { simd_zero(ptr.add(lo), zero_below); }
+            unsafe {
+                simd_zero(ptr.add(lo), zero_below);
+            }
         }
         // AND within the intersection
         if int_lo <= int_hi {
             let rptr = rhs.data.as_ptr();
-            unsafe { simd_and_assign(ptr.add(int_lo), rptr.add(int_lo), int_hi - int_lo + 1); }
+            unsafe {
+                simd_and_assign(ptr.add(int_lo), rptr.add(int_lo), int_hi - int_lo + 1);
+            }
         }
         // Zero words in self's range that are above the intersection
         let above_start = (int_hi + 1).max(lo);
         if above_start <= hi {
-            unsafe { simd_zero(ptr.add(above_start), hi - above_start + 1); }
+            unsafe {
+                simd_zero(ptr.add(above_start), hi - above_start + 1);
+            }
         }
         // Zero words beyond rhs length
         if hi >= rhs_len {
-            unsafe { simd_zero(ptr.add(rhs_len), hi - rhs_len + 1); }
+            unsafe {
+                simd_zero(ptr.add(rhs_len), hi - rhs_len + 1);
+            }
         }
 
         // Conservative range: intersection (may contain zeros, that's OK)
@@ -681,7 +963,9 @@ impl BitOrAssign<&BitBoardLarge> for BitBoardLarge {
         if rhs_hi < self.data.len() {
             let ptr = self.data.as_mut_ptr();
             let rptr = rhs.data.as_ptr();
-            unsafe { simd_or_assign(ptr.add(rhs_lo), rptr.add(rhs_lo), rhs_hi - rhs_lo + 1); }
+            unsafe {
+                simd_or_assign(ptr.add(rhs_lo), rptr.add(rhs_lo), rhs_hi - rhs_lo + 1);
+            }
         } else {
             // rhs extends beyond self — OR what fits, extend the rest
             let self_len = self.data.len();
@@ -689,7 +973,9 @@ impl BitOrAssign<&BitBoardLarge> for BitBoardLarge {
             let count = overlap_hi - rhs_lo + 1;
             let ptr = self.data.as_mut_ptr();
             let rptr = rhs.data.as_ptr();
-            unsafe { simd_or_assign(ptr.add(rhs_lo), rptr.add(rhs_lo), count); }
+            unsafe {
+                simd_or_assign(ptr.add(rhs_lo), rptr.add(rhs_lo), count);
+            }
             if rhs_hi >= self_len {
                 self.data.extend_from_slice(&rhs.data[self_len..=rhs_hi]);
             }

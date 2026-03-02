@@ -161,11 +161,9 @@ impl Evaluator {
         let mut white_npm = 0i32;
         let mut black_npm = 0i32;
 
-        let center = (board.side() as f32 - 1.0) / 2.0;
-
         // Per-piece evaluation (material + PST + mobility)
         for (idx, piece_type) in Self::iter_pieces(board, Player::White) {
-            let (mg, eg, p) = Self::evaluate_piece(board, idx, piece_type, Player::White, center);
+            let (mg, eg, p) = Self::evaluate_piece(board, idx, piece_type, Player::White);
             mg_score += mg;
             eg_score += eg;
             phase += p;
@@ -175,7 +173,7 @@ impl Evaluator {
         }
 
         for (idx, piece_type) in Self::iter_pieces(board, Player::Black) {
-            let (mg, eg, p) = Self::evaluate_piece(board, idx, piece_type, Player::Black, center);
+            let (mg, eg, p) = Self::evaluate_piece(board, idx, piece_type, Player::Black);
             mg_score -= mg;
             eg_score -= eg;
             phase += p;
@@ -263,7 +261,6 @@ impl Evaluator {
         index: usize,
         piece_type: PieceType,
         _player: Player,
-        center: f32,
     ) -> (i32, i32, i32) {
         let mut mg = 0;
         let mut eg = 0;
@@ -281,9 +278,7 @@ impl Evaluator {
         eg += mat_eg;
         phase += ph;
 
-        let coords = board.index_to_coords(index);
-        let dist: f32 = coords.iter().map(|&c| (c as f32 - center).abs()).sum();
-        let dist_int = dist as i32;
+        let dist_int = board.geo.cache.center_dist[index];
 
         let (pst_mg, pst_eg) = match piece_type {
             PieceType::Pawn => (
@@ -460,7 +455,7 @@ impl Evaluator {
                 if !is_queen && !is_rook {
                     continue;
                 }
-                let pc = board.index_to_coords(idx);
+                let pc = &board.geo.cache.index_to_coords[idx];
                 let chebyshev = king_coord
                     .values
                     .iter()
@@ -555,10 +550,10 @@ impl Evaluator {
             let enemy_pawns = Self::get_pawn_indices(board, player.opponent());
 
             for &pawn_idx in &my_pawns {
-                let coords = board.index_to_coords(pawn_idx);
+                let coords = &board.geo.cache.index_to_coords[pawn_idx];
 
                 // Passed pawn: no enemy pawn ahead on same or adjacent file column
-                if Self::is_passed_pawn(board, &coords, player, &enemy_pawns, dim) {
+                if Self::is_passed_pawn(board, coords, player, &enemy_pawns, dim) {
                     let advancement = match player {
                         Player::White => coords[0] as i32,
                         Player::Black => (board.side() as i32 - 1) - coords[0] as i32,
@@ -568,13 +563,13 @@ impl Evaluator {
                 }
 
                 // Isolated pawn: no friendly pawn on adjacent file columns
-                if Self::is_isolated_pawn(board, &coords, &my_pawns, dim) {
+                if Self::is_isolated_pawn(board, coords, &my_pawns, dim) {
                     mg -= sign * ISOLATED_PAWN_PENALTY_MG;
                     eg -= sign * ISOLATED_PAWN_PENALTY_EG;
                 }
 
                 // Doubled pawn: another friendly pawn on same file column
-                if Self::is_doubled_pawn(board, &coords, &my_pawns, pawn_idx, dim) {
+                if Self::is_doubled_pawn(board, coords, &my_pawns, pawn_idx, dim) {
                     mg -= sign * DOUBLED_PAWN_PENALTY_MG;
                     eg -= sign * DOUBLED_PAWN_PENALTY_EG;
                 }
@@ -614,10 +609,10 @@ impl Evaluator {
         let file = coords[1];
 
         for &enemy_idx in enemy_pawn_indices {
-            let ec = board.index_to_coords(enemy_idx);
+            let ec = &board.geo.cache.index_to_coords[enemy_idx];
 
             // Higher dimensions must match
-            if !higher_dims_match(coords, &ec, dim) {
+            if !higher_dims_match(coords, ec, dim) {
                 continue;
             }
 
@@ -650,12 +645,12 @@ impl Evaluator {
     ) -> bool {
         let file = coords[1];
         for &idx in my_pawn_indices {
-            let oc = board.index_to_coords(idx);
+            let oc = &board.geo.cache.index_to_coords[idx];
             let file_diff = (oc[1] as i32 - file as i32).abs();
             if file_diff != 1 {
                 continue;
             }
-            if higher_dims_match(coords, &oc, dim) {
+            if higher_dims_match(coords, oc, dim) {
                 return false;
             }
         }
@@ -675,11 +670,11 @@ impl Evaluator {
             if idx == self_idx {
                 continue;
             }
-            let oc = board.index_to_coords(idx);
+            let oc = &board.geo.cache.index_to_coords[idx];
             if oc[1] != file {
                 continue;
             }
-            if higher_dims_match(coords, &oc, dim) {
+            if higher_dims_match(coords, oc, dim) {
                 return true;
             }
         }

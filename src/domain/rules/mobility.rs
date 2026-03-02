@@ -13,7 +13,6 @@ struct MobilityBuffer {
     p: BitBoardLarge,
     shifted_g: BitBoardLarge,
     shifted_p: BitBoardLarge,
-    temp: BitBoardLarge,
     all_occupancy: BitBoardLarge,
     empty: BitBoardLarge,
 }
@@ -114,7 +113,6 @@ fn count_slider_mobility(
             p,
             shifted_g,
             shifted_p,
-            temp: _,
             all_occupancy: _,
             empty,
         } = &mut *buffer;
