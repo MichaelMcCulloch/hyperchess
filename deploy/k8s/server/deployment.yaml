@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: hyperchess-server
-          image: hyperchess-server:latest
+          image: registry.semanticallyinvalid.net/michaelmcculloch/hyperchess/server:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 3123

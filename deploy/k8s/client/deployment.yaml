@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: hyperchess-client
-          image: hyperchess-client:latest
+          image: registry.semanticallyinvalid.net/michaelmcculloch/hyperchess/client:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 80
