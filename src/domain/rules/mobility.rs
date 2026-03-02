@@ -1,128 +1,163 @@
-use smallvec::SmallVec;
+use std::cell::RefCell;
 
+use crate::domain::board::BitBoardLarge;
 use crate::domain::board::Board;
 use crate::domain::board::cache::DirectionInfo;
-use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{PieceType, Player};
-use crate::domain::rules::apply_offset;
-use crate::domain::rules::move_gen::{calculate_stride, kogge_stone_fill_inplace};
+use crate::domain::rules::move_gen::kogge_stone_fill_inplace;
+
+#[derive(Default)]
+struct MobilityBuffer {
+    generator: BitBoardLarge,
+    g: BitBoardLarge,
+    p: BitBoardLarge,
+    shifted_g: BitBoardLarge,
+    shifted_p: BitBoardLarge,
+    temp: BitBoardLarge,
+    all_occupancy: BitBoardLarge,
+    empty: BitBoardLarge,
+}
+
+thread_local! {
+    static MOBILITY_BUFFER: RefCell<MobilityBuffer> = RefCell::new(MobilityBuffer::default());
+}
 
 pub fn count_piece_mobility(board: &Board, index: usize, piece_type: PieceType) -> i32 {
-    let coords = board.index_to_coords(index);
-    let coord = Coordinate::new(coords.clone());
     let player = board
         .get_piece_at_index(index)
         .map(|p| p.owner)
         .unwrap_or(Player::White);
 
-    let mut count = 0;
-
     match piece_type {
-        PieceType::Pawn => 0,
+        PieceType::Pawn | PieceType::King => 0,
         PieceType::Knight => {
-            count_leaper_moves(board, &coord, player, &board.geo.cache.knight_offsets)
+            count_leaper_moves_idx(board, index, player, &board.geo.cache.knight_targets[index])
         }
-        PieceType::King => count_leaper_moves(board, &coord, player, &board.geo.cache.king_offsets),
-        PieceType::Rook => {
-            count_slider_moves(board, &coord, player, &board.geo.cache.rook_directions)
-        }
-        PieceType::Bishop => {
-            count_slider_moves(board, &coord, player, &board.geo.cache.bishop_directions)
-        }
-        PieceType::Queen => {
-            count += count_slider_moves(board, &coord, player, &board.geo.cache.rook_directions);
-            count += count_slider_moves(board, &coord, player, &board.geo.cache.bishop_directions);
-            count
+        PieceType::Rook | PieceType::Bishop | PieceType::Queen => {
+            count_slider_mobility(board, index, player, piece_type)
         }
     }
 }
 
-fn count_leaper_moves(
+#[inline]
+fn count_leaper_moves_idx(
     board: &Board,
-    origin: &Coordinate,
+    _origin_idx: usize,
     player: Player,
-    offsets: &[Vec<isize>],
+    targets: &[usize],
 ) -> i32 {
-    let mut count = 0;
     let same_occupancy = match player {
         Player::White => &board.pieces.white_occupancy,
         Player::Black => &board.pieces.black_occupancy,
     };
-    for offset in offsets {
-        if let Some(target) = apply_offset(&origin.values, offset, board.side())
-            && let Some(idx) = board.coords_to_index(&target)
-            && !same_occupancy.get_bit(idx)
-        {
+    let mut count = 0;
+    for &target_idx in targets {
+        if !same_occupancy.get_bit(target_idx) {
             count += 1;
         }
     }
     count
 }
 
-fn count_slider_moves(
+/// Single thread_local access for all slider directions of one piece.
+fn count_slider_mobility(
     board: &Board,
-    origin: &Coordinate,
+    origin_idx: usize,
     player: Player,
-    directions: &[DirectionInfo],
+    piece_type: PieceType,
 ) -> i32 {
-    let origin_idx = board.coords_to_index(&origin.values).unwrap();
-    let mut count = 0;
-    let mut generator = board.pieces.white_occupancy.zero_like();
-    generator.set_bit(origin_idx);
-
-    let all_occupancy = &board.pieces.white_occupancy | &board.pieces.black_occupancy;
     let own_occupancy = match player {
         Player::White => &board.pieces.white_occupancy,
         Player::Black => &board.pieces.black_occupancy,
     };
 
-    let empty = {
-        let mut new_data = SmallVec::with_capacity(all_occupancy.data.len());
-        let mut remaining = board.total_cells();
-        for val in &all_occupancy.data {
-            let limit = std::cmp::min(64, remaining);
-            let mask = if limit == 64 {
-                !0u64
-            } else {
-                (1u64 << limit) - 1
-            };
-            new_data.push((!val) & mask);
-            remaining = remaining.saturating_sub(64);
+    MOBILITY_BUFFER.with(|buffer_ref| {
+        let mut buffer = buffer_ref.borrow_mut();
+
+        let template = &board.pieces.white_occupancy;
+        buffer.generator.ensure_capacity_and_clear(template);
+        buffer.g.ensure_capacity_and_clear(template);
+        buffer.p.ensure_capacity_and_clear(template);
+        buffer.shifted_g.ensure_capacity_and_clear(template);
+        buffer.shifted_p.ensure_capacity_and_clear(template);
+        buffer.all_occupancy.ensure_capacity_and_clear(template);
+        buffer.empty.ensure_capacity_and_clear(template);
+
+        // Compute all_occupancy and empty once
+        board
+            .pieces
+            .white_occupancy
+            .or_into(&board.pieces.black_occupancy, &mut buffer.all_occupancy);
+        {
+            let total_cells = board.total_cells();
+            let len = buffer.all_occupancy.data.len();
+            let mut remaining = total_cells;
+            for i in 0..len {
+                let limit = std::cmp::min(64, remaining);
+                let mask = if limit == 64 {
+                    !0u64
+                } else {
+                    (1u64 << limit) - 1
+                };
+                buffer.empty.data[i] = (!buffer.all_occupancy.data[i]) & mask;
+                remaining = remaining.saturating_sub(64);
+            }
         }
-        crate::domain::board::BitBoardLarge { data: new_data }
-    };
+        buffer.all_occupancy.recompute_range();
+        buffer.empty.recompute_range();
 
-    let mut g = generator.zero_like();
-    let mut p = generator.zero_like();
-    let mut shifted_g = generator.zero_like();
-    let mut shifted_p = generator.zero_like();
-    let mut temp = generator.zero_like();
+        buffer.generator.set_bit(origin_idx);
 
-    for dir_info in directions {
-        let stride = calculate_stride(board, &dir_info.offsets);
-        if stride == 0 {
-            continue;
+        let MobilityBuffer {
+            generator,
+            g,
+            p,
+            shifted_g,
+            shifted_p,
+            temp: _,
+            all_occupancy: _,
+            empty,
+        } = &mut *buffer;
+
+        let mut count = 0;
+
+        // Collect direction sets to iterate based on piece type
+        let dir_sets: &[&[DirectionInfo]] = match piece_type {
+            PieceType::Rook => &[&board.geo.cache.rook_directions],
+            PieceType::Bishop => &[&board.geo.cache.bishop_directions],
+            PieceType::Queen => &[
+                &board.geo.cache.rook_directions,
+                &board.geo.cache.bishop_directions,
+            ],
+            _ => &[],
+        };
+
+        for directions in dir_sets {
+            for dir_info in *directions {
+                if dir_info.stride == 0 {
+                    continue;
+                }
+
+                g.copy_from(generator);
+                p.copy_from(empty);
+
+                kogge_stone_fill_inplace(
+                    g,
+                    p,
+                    dir_info.stride,
+                    board,
+                    dir_info,
+                    shifted_g,
+                    shifted_p,
+                );
+
+                g.andnot_assign(own_occupancy);
+                count += g.count_ones() as i32;
+                if g.get_bit(origin_idx) {
+                    count -= 1;
+                }
+            }
         }
-
-        g.copy_from(&generator);
-        p.copy_from(&empty);
-
-        kogge_stone_fill_inplace(
-            &mut g,
-            &mut p,
-            stride,
-            board,
-            dir_info,
-            &mut shifted_g,
-            &mut shifted_p,
-            &mut temp,
-        );
-
-        g &= &(!own_occupancy);
-        count += g.count_ones() as i32;
-        if g.get_bit(origin_idx) {
-            count -= 1;
-        }
-    }
-    count
+        count
+    })
 }

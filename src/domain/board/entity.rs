@@ -567,9 +567,10 @@ impl<R: BoardRepresentation> GenericBoard<R> {
             Player::Black => &self.pieces.black_occupancy,
         };
 
-        for i in 0..self.geo.total_cells {
-            if occupancy.get_bit(i) && self.pieces.kings.get_bit(i) {
-                return Some(Coordinate::new(self.index_to_coords(i)));
+        // Iterate only set bits in kings bitboard (at most 2 kings)
+        for idx in self.pieces.kings.iter_indices() {
+            if occupancy.get_bit(idx) {
+                return Some(Coordinate::new(self.index_to_coords(idx)));
             }
         }
         None

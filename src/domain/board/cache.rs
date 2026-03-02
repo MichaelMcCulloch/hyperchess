@@ -8,6 +8,7 @@ use crate::domain::models::Player;
 pub struct DirectionInfo {
     pub id: usize,
     pub offsets: Vec<isize>,
+    pub stride: isize,
 }
 
 #[derive(Debug)]
@@ -24,6 +25,12 @@ pub struct GenericBoardCache<R: BoardRepresentation> {
 
     pub white_pawn_capture_offsets: Vec<Vec<isize>>,
     pub black_pawn_capture_offsets: Vec<Vec<isize>>,
+
+    /// Precomputed leaper targets: for each cell index, the list of valid target indices.
+    pub knight_targets: Vec<SmallVec<[usize; 16]>>,
+    pub king_targets: Vec<SmallVec<[usize; 16]>>,
+    pub white_pawn_capture_targets: Vec<SmallVec<[usize; 16]>>,
+    pub black_pawn_capture_targets: Vec<SmallVec<[usize; 16]>>,
 }
 
 pub type BoardCache = GenericBoardCache<BitBoard>;
@@ -79,9 +86,17 @@ impl<R: BoardRepresentation> GenericBoardCache<R> {
                     validity_masks.push(mask_bb);
                 }
 
+                let mut stride: isize = 0;
+                let mut multiplier: usize = 1;
+                for d in 0..dimension {
+                    stride += dir_vec[d] * multiplier as isize;
+                    multiplier *= side;
+                }
+
                 infos.push(DirectionInfo {
                     id: dir_id,
                     offsets: dir_vec,
+                    stride,
                 });
             }
             infos
@@ -97,6 +112,38 @@ impl<R: BoardRepresentation> GenericBoardCache<R> {
         let black_pawn_capture_offsets =
             crate::domain::rules::Rules::get_pawn_capture_offsets_calc(dimension, Player::Black);
 
+        let precompute_targets = |offsets: &[Vec<isize>]| -> Vec<SmallVec<[usize; 16]>> {
+            let mut targets: Vec<SmallVec<[usize; 16]>> = Vec::with_capacity(total_cells);
+            for i in 0..total_cells {
+                let coords = &index_to_coords[i];
+                let mut cell_targets = SmallVec::new();
+                for offset in offsets {
+                    let mut valid = true;
+                    let mut target_idx: usize = 0;
+                    let mut multiplier: usize = 1;
+                    for d in 0..dimension {
+                        let val = coords[d] as isize + offset[d];
+                        if val < 0 || val >= side as isize {
+                            valid = false;
+                            break;
+                        }
+                        target_idx += val as usize * multiplier;
+                        multiplier *= side;
+                    }
+                    if valid {
+                        cell_targets.push(target_idx);
+                    }
+                }
+                targets.push(cell_targets);
+            }
+            targets
+        };
+
+        let knight_targets = precompute_targets(&knight_offsets);
+        let king_targets = precompute_targets(&king_offsets);
+        let white_pawn_capture_targets = precompute_targets(&white_pawn_capture_offsets);
+        let black_pawn_capture_targets = precompute_targets(&black_pawn_capture_offsets);
+
         Self {
             index_to_coords,
             validity_masks,
@@ -106,6 +153,10 @@ impl<R: BoardRepresentation> GenericBoardCache<R> {
             bishop_directions: bishop_infos,
             white_pawn_capture_offsets,
             black_pawn_capture_offsets,
+            knight_targets,
+            king_targets,
+            white_pawn_capture_targets,
+            black_pawn_capture_targets,
         }
     }
 }

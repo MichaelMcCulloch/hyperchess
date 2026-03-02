@@ -1,13 +1,23 @@
-use smallvec::SmallVec;
-
+use crate::domain::board::cache::DirectionInfo;
 use crate::domain::board::{BoardRepresentation, GenericBoard};
 use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{PieceType, Player};
-use crate::domain::rules::apply_offset;
 
 pub fn is_square_attacked<R: BoardRepresentation>(
     board: &GenericBoard<R>,
     square: &Coordinate,
+    by_player: Player,
+) -> bool {
+    let sq_idx = match board.coords_to_index(&square.values) {
+        Some(idx) => idx,
+        None => return false,
+    };
+    is_square_attacked_idx(board, sq_idx, by_player)
+}
+
+pub fn is_square_attacked_idx<R: BoardRepresentation>(
+    board: &GenericBoard<R>,
+    sq_idx: usize,
     by_player: Player,
 ) -> bool {
     let enemy_occupancy = match by_player {
@@ -15,31 +25,26 @@ pub fn is_square_attacked<R: BoardRepresentation>(
         Player::Black => &board.pieces.black_occupancy,
     };
 
-    for offset in &board.geo.cache.knight_offsets {
-        if let Some(target_coord) = apply_offset(&square.values, offset, board.side())
-            && let Some(target_idx) = board.coords_to_index(&target_coord)
-            && enemy_occupancy.get_bit(target_idx)
-            && board.pieces.knights.get_bit(target_idx)
-        {
+    // Knight attacks via precomputed targets
+    for &target_idx in &board.geo.cache.knight_targets[sq_idx] {
+        if enemy_occupancy.get_bit(target_idx) && board.pieces.knights.get_bit(target_idx) {
             return true;
         }
     }
 
-    for offset in &board.geo.cache.king_offsets {
-        if let Some(target_coord) = apply_offset(&square.values, offset, board.side())
-            && let Some(target_idx) = board.coords_to_index(&target_coord)
-            && enemy_occupancy.get_bit(target_idx)
-            && board.pieces.kings.get_bit(target_idx)
-        {
+    // King attacks via precomputed targets
+    for &target_idx in &board.geo.cache.king_targets[sq_idx] {
+        if enemy_occupancy.get_bit(target_idx) && board.pieces.kings.get_bit(target_idx) {
             return true;
         }
     }
 
+    // Slider attacks via index-based ray walking
     for dir_info in &board.geo.cache.rook_directions {
-        if scan_ray_for_threat(
+        if scan_ray_for_threat_idx(
             board,
-            &square.values,
-            &dir_info.offsets,
+            sq_idx,
+            dir_info,
             by_player,
             &[PieceType::Rook, PieceType::Queen],
         ) {
@@ -48,10 +53,10 @@ pub fn is_square_attacked<R: BoardRepresentation>(
     }
 
     for dir_info in &board.geo.cache.bishop_directions {
-        if scan_ray_for_threat(
+        if scan_ray_for_threat_idx(
             board,
-            &square.values,
-            &dir_info.offsets,
+            sq_idx,
+            dir_info,
             by_player,
             &[PieceType::Bishop, PieceType::Queen],
         ) {
@@ -59,17 +64,13 @@ pub fn is_square_attacked<R: BoardRepresentation>(
         }
     }
 
-    let pawn_attack_offsets = match by_player {
-        Player::White => &board.geo.cache.white_pawn_capture_offsets,
-        Player::Black => &board.geo.cache.black_pawn_capture_offsets,
+    // Pawn attacks via precomputed targets
+    let pawn_targets = match by_player {
+        Player::White => &board.geo.cache.white_pawn_capture_targets[sq_idx],
+        Player::Black => &board.geo.cache.black_pawn_capture_targets[sq_idx],
     };
-
-    for offset in pawn_attack_offsets {
-        if let Some(target_coord) = apply_offset(&square.values, offset, board.side())
-            && let Some(target_idx) = board.coords_to_index(&target_coord)
-            && enemy_occupancy.get_bit(target_idx)
-            && board.pieces.pawns.get_bit(target_idx)
-        {
+    for &target_idx in pawn_targets {
+        if enemy_occupancy.get_bit(target_idx) && board.pieces.pawns.get_bit(target_idx) {
             return true;
         }
     }
@@ -77,6 +78,51 @@ pub fn is_square_attacked<R: BoardRepresentation>(
     false
 }
 
+/// Index-based ray scan: walk along a direction by stride, using the step-1
+/// validity mask to prevent board-edge wrapping. No allocations.
+#[inline]
+pub fn scan_ray_for_threat_idx<R: BoardRepresentation>(
+    board: &GenericBoard<R>,
+    origin_idx: usize,
+    dir_info: &DirectionInfo,
+    attacker: Player,
+    threat_types: &[PieceType],
+) -> bool {
+    let stride = dir_info.stride;
+    let mask = &board.geo.cache.validity_masks[dir_info.id * board.side() + 1];
+    let enemy_occupancy = match attacker {
+        Player::White => &board.pieces.white_occupancy,
+        Player::Black => &board.pieces.black_occupancy,
+    };
+
+    let mut idx = origin_idx;
+    loop {
+        if !mask.get_bit(idx) {
+            return false;
+        }
+        idx = (idx as isize + stride) as usize;
+        let is_white = board.pieces.white_occupancy.get_bit(idx);
+        let is_black = board.pieces.black_occupancy.get_bit(idx);
+        if is_white || is_black {
+            if enemy_occupancy.get_bit(idx) {
+                for &t in threat_types {
+                    let found = match t {
+                        PieceType::Rook => board.pieces.rooks.get_bit(idx),
+                        PieceType::Bishop => board.pieces.bishops.get_bit(idx),
+                        PieceType::Queen => board.pieces.queens.get_bit(idx),
+                        _ => false,
+                    };
+                    if found {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+}
+
+/// Kept for backward compatibility (used by entity.rs get_smallest_attacker).
 pub fn scan_ray_for_threat<R: BoardRepresentation>(
     board: &GenericBoard<R>,
     origin_vals: &[u8],
@@ -84,42 +130,24 @@ pub fn scan_ray_for_threat<R: BoardRepresentation>(
     attacker: Player,
     threat_types: &[PieceType],
 ) -> bool {
-    let mut current: SmallVec<[u8; 8]> = SmallVec::from_slice(origin_vals);
-    let enemy_occupancy = match attacker {
-        Player::White => &board.pieces.white_occupancy,
-        Player::Black => &board.pieces.black_occupancy,
+    // Find the matching DirectionInfo to get stride + mask
+    let origin_idx = match board.coords_to_index(origin_vals) {
+        Some(idx) => idx,
+        None => return false,
     };
 
-    let all_occupancy = board.pieces.white_occupancy.clone() | &board.pieces.black_occupancy;
-
-    loop {
-        if let Some(next) = apply_offset(&current, direction, board.side()) {
-            if let Some(idx) = board.coords_to_index(&next) {
-                if all_occupancy.get_bit(idx) {
-                    if enemy_occupancy.get_bit(idx) {
-                        for &t in threat_types {
-                            let match_found = match t {
-                                PieceType::Rook => board.pieces.rooks.get_bit(idx),
-                                PieceType::Bishop => board.pieces.bishops.get_bit(idx),
-                                PieceType::Queen => board.pieces.queens.get_bit(idx),
-                                _ => false,
-                            };
-                            if match_found {
-                                return true;
-                            }
-                        }
-                        return false;
-                    } else {
-                        return false;
-                    }
-                }
-                current = next;
-            } else {
-                break;
-            }
-        } else {
-            break;
+    // Try rook directions first, then bishop directions
+    for dir_info in board
+        .geo
+        .cache
+        .rook_directions
+        .iter()
+        .chain(board.geo.cache.bishop_directions.iter())
+    {
+        if dir_info.offsets == direction {
+            return scan_ray_for_threat_idx(board, origin_idx, dir_info, attacker, threat_types);
         }
     }
+
     false
 }

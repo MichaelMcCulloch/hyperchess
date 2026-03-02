@@ -513,7 +513,7 @@ impl MinimaxBot {
 
                 // Internal Iterative Deepening: at PV nodes with no TT move
                 // and sufficient depth, do a reduced search to get a move to try first.
-                let is_pv = stack[d].beta - stack[d].alpha > 1;
+                let is_pv = stack[d].beta > stack[d].alpha.saturating_add(1);
                 if is_pv && stack[d].tt_move.is_none() && stack[d].depth >= 5 {
                     stack[d].phase = SearchPhase::IidReturn;
 
@@ -657,7 +657,7 @@ impl MinimaxBot {
                 // Multi-cut pruning: at non-PV cut nodes with sufficient depth,
                 // try the first MC_M moves at reduced depth. If MC_C of them
                 // beat beta, this node almost certainly fails high — prune it.
-                let is_pv_node = stack[d].beta - stack[d].alpha > 1;
+                let is_pv_node = stack[d].beta > stack[d].alpha.saturating_add(1);
                 if !is_pv_node
                     && stack[d].depth >= MC_DEPTH_MIN
                     && !stack[d].in_check

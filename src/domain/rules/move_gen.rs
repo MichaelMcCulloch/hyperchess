@@ -1,4 +1,3 @@
-use smallvec::SmallVec;
 use std::cell::RefCell;
 
 use crate::domain::board::cache::DirectionInfo;
@@ -16,6 +15,8 @@ struct MoveGenBuffer {
     shifted_g: BitBoardLarge,
     shifted_p: BitBoardLarge,
     temp: BitBoardLarge,
+    all_occupancy: BitBoardLarge,
+    empty: BitBoardLarge,
 }
 
 thread_local! {
@@ -100,24 +101,39 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
     MOVE_GEN_BUFFER.with(|buffer_ref| {
         let mut buffer = buffer_ref.borrow_mut();
 
-        buffer
-            .generator
-            .ensure_capacity_and_clear(&board.pieces.white_occupancy);
-        buffer
-            .g
-            .ensure_capacity_and_clear(&board.pieces.white_occupancy);
-        buffer
-            .p
-            .ensure_capacity_and_clear(&board.pieces.white_occupancy);
-        buffer
-            .shifted_g
-            .ensure_capacity_and_clear(&board.pieces.white_occupancy);
-        buffer
-            .shifted_p
-            .ensure_capacity_and_clear(&board.pieces.white_occupancy);
-        buffer
-            .temp
-            .ensure_capacity_and_clear(&board.pieces.white_occupancy);
+        let template = &board.pieces.white_occupancy;
+        buffer.generator.ensure_capacity_and_clear(template);
+        buffer.g.ensure_capacity_and_clear(template);
+        buffer.p.ensure_capacity_and_clear(template);
+        buffer.shifted_g.ensure_capacity_and_clear(template);
+        buffer.shifted_p.ensure_capacity_and_clear(template);
+        buffer.all_occupancy.ensure_capacity_and_clear(template);
+        buffer.empty.ensure_capacity_and_clear(template);
+
+        // Compute all_occupancy and empty once for all pieces
+        board
+            .pieces
+            .white_occupancy
+            .or_into(&board.pieces.black_occupancy, &mut buffer.all_occupancy);
+        // Compute empty = !all_occupancy (masked to valid cells)
+        // Use manual loop to avoid borrow conflict
+        {
+            let total_cells = board.total_cells();
+            let len = buffer.all_occupancy.data.len();
+            let mut remaining = total_cells;
+            for i in 0..len {
+                let limit = std::cmp::min(64, remaining);
+                let mask = if limit == 64 {
+                    !0u64
+                } else {
+                    (1u64 << limit) - 1
+                };
+                buffer.empty.data[i] = (!buffer.all_occupancy.data[i]) & mask;
+                remaining = remaining.saturating_sub(64);
+            }
+        }
+        buffer.all_occupancy.recompute_range();
+        buffer.empty.recompute_range();
 
         let MoveGenBuffer {
             generator,
@@ -125,7 +141,9 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
             p,
             shifted_g,
             shifted_p,
-            temp,
+            temp: _,
+            all_occupancy,
+            empty,
         } = &mut *buffer;
 
         for i in occupancy.iter_indices() {
@@ -149,19 +167,23 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
             };
 
             match piece_type {
-                PieceType::Pawn => generate_pawn_moves(board, &coord, player, &mut moves),
+                PieceType::Pawn => {
+                    generate_pawn_moves(board, &coord, player, all_occupancy, &mut moves)
+                }
                 PieceType::Knight => generate_leaper_moves(
                     board,
+                    i,
                     &coord,
                     player,
-                    &board.geo.cache.knight_offsets,
+                    &board.geo.cache.knight_targets[i],
                     &mut moves,
                 ),
                 PieceType::King => generate_leaper_moves(
                     board,
+                    i,
                     &coord,
                     player,
-                    &board.geo.cache.king_offsets,
+                    &board.geo.cache.king_targets[i],
                     &mut moves,
                 ),
                 PieceType::Rook => generate_slider_moves_bitwise(
@@ -176,7 +198,7 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
                     p,
                     shifted_g,
                     shifted_p,
-                    temp,
+                    empty,
                 ),
                 PieceType::Bishop => generate_slider_moves_bitwise(
                     board,
@@ -190,7 +212,7 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
                     p,
                     shifted_g,
                     shifted_p,
-                    temp,
+                    empty,
                 ),
                 PieceType::Queen => {
                     generate_slider_moves_bitwise(
@@ -205,7 +227,7 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
                         p,
                         shifted_g,
                         shifted_p,
-                        temp,
+                        empty,
                     );
                     generate_slider_moves_bitwise(
                         board,
@@ -219,7 +241,7 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
                         p,
                         shifted_g,
                         shifted_p,
-                        temp,
+                        empty,
                     );
                 }
             }
@@ -242,28 +264,10 @@ fn generate_slider_moves_bitwise(
     p: &mut BitBoardLarge,
     shifted_g: &mut BitBoardLarge,
     shifted_p: &mut BitBoardLarge,
-    temp: &mut BitBoardLarge,
+    empty: &BitBoardLarge,
 ) {
-    for x in generator.data.iter_mut() {
-        *x = 0;
-    }
+    generator.ensure_capacity_and_clear(empty);
     generator.set_bit(origin_idx);
-
-    let all_occupancy = &board.pieces.white_occupancy | &board.pieces.black_occupancy;
-
-    let mut empty_data = SmallVec::with_capacity(all_occupancy.data.len());
-    let mut remaining = board.total_cells();
-    for val in &all_occupancy.data {
-        let limit = std::cmp::min(64, remaining);
-        let mask = if limit == 64 {
-            !0u64
-        } else {
-            (1u64 << limit) - 1
-        };
-        empty_data.push((!val) & mask);
-        remaining = remaining.saturating_sub(64);
-    }
-    let empty = BitBoardLarge { data: empty_data };
 
     let own_occupancy = match player {
         Player::White => &board.pieces.white_occupancy,
@@ -271,15 +275,22 @@ fn generate_slider_moves_bitwise(
     };
 
     for dir_info in directions {
-        let stride = calculate_stride(board, &dir_info.offsets);
-        if stride == 0 {
+        if dir_info.stride == 0 {
             continue;
         }
 
         g.copy_from(generator);
-        p.copy_from(&empty);
+        p.copy_from(empty);
 
-        kogge_stone_fill_inplace(g, p, stride, board, dir_info, shifted_g, shifted_p, temp);
+        kogge_stone_fill_inplace(
+            g,
+            p,
+            dir_info.stride,
+            board,
+            dir_info,
+            shifted_g,
+            shifted_p,
+        );
 
         for to_idx in g.iter_indices() {
             if to_idx == origin_idx {
@@ -308,7 +319,6 @@ pub fn kogge_stone_fill_inplace(
 
     shifted_g: &mut BitBoardLarge,
     shifted_p: &mut BitBoardLarge,
-    temp: &mut BitBoardLarge,
 ) {
     let mut shift_amt = 1;
 
@@ -323,25 +333,21 @@ pub fn kogge_stone_fill_inplace(
                 .get_unchecked(mask_base_idx + shift_amt)
         };
 
-        shifted_g.copy_from(g);
-        *shifted_g &= mask;
+        shifted_g.copy_and(g, mask);
         if stride > 0 {
             *shifted_g <<= stride.unsigned_abs() * shift_amt;
         } else {
             *shifted_g >>= stride.unsigned_abs() * shift_amt;
         }
 
-        shifted_p.copy_from(p);
-        *shifted_p &= mask;
+        shifted_p.copy_and(p, mask);
         if stride > 0 {
             *shifted_p <<= stride.unsigned_abs() * shift_amt;
         } else {
             *shifted_p >>= stride.unsigned_abs() * shift_amt;
         }
 
-        temp.copy_from(shifted_g);
-        *temp &= p;
-        *g |= temp;
+        g.or_and_assign(shifted_g, p);
 
         *p &= shifted_p;
 
@@ -467,31 +473,35 @@ fn generate_castling_moves(board: &Board, player: Player, moves: &mut MoveList) 
 
 fn generate_leaper_moves(
     board: &Board,
+    _origin_idx: usize,
     origin: &Coordinate,
     player: Player,
-    offsets: &[Vec<isize>],
+    targets: &[usize],
     moves: &mut MoveList,
 ) {
     let same_occupancy = match player {
         Player::White => &board.pieces.white_occupancy,
         Player::Black => &board.pieces.black_occupancy,
     };
-    for offset in offsets {
-        if let Some(target_coords) = apply_offset(&origin.values, offset, board.side())
-            && let Some(target_idx) = board.coords_to_index(&target_coords)
-            && !same_occupancy.get_bit(target_idx)
-        {
+    for &target_idx in targets {
+        if !same_occupancy.get_bit(target_idx) {
+            let to_coords = board.index_to_coords(target_idx);
             moves.push(Move {
                 from: origin.clone(),
-                to: Coordinate::new(target_coords),
+                to: Coordinate::new(to_coords),
                 promotion: None,
             });
         }
     }
 }
 
-fn generate_pawn_moves(board: &Board, origin: &Coordinate, player: Player, moves: &mut MoveList) {
-    let all_occupancy = &board.pieces.white_occupancy | &board.pieces.black_occupancy;
+fn generate_pawn_moves(
+    board: &Board,
+    origin: &Coordinate,
+    player: Player,
+    all_occupancy: &BitBoardLarge,
+    moves: &mut MoveList,
+) {
     let enemy_occupancy = match player.opponent() {
         Player::White => &board.pieces.white_occupancy,
         Player::Black => &board.pieces.black_occupancy,

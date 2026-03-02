@@ -2,7 +2,7 @@ use smallvec::SmallVec;
 
 use crate::domain::board::Board;
 use crate::domain::models::{PieceType, Player};
-use crate::domain::rules::{self, Rules, attacks};
+use crate::domain::rules::{Rules, attacks};
 
 // ── Material values ──────────────────────────────────────────────────
 
@@ -369,6 +369,7 @@ impl Evaluator {
                 Some(k) => k,
                 None => continue,
             };
+            let king_idx = board.coords_to_index(&king_coord.values).unwrap();
 
             let my_occ = match player {
                 Player::White => &board.pieces.white_occupancy,
@@ -386,22 +387,20 @@ impl Evaluator {
             };
 
             // ── Signal 1: Pawn shelter (forward zone, pawns only) ──
-
+            // Use precomputed king targets + filter forward offsets by checking
+            // coordinate difference on axis 0.
             let mut shelter_count = 0i32;
-            for offset in &board.geo.cache.king_offsets {
+            let king_rank = king_coord.values[0];
+            for &neighbor_idx in &board.geo.cache.king_targets[king_idx] {
+                let neighbor_rank = board.geo.cache.index_to_coords[neighbor_idx][0];
                 let is_forward = match player {
-                    Player::White => offset[0] > 0,
-                    Player::Black => offset[0] < 0,
+                    Player::White => neighbor_rank > king_rank,
+                    Player::Black => neighbor_rank < king_rank,
                 };
                 if !is_forward {
                     continue;
                 }
-                if let Some(neighbor) =
-                    rules::apply_offset(&king_coord.values, offset, board.side())
-                    && let Some(idx) = board.coords_to_index(&neighbor)
-                    && my_occ.get_bit(idx)
-                    && board.pieces.pawns.get_bit(idx)
-                {
+                if my_occ.get_bit(neighbor_idx) && board.pieces.pawns.get_bit(neighbor_idx) {
                     shelter_count += 1;
                 }
             }
@@ -415,15 +414,13 @@ impl Evaluator {
             let mut open_count = 0i32;
             let mut attacked_count = 0i32;
 
-            // Rook (orthogonal) directions
             for dir_info in &board.geo.cache.rook_directions {
-                let dir = &dir_info.offsets;
-                if !Self::ray_has_pawn_shield(board, &king_coord.values, dir, my_occ, max_scan) {
+                if !Self::ray_has_pawn_shield_idx(board, king_idx, dir_info, my_occ, max_scan) {
                     open_count += 1;
-                    if attacks::scan_ray_for_threat(
+                    if attacks::scan_ray_for_threat_idx(
                         board,
-                        &king_coord.values,
-                        dir,
+                        king_idx,
+                        dir_info,
                         enemy,
                         &[PieceType::Rook, PieceType::Queen],
                     ) {
@@ -432,15 +429,13 @@ impl Evaluator {
                 }
             }
 
-            // Bishop (diagonal) directions
             for dir_info in &board.geo.cache.bishop_directions {
-                let dir = &dir_info.offsets;
-                if !Self::ray_has_pawn_shield(board, &king_coord.values, dir, my_occ, max_scan) {
+                if !Self::ray_has_pawn_shield_idx(board, king_idx, dir_info, my_occ, max_scan) {
                     open_count += 1;
-                    if attacks::scan_ray_for_threat(
+                    if attacks::scan_ray_for_threat_idx(
                         board,
-                        &king_coord.values,
-                        dir,
+                        king_idx,
+                        dir_info,
                         enemy,
                         &[PieceType::Bishop, PieceType::Queen],
                     ) {
@@ -491,21 +486,17 @@ impl Evaluator {
             // ── Signal 4: King zone enemy contact (weighted by piece type) ──
 
             let mut contact_score = 0i32;
-            for offset in &board.geo.cache.king_offsets {
-                if let Some(neighbor) =
-                    rules::apply_offset(&king_coord.values, offset, board.side())
-                    && let Some(idx) = board.coords_to_index(&neighbor)
-                    && enemy_occ.get_bit(idx)
-                {
-                    let w = if board.pieces.queens.get_bit(idx) {
+            for &neighbor_idx in &board.geo.cache.king_targets[king_idx] {
+                if enemy_occ.get_bit(neighbor_idx) {
+                    let w = if board.pieces.queens.get_bit(neighbor_idx) {
                         6
-                    } else if board.pieces.rooks.get_bit(idx) {
+                    } else if board.pieces.rooks.get_bit(neighbor_idx) {
                         3
-                    } else if board.pieces.bishops.get_bit(idx) {
+                    } else if board.pieces.bishops.get_bit(neighbor_idx) {
                         2
-                    } else if board.pieces.knights.get_bit(idx) {
+                    } else if board.pieces.knights.get_bit(neighbor_idx) {
                         2
-                    } else if board.pieces.pawns.get_bit(idx) {
+                    } else if board.pieces.pawns.get_bit(neighbor_idx) {
                         1
                     } else {
                         0
@@ -523,33 +514,29 @@ impl Evaluator {
         (mg, eg)
     }
 
-    /// Walk up to `max_steps` along `direction` from `origin`. Returns true if
-    /// a friendly pawn is found before any other piece or board edge.
-    fn ray_has_pawn_shield(
+    /// Index-based pawn shield scan — no allocations.
+    fn ray_has_pawn_shield_idx(
         board: &Board,
-        origin: &[u8],
-        direction: &[isize],
+        origin_idx: usize,
+        dir_info: &crate::domain::board::cache::DirectionInfo,
         friendly_occ: &crate::domain::board::BitBoardLarge,
         max_steps: usize,
     ) -> bool {
-        let mut current: SmallVec<[u8; 8]> = SmallVec::from_slice(origin);
+        let stride = dir_info.stride;
+        let mask = &board.geo.cache.validity_masks[dir_info.id * board.side() + 1];
+        let mut idx = origin_idx;
         for _ in 0..max_steps {
-            match rules::apply_offset(&current, direction, board.side()) {
-                Some(next) => match board.coords_to_index(&next) {
-                    Some(idx) => {
-                        if friendly_occ.get_bit(idx) && board.pieces.pawns.get_bit(idx) {
-                            return true;
-                        }
-                        let occupied = board.pieces.white_occupancy.get_bit(idx)
-                            || board.pieces.black_occupancy.get_bit(idx);
-                        if occupied {
-                            return false;
-                        }
-                        current = next;
-                    }
-                    None => return false,
-                },
-                None => return false,
+            if !mask.get_bit(idx) {
+                return false;
+            }
+            idx = (idx as isize + stride) as usize;
+            if friendly_occ.get_bit(idx) && board.pieces.pawns.get_bit(idx) {
+                return true;
+            }
+            if board.pieces.white_occupancy.get_bit(idx)
+                || board.pieces.black_occupancy.get_bit(idx)
+            {
+                return false;
             }
         }
         false
@@ -593,7 +580,7 @@ impl Evaluator {
                 }
 
                 // Connected pawn: protected by a friendly pawn
-                if Self::is_connected_pawn(board, &coords, player) {
+                if Self::is_connected_pawn(board, pawn_idx, player) {
                     mg += sign * CONNECTED_PAWN_BONUS_MG;
                     eg += sign * CONNECTED_PAWN_BONUS_EG;
                 }
@@ -701,24 +688,20 @@ impl Evaluator {
 
     /// A pawn is connected if a friendly pawn protects it (uses N-dim pawn
     /// capture offsets from the geometry cache).
-    fn is_connected_pawn(board: &Board, coords: &SmallVec<[u8; 8]>, player: Player) -> bool {
+    fn is_connected_pawn(board: &Board, pawn_idx: usize, player: Player) -> bool {
         // We look for a friendly pawn that *could attack* this square.
-        // Use the opponent's capture offsets from this square to find
+        // Use the opponent's capture targets from this square to find
         // squares where a defending pawn would be.
-        let defender_offsets = match player {
-            Player::White => &board.geo.cache.black_pawn_capture_offsets,
-            Player::Black => &board.geo.cache.white_pawn_capture_offsets,
+        let defender_targets = match player {
+            Player::White => &board.geo.cache.black_pawn_capture_targets[pawn_idx],
+            Player::Black => &board.geo.cache.white_pawn_capture_targets[pawn_idx],
         };
         let my_occ = match player {
             Player::White => &board.pieces.white_occupancy,
             Player::Black => &board.pieces.black_occupancy,
         };
-        for offset in defender_offsets {
-            if let Some(src) = rules::apply_offset(coords, offset, board.side())
-                && let Some(idx) = board.coords_to_index(&src)
-                && my_occ.get_bit(idx)
-                && board.pieces.pawns.get_bit(idx)
-            {
+        for &idx in defender_targets {
+            if my_occ.get_bit(idx) && board.pieces.pawns.get_bit(idx) {
                 return true;
             }
         }
@@ -771,9 +754,8 @@ impl Evaluator {
                     continue;
                 }
 
-                let coords = board.index_to_coords(idx);
-                let has_friendly = Self::file_column_has_pawn(board, &coords, player);
-                let has_enemy = Self::file_column_has_pawn(board, &coords, player.opponent());
+                let has_friendly = Self::file_column_has_pawn(board, idx, player);
+                let has_enemy = Self::file_column_has_pawn(board, idx, player.opponent());
 
                 if !has_friendly && !has_enemy {
                     mg += sign * ROOK_OPEN_FILE_BONUS_MG;
@@ -790,18 +772,16 @@ impl Evaluator {
 
     /// Check if any pawn of `player` exists on the same file column
     /// (same Axis 1 + same higher-dim coords, any rank on Axis 0).
-    fn file_column_has_pawn(board: &Board, coords: &SmallVec<[u8; 8]>, player: Player) -> bool {
+    /// Uses index arithmetic: axis 0 has stride 1 in the indexing scheme.
+    fn file_column_has_pawn(board: &Board, piece_idx: usize, player: Player) -> bool {
         let occ = match player {
             Player::White => &board.pieces.white_occupancy,
             Player::Black => &board.pieces.black_occupancy,
         };
+        let base = piece_idx - (piece_idx % board.side());
         for rank in 0..board.side() {
-            let mut check = coords.clone();
-            check[0] = rank as u8;
-            if let Some(idx) = board.coords_to_index(&check)
-                && occ.get_bit(idx)
-                && board.pieces.pawns.get_bit(idx)
-            {
+            let idx = base + rank;
+            if occ.get_bit(idx) && board.pieces.pawns.get_bit(idx) {
                 return true;
             }
         }
