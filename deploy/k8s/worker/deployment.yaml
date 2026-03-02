@@ -26,7 +26,7 @@ spec:
           - name: HYPERCHESS_COMPUTE_MINUTES
             value: "1"
           - name: HYPERCHESS_COMPUTE_CONCURRENCY
-            value: "4"
+            value: "12"
           - name: HYPERCHESS_API_PORT
             value: "3123"
           - name: HYPERCHESS_DISTRIBUTED_ENABLED
