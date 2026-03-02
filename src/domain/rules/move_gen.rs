@@ -346,14 +346,18 @@ pub fn kogge_stone_fill_inplace(
                 raw_and_shl(p_data, m_data, sp_data, len, chunks_shift, bits_shift);
             }
 
-            // g |= shifted_g & p
+            // g |= shifted_g & p; p &= shifted_p (fused, with early-exit on dead p)
+            let mut any_p = false;
             for i in 0..len {
                 *g_data.add(i) |= *sg_data.add(i) & *p_data.add(i);
+                let new_p = *p_data.add(i) & *sp_data.add(i);
+                *p_data.add(i) = new_p;
+                any_p |= new_p != 0;
             }
 
-            // p &= shifted_p
-            for i in 0..len {
-                *p_data.add(i) &= *sp_data.add(i);
+            if !any_p {
+                // p is all-zero — no further propagation possible.
+                break;
             }
         }
 

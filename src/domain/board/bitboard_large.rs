@@ -246,6 +246,31 @@ impl BitBoardLarge {
         <Self as BoardRepresentation>::copy_from(self, other)
     }
 
+    /// Lowest u64 word index that may be non-zero (inclusive).
+    #[inline(always)]
+    pub fn lo(&self) -> usize {
+        self.lo as usize
+    }
+
+    /// Highest u64 word index that may be non-zero (inclusive).
+    #[inline(always)]
+    pub fn hi(&self) -> usize {
+        self.hi as usize
+    }
+
+    /// Whether the tracked range is empty (all-zero board).
+    #[inline(always)]
+    pub fn is_range_empty(&self) -> bool {
+        self.lo > self.hi
+    }
+
+    /// Set the lo/hi range directly (must uphold invariant: words outside are zero).
+    #[inline(always)]
+    pub fn set_range(&mut self, lo: usize, hi: usize) {
+        self.lo = lo as u16;
+        self.hi = hi as u16;
+    }
+
     pub fn zero_like(&self) -> Self {
         <Self as BoardRepresentation>::zero_like(self)
     }
