@@ -86,7 +86,7 @@ fn build_metrics_table(max_dim: usize, side: usize) -> Vec<[(usize, usize, usize
 
     // dim 2
     let mut dim2 = [(0, 0, 0, 0); 4];
-    for flag_idx in 0..4 {
+    for (flag_idx, dim2_entry) in dim2.iter_mut().enumerate() {
         let is_top = flag_idx & 2 != 0;
         let is_left = flag_idx & 1 != 0;
 
@@ -95,7 +95,7 @@ fn build_metrics_table(max_dim: usize, side: usize) -> Vec<[(usize, usize, usize
         let label_w = if is_left { 2 } else { 0 };
         let label_h = if is_top { 1 } else { 0 };
 
-        dim2[flag_idx] = (body_w + label_w, body_h + label_h, label_w, label_h);
+        *dim2_entry = (body_w + label_w, body_h + label_h, label_w, label_h);
     }
     result.push(dim2);
 
@@ -104,7 +104,7 @@ fn build_metrics_table(max_dim: usize, side: usize) -> Vec<[(usize, usize, usize
         let mut entry = [(0, 0, 0, 0); 4];
         let prev = &result[d - 1];
 
-        for flag_idx in 0..4 {
+        for (flag_idx, entry_val) in entry.iter_mut().enumerate() {
             let is_top = flag_idx & 2 != 0;
             let is_left = flag_idx & 1 != 0;
 
@@ -125,7 +125,7 @@ fn build_metrics_table(max_dim: usize, side: usize) -> Vec<[(usize, usize, usize
                 let content_off_x = c0_off_x;
                 let content_off_y = label_h + c0_off_y;
 
-                entry[flag_idx] = (total_w, total_h, content_off_x, content_off_y);
+                *entry_val = (total_w, total_h, content_off_x, content_off_y);
             } else {
                 // Even dim: vertical layout
                 let label_w = if is_left { 2 } else { 0 };
@@ -137,7 +137,7 @@ fn build_metrics_table(max_dim: usize, side: usize) -> Vec<[(usize, usize, usize
                 let content_off_x = label_w + c0_off_x;
                 let content_off_y = c0_off_y;
 
-                entry[flag_idx] = (total_w, total_h, content_off_x, content_off_y);
+                *entry_val = (total_w, total_h, content_off_x, content_off_y);
             }
         }
         result.push(entry);
@@ -243,6 +243,7 @@ struct DrawFrame {
 }
 
 /// Iterative board drawing using an explicit stack instead of recursion.
+#[allow(clippy::too_many_arguments)]
 fn draw_board(
     board: &Board,
     dim: usize,

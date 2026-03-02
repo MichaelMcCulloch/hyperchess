@@ -299,6 +299,7 @@ struct ShallowFrame {
     pending_unmake: Option<(Move, UnmakeInfo)>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn minimax_shallow(
     board: &mut Board,
     depth: usize,

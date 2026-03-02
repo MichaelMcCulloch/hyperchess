@@ -42,25 +42,21 @@ impl SEE {
 
         board_clone.clear_cell(&attacker_sq);
 
-        loop {
-            if let Some((val, from_idx)) =
-                board_clone.get_smallest_attacker(&target_sq, side_to_move)
-            {
-                let captured_val = attacking_piece_val;
+        while let Some((val, from_idx)) =
+            board_clone.get_smallest_attacker(&target_sq, side_to_move)
+        {
+            let captured_val = attacking_piece_val;
 
-                let last_gain = *gain.last().unwrap();
-                gain.push(captured_val - last_gain);
+            let last_gain = *gain.last().unwrap();
+            gain.push(captured_val - last_gain);
 
-                attacking_piece_val = val;
-                side_to_move = side_to_move.opponent();
+            attacking_piece_val = val;
+            side_to_move = side_to_move.opponent();
 
-                let coords = board_clone.index_to_coords(from_idx);
-                board_clone.clear_cell(&Coordinate::new(coords.to_vec()));
+            let coords = board_clone.index_to_coords(from_idx);
+            board_clone.clear_cell(&Coordinate::new(coords.to_vec()));
 
-                if val >= 20000 {
-                    break;
-                }
-            } else {
+            if val >= 20000 {
                 break;
             }
         }

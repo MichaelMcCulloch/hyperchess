@@ -16,7 +16,7 @@ impl SymmetryHandler {
             for ref_mask in 0..num_reflections {
                 let mut map = vec![0; total_cells];
 
-                for i in 0..total_cells {
+                for (i, map_entry) in map.iter_mut().enumerate().take(total_cells) {
                     let coords = index_to_coords(i, dimension, side);
 
                     let mut new_coords = vec![0; dimension];
@@ -30,7 +30,7 @@ impl SymmetryHandler {
                         }
                     }
 
-                    map[i] = coords_to_index(&new_coords, side);
+                    *map_entry = coords_to_index(&new_coords, side);
                 }
                 maps.push(map);
             }

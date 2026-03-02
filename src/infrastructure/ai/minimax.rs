@@ -77,6 +77,7 @@ impl MinimaxBot {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn sort_moves(
         &self,
         board: &Board,
@@ -164,6 +165,7 @@ impl MinimaxBot {
 
     /// Iterative minimax with PVS, LMR, null-move pruning.
     /// Uses an explicit stack instead of call-stack recursion.
+    #[allow(clippy::too_many_arguments)]
     fn minimax(
         &self,
         board: &mut Board,
@@ -896,6 +898,7 @@ impl MinimaxBot {
     }
 
     /// Process the result of a child search for a move.
+    #[allow(clippy::too_many_arguments)]
     fn process_move_result(
         &self,
         frame: &mut SearchFrame,

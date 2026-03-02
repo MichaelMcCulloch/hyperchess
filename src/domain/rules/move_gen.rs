@@ -356,8 +356,8 @@ pub fn kogge_stone_fill_inplace(
 pub fn calculate_stride(board: &Board, dir: &[isize]) -> isize {
     let mut stride = 0;
     let mut multiplier = 1;
-    for i in 0..board.dimension() {
-        stride += dir[i] * multiplier as isize;
+    for d_val in dir.iter().take(board.dimension()) {
+        stride += d_val * multiplier as isize;
         multiplier *= board.side();
     }
     stride

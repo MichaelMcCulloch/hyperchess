@@ -224,9 +224,7 @@ impl<R: BoardRepresentation> GenericBoard<R> {
             if !occupied {
                 continue;
             }
-            if self.pieces.knights.get_bit(idx) {
-                phase += 1;
-            } else if self.pieces.bishops.get_bit(idx) {
+            if self.pieces.knights.get_bit(idx) || self.pieces.bishops.get_bit(idx) {
                 phase += 1;
             } else if self.pieces.rooks.get_bit(idx) {
                 phase += 2;
@@ -702,29 +700,25 @@ impl<R: BoardRepresentation> GenericBoard<R> {
             Player::Black => &self.pieces.black_occupancy,
         };
 
-        loop {
-            if let Some(next) =
-                crate::domain::rules::Rules::apply_offset(&current, dir, self.geo.side)
-            {
-                if let Some(idx) = self.coords_to_index(&next) {
-                    if occupancy.get_bit(idx) {
-                        if my_occ.get_bit(idx) {
-                            let is_type = match pt {
-                                PieceType::Bishop => self.pieces.bishops.get_bit(idx),
-                                PieceType::Rook => self.pieces.rooks.get_bit(idx),
-                                PieceType::Queen => self.pieces.queens.get_bit(idx),
-                                _ => false,
-                            };
-                            if is_type {
-                                return Some(idx);
-                            }
+        while let Some(next) =
+            crate::domain::rules::Rules::apply_offset(&current, dir, self.geo.side)
+        {
+            if let Some(idx) = self.coords_to_index(&next) {
+                if occupancy.get_bit(idx) {
+                    if my_occ.get_bit(idx) {
+                        let is_type = match pt {
+                            PieceType::Bishop => self.pieces.bishops.get_bit(idx),
+                            PieceType::Rook => self.pieces.rooks.get_bit(idx),
+                            PieceType::Queen => self.pieces.queens.get_bit(idx),
+                            _ => false,
+                        };
+                        if is_type {
+                            return Some(idx);
                         }
-                        break;
                     }
-                    current = next;
-                } else {
                     break;
                 }
+                current = next;
             } else {
                 break;
             }

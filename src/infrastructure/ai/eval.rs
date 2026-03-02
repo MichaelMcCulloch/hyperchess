@@ -487,9 +487,9 @@ impl Evaluator {
                         6
                     } else if board.pieces.rooks.get_bit(neighbor_idx) {
                         3
-                    } else if board.pieces.bishops.get_bit(neighbor_idx) {
-                        2
-                    } else if board.pieces.knights.get_bit(neighbor_idx) {
+                    } else if board.pieces.bishops.get_bit(neighbor_idx)
+                        || board.pieces.knights.get_bit(neighbor_idx)
+                    {
                         2
                     } else if board.pieces.pawns.get_bit(neighbor_idx) {
                         1

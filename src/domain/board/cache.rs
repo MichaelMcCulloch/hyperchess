@@ -72,8 +72,7 @@ impl<R: BoardRepresentation> GenericBoardCache<R> {
                     let mut mask_bb = R::new_empty(dimension, side);
 
                     if step > 0 {
-                        for i in 0..total_cells {
-                            let coords = &index_to_coords[i];
+                        for (i, coords) in index_to_coords.iter().enumerate().take(total_cells) {
                             let mut valid = true;
                             for (c, &d) in coords.iter().zip(dir_vec.iter()) {
                                 let res = *c as isize + (d * step as isize);
@@ -92,8 +91,8 @@ impl<R: BoardRepresentation> GenericBoardCache<R> {
 
                 let mut stride: isize = 0;
                 let mut multiplier: usize = 1;
-                for d in 0..dimension {
-                    stride += dir_vec[d] * multiplier as isize;
+                for d_val in dir_vec.iter().take(dimension) {
+                    stride += d_val * multiplier as isize;
                     multiplier *= side;
                 }
 
@@ -118,8 +117,7 @@ impl<R: BoardRepresentation> GenericBoardCache<R> {
 
         let precompute_targets = |offsets: &[Vec<isize>]| -> Vec<SmallVec<[usize; 16]>> {
             let mut targets: Vec<SmallVec<[usize; 16]>> = Vec::with_capacity(total_cells);
-            for i in 0..total_cells {
-                let coords = &index_to_coords[i];
+            for coords in index_to_coords.iter().take(total_cells) {
                 let mut cell_targets = SmallVec::new();
                 for offset in offsets {
                     let mut valid = true;

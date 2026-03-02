@@ -104,8 +104,8 @@ fn test_castling_3d_blocked() {
         .iter()
         .find(|m| m.to == castling_target && m.from == king_pos);
 
-    if castle_move.is_some() {
-        eprintln!("Castle move found: {:?}", castle_move.unwrap());
+    if let Some(cm) = &castle_move {
+        eprintln!("Castle move found: {:?}", cm);
         eprintln!("All moves: {:?}", moves);
     }
 
