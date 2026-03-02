@@ -33,3 +33,10 @@ profile4d: build-profile $(PROFILES_DIR)
 	perf report -i $(PROFILES_DIR)/perf_4d.data --stdio --no-children --percent-limit 1.0
 
 profile: profile2d profile3d profile4d
+
+test:
+	RUSTFLAGS="-C target-cpu=native" cargo test --release
+
+fixmat:
+	cargo clippy --fix --allow-dirty --all-targets --all-features
+	cargo fmt

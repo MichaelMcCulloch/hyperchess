@@ -515,22 +515,27 @@ impl BitBoardLarge {
                     *dptr.add(dst_hi) = top_carry;
                 }
             }
-            // Process words top-down to handle carry correctly
+            // Process words top-down, caching AND to avoid recomputation.
             // Each dst word = (and_word[src_i] << bits_shift) | (and_word[src_i-1] >> inv_shift)
+            let mut cur_and = top_and;
             for src_i in (src_lo..=src_hi).rev() {
                 let dst_i = src_i + chunks_shift;
                 if dst_i >= len {
+                    // Recompute cur_and for the next iteration's prev
+                    if src_i > src_lo {
+                        cur_and = unsafe { *aptr.add(src_i - 1) & *bptr.add(src_i - 1) };
+                    }
                     continue;
                 }
-                let and_val = unsafe { *aptr.add(src_i) & *bptr.add(src_i) };
                 let prev_and = if src_i > src_lo {
                     unsafe { *aptr.add(src_i - 1) & *bptr.add(src_i - 1) }
                 } else {
                     0
                 };
                 unsafe {
-                    *dptr.add(dst_i) = (and_val << bits_shift) | (prev_and >> inv_shift);
+                    *dptr.add(dst_i) = (cur_and << bits_shift) | (prev_and >> inv_shift);
                 }
+                cur_and = prev_and;
             }
         }
 
@@ -603,21 +608,24 @@ impl BitBoardLarge {
                     *dptr.add(dst_lo) = bot_carry;
                 }
             }
-            // Process words bottom-up
-            for src_i in src_lo..=src_hi {
-                if src_i < chunks_shift {
-                    continue;
-                }
+            // Process words bottom-up, caching AND to avoid recomputation.
+            let start = if src_lo >= chunks_shift {
+                src_lo
+            } else {
+                chunks_shift
+            };
+            let mut cur_and = unsafe { *aptr.add(start) & *bptr.add(start) };
+            for src_i in start..=src_hi {
                 let dst_i = src_i - chunks_shift;
-                let and_val = unsafe { *aptr.add(src_i) & *bptr.add(src_i) };
                 let next_and = if src_i < src_hi {
                     unsafe { *aptr.add(src_i + 1) & *bptr.add(src_i + 1) }
                 } else {
                     0
                 };
                 unsafe {
-                    *dptr.add(dst_i) = (and_val >> bits_shift) | (next_and << inv_shift);
+                    *dptr.add(dst_i) = (cur_and >> bits_shift) | (next_and << inv_shift);
                 }
+                cur_and = next_and;
             }
         }
 

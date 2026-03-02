@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::UnsafeCell;
 
 use crate::domain::board::cache::DirectionInfo;
 use crate::domain::board::{BitBoardLarge, Board};
@@ -19,7 +19,7 @@ struct MoveGenBuffer {
 }
 
 thread_local! {
-    static MOVE_GEN_BUFFER: RefCell<MoveGenBuffer> = RefCell::new(MoveGenBuffer::default());
+    static MOVE_GEN_BUFFER: UnsafeCell<MoveGenBuffer> = UnsafeCell::new(MoveGenBuffer::default());
 }
 
 pub fn generate_legal_moves(board: &mut Board, player: Player) -> MoveList {
@@ -97,8 +97,9 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
         Player::Black => &board.pieces.black_occupancy,
     };
 
-    MOVE_GEN_BUFFER.with(|buffer_ref| {
-        let mut buffer = buffer_ref.borrow_mut();
+    // SAFETY: thread_local guarantees single-threaded access; no re-entrant calls.
+    MOVE_GEN_BUFFER.with(|buffer_cell| {
+        let buffer = unsafe { &mut *buffer_cell.get() };
 
         let template = &board.pieces.white_occupancy;
         buffer.generator.ensure_capacity_and_clear(template);
@@ -142,7 +143,7 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
             shifted_p,
             all_occupancy,
             empty,
-        } = &mut *buffer;
+        } = buffer;
 
         for i in occupancy.iter_indices() {
             let coord = Coordinate::new(board.geo.cache.index_to_coords[i].clone());
@@ -308,10 +309,14 @@ pub fn kogge_stone_fill_inplace(
     shifted_g: &mut BitBoardLarge,
     shifted_p: &mut BitBoardLarge,
 ) {
-    let mut shift_amt = 1;
+    let len = g.data.len();
+    debug_assert_eq!(len, p.data.len());
 
     let mask_base_idx = dir_info.id * board.side();
+    let abs_stride = stride.unsigned_abs();
+    let shift_right = stride < 0;
 
+    let mut shift_amt = 1;
     while shift_amt < board.side() {
         let mask = unsafe {
             board
@@ -321,22 +326,41 @@ pub fn kogge_stone_fill_inplace(
                 .get_unchecked(mask_base_idx + shift_amt)
         };
 
-        let total_shift = stride.unsigned_abs() * shift_amt;
-        if stride > 0 {
-            shifted_g.copy_and_shl(g, mask, total_shift);
-            shifted_p.copy_and_shl(p, mask, total_shift);
-        } else {
-            shifted_g.copy_and_shr(g, mask, total_shift);
-            shifted_p.copy_and_shr(p, mask, total_shift);
+        let total_shift = abs_stride * shift_amt;
+        let chunks_shift = total_shift / 64;
+        let bits_shift = total_shift % 64;
+
+        // Operate directly on raw data slices, bypassing range tracking.
+        let g_data = g.data.as_mut_ptr();
+        let p_data = p.data.as_mut_ptr();
+        let sg_data = shifted_g.data.as_mut_ptr();
+        let sp_data = shifted_p.data.as_mut_ptr();
+        let m_data = mask.data.as_ptr();
+
+        unsafe {
+            if shift_right {
+                raw_and_shr(g_data, m_data, sg_data, len, chunks_shift, bits_shift);
+                raw_and_shr(p_data, m_data, sp_data, len, chunks_shift, bits_shift);
+            } else {
+                raw_and_shl(g_data, m_data, sg_data, len, chunks_shift, bits_shift);
+                raw_and_shl(p_data, m_data, sp_data, len, chunks_shift, bits_shift);
+            }
+
+            // g |= shifted_g & p
+            for i in 0..len {
+                *g_data.add(i) |= *sg_data.add(i) & *p_data.add(i);
+            }
+
+            // p &= shifted_p
+            for i in 0..len {
+                *p_data.add(i) &= *sp_data.add(i);
+            }
         }
-
-        g.or_and_assign(shifted_g, p);
-
-        *p &= shifted_p;
 
         shift_amt *= 2;
     }
 
+    // Final mask and shift
     let mask = unsafe {
         board
             .geo
@@ -346,10 +370,95 @@ pub fn kogge_stone_fill_inplace(
     };
 
     *g &= mask;
-    if stride > 0 {
-        *g <<= stride.unsigned_abs();
+    if shift_right {
+        *g >>= abs_stride;
     } else {
-        *g >>= stride.unsigned_abs();
+        *g <<= abs_stride;
+    }
+
+    // Recompute ranges since we bypassed range tracking
+    g.recompute_range();
+    p.recompute_range();
+}
+
+/// Raw `dst = (a & b) >> shift` on u64 slices. No bounds/range tracking.
+#[inline(always)]
+unsafe fn raw_and_shr(
+    a: *const u64,
+    b: *const u64,
+    dst: *mut u64,
+    len: usize,
+    chunks_shift: usize,
+    bits_shift: usize,
+) {
+    unsafe {
+        if bits_shift == 0 {
+            // Pure chunk shift
+            for i in 0..len {
+                let src = i + chunks_shift;
+                *dst.add(i) = if src < len {
+                    *a.add(src) & *b.add(src)
+                } else {
+                    0
+                };
+            }
+        } else {
+            let inv = 64 - bits_shift;
+            for i in 0..len {
+                let src = i + chunks_shift;
+                let cur = if src < len {
+                    *a.add(src) & *b.add(src)
+                } else {
+                    0
+                };
+                let next = if src + 1 < len {
+                    *a.add(src + 1) & *b.add(src + 1)
+                } else {
+                    0
+                };
+                *dst.add(i) = (cur >> bits_shift) | (next << inv);
+            }
+        }
+    }
+}
+
+/// Raw `dst = (a & b) << shift` on u64 slices. No bounds/range tracking.
+#[inline(always)]
+unsafe fn raw_and_shl(
+    a: *const u64,
+    b: *const u64,
+    dst: *mut u64,
+    len: usize,
+    chunks_shift: usize,
+    bits_shift: usize,
+) {
+    unsafe {
+        if bits_shift == 0 {
+            for i in (0..len).rev() {
+                *dst.add(i) = if i >= chunks_shift {
+                    *a.add(i - chunks_shift) & *b.add(i - chunks_shift)
+                } else {
+                    0
+                };
+            }
+        } else {
+            let inv = 64 - bits_shift;
+            for i in (0..len).rev() {
+                let cur = if i >= chunks_shift {
+                    let src = i - chunks_shift;
+                    *a.add(src) & *b.add(src)
+                } else {
+                    0
+                };
+                let prev = if i > chunks_shift {
+                    let src = i - chunks_shift - 1;
+                    *a.add(src) & *b.add(src)
+                } else {
+                    0
+                };
+                *dst.add(i) = (cur << bits_shift) | (prev >> inv);
+            }
+        }
     }
 }
 

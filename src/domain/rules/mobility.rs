@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::UnsafeCell;
 
 use crate::domain::board::BitBoardLarge;
 use crate::domain::board::Board;
@@ -18,7 +18,7 @@ struct MobilityBuffer {
 }
 
 thread_local! {
-    static MOBILITY_BUFFER: RefCell<MobilityBuffer> = RefCell::new(MobilityBuffer::default());
+    static MOBILITY_BUFFER: UnsafeCell<MobilityBuffer> = UnsafeCell::new(MobilityBuffer::default());
 }
 
 pub fn count_piece_mobility(board: &Board, index: usize, piece_type: PieceType) -> i32 {
@@ -70,8 +70,9 @@ fn count_slider_mobility(
         Player::Black => &board.pieces.black_occupancy,
     };
 
-    MOBILITY_BUFFER.with(|buffer_ref| {
-        let mut buffer = buffer_ref.borrow_mut();
+    // SAFETY: thread_local guarantees single-threaded access; no re-entrant calls.
+    MOBILITY_BUFFER.with(|buffer_cell| {
+        let buffer = unsafe { &mut *buffer_cell.get() };
 
         let template = &board.pieces.white_occupancy;
         buffer.generator.ensure_capacity_and_clear(template);
@@ -115,7 +116,7 @@ fn count_slider_mobility(
             shifted_p,
             all_occupancy: _,
             empty,
-        } = &mut *buffer;
+        } = buffer;
 
         let mut count = 0;
 
