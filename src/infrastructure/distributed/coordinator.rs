@@ -4,13 +4,13 @@ use crate::config::AppConfig;
 use crate::domain::board::Board;
 use crate::domain::models::{Move, Player};
 use crate::domain::rules::Rules;
-use crate::infrastructure::ai::MinimaxBot;
 
 use super::discovery::WorkerDiscovery;
 use super::proto::SearchRequest;
 use super::proto::search_worker_client::SearchWorkerClient;
 
 /// Coordinates distributed search across remote gRPC workers.
+/// The gateway itself does no search work — all computation is delegated to workers.
 pub struct DistributedSearch {
     config: AppConfig,
     discovery: WorkerDiscovery,
@@ -29,7 +29,7 @@ impl DistributedSearch {
     }
 
     /// Execute a distributed search across available workers.
-    /// Falls back to local-only search if no workers are available.
+    /// All moves are partitioned across remote workers; the gateway does no local search.
     pub async fn search(&self, board: &Board, player: Player) -> Option<Move> {
         let root_moves_sv = Rules::generate_legal_moves(&mut board.clone(), player);
         if root_moves_sv.is_empty() {
@@ -40,20 +40,17 @@ impl DistributedSearch {
         let workers = self.discovery.discover_workers().await;
 
         if workers.is_empty() {
-            // Fallback: local-only search
-            eprintln!("[coordinator] No remote workers found, running local search");
-            return self.local_search(board, player, root_moves);
+            eprintln!("[coordinator] No workers available, cannot search");
+            return None;
         }
 
         eprintln!(
-            "[coordinator] Distributing {} root moves across {} workers + local",
+            "[coordinator] Distributing {} root moves across {} workers",
             root_moves.len(),
             workers.len()
         );
 
-        // Partition moves: local gets chunk 0, workers get chunks 1..N
-        let total_partitions = workers.len() + 1;
-        let chunks = partition_moves(root_moves, total_partitions);
+        let chunks = partition_moves(root_moves, workers.len());
 
         // Serialize board once
         let board_data = bincode::serialize(board).expect("Failed to serialize board");
@@ -66,7 +63,7 @@ impl DistributedSearch {
         // Spawn remote searches
         let mut remote_handles = Vec::new();
         for (i, worker_addr) in workers.iter().enumerate() {
-            let chunk = chunks[i + 1].clone();
+            let chunk = chunks[i].clone();
             if chunk.is_empty() {
                 continue;
             }
@@ -93,38 +90,8 @@ impl DistributedSearch {
             }));
         }
 
-        // Local partition runs on this pod
-        let local_chunk = chunks[0].clone();
-        let local_config = self.config.clone();
-        let local_board = board.clone();
-        let local_handle = tokio::task::spawn_blocking(move || {
-            if local_chunk.is_empty() {
-                return None;
-            }
-            let mut bot = MinimaxBot::new_from_params(
-                local_config.minimax.depth,
-                Duration::from_secs(local_config.compute.minutes * 60),
-                local_config.compute.memory,
-                local_config.compute.concurrency,
-            );
-            let (mv, score, nodes, completed) =
-                bot.search_subset(&local_board, player, local_chunk);
-            eprintln!(
-                "[coordinator] Local search: score={}, nodes={}, completed={}",
-                score, nodes, completed
-            );
-            Some((mv, score))
-        });
-
-        // Collect all results
+        // Collect all results with timeout
         let mut results: Vec<(Move, i32)> = Vec::new();
-
-        // Collect local result
-        if let Ok(Some(result)) = local_handle.await {
-            results.push(result);
-        }
-
-        // Collect remote results with timeout
         let deadline = Duration::from_secs(self.config.compute.minutes * 60 + 10);
         for handle in remote_handles {
             match tokio::time::timeout(deadline, handle).await {
@@ -140,22 +107,6 @@ impl DistributedSearch {
             eprintln!("[coordinator] Best move score: {}", score);
             mv
         })
-    }
-
-    fn local_search(&self, board: &Board, player: Player, root_moves: Vec<Move>) -> Option<Move> {
-        let config = self.config.clone();
-        let board = board.clone();
-        let handle = std::thread::spawn(move || {
-            let mut bot = MinimaxBot::new_from_params(
-                config.minimax.depth,
-                Duration::from_secs(config.compute.minutes * 60),
-                config.compute.memory,
-                config.compute.concurrency,
-            );
-            let (mv, _score, _nodes, _completed) = bot.search_subset(&board, player, root_moves);
-            mv
-        });
-        handle.join().ok()
     }
 }
 
