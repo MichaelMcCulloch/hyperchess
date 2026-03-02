@@ -188,9 +188,9 @@ fn print_position(
     let header = format!("  HyperChess [{}] (W)  vs  Stockfish 20 (B)", label);
     let pad = 50usize.saturating_sub(header.len());
     let padded = format!("{}{}", header, " ".repeat(pad));
-    println!("\x1b[1;36m╔══════════════════════════════════════════════════╗\x1b[0m");
+    println!("\x1b[1;36m╔{}╗\x1b[0m", "═".repeat(padded.len()));
     println!("\x1b[1;36m║{}║\x1b[0m", padded);
-    println!("\x1b[1;36m╚══════════════════════════════════════════════════╝\x1b[0m");
+    println!("\x1b[1;36m╚{}╝\x1b[0m", "═".repeat(padded.len()));
     println!();
 
     // Render the board
@@ -409,13 +409,13 @@ fn play_vs_stockfish(mut bot: Box<dyn PlayerStrategy>, label: &str) {
 #[ignore] // Run with: cargo test vs_stockfish_full_game -- --ignored --nocapture
 fn vs_stockfish_full_game() {
     let mut config = AppConfig::default();
-    config.minimax.depth = 10;
+    config.minimax.depth = 15;
     config.compute.minutes = 2;
     config.compute.concurrency = 30;
     config.compute.memory = 4096;
 
     let bot = Box::new(MinimaxBot::new(&config, 2, 8));
-    play_vs_stockfish(bot, "Minimax d20");
+    play_vs_stockfish(bot, format!("Minimax d{}", config.minimax.depth).as_str());
 }
 
 fn print_pgn(moves: &[String]) {
