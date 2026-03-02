@@ -42,13 +42,7 @@ spec:
               port: 3123
             initialDelaySeconds: 5
             periodSeconds: 10
-          resources:
-            limits:
-              cpu: "4"
-              memory: 16384Mi
-            requests:
-              cpu: "1"
-              memory: 4096Mi
+          resources: {}
 ---
 apiVersion: v1
 kind: Service
