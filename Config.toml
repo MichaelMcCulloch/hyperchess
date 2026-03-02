@@ -1,5 +1,5 @@
 [minimax]
-depth = 10
+depth = 20
 
 [compute]
 minutes = 2

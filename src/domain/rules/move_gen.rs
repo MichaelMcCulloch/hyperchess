@@ -9,13 +9,7 @@ use crate::domain::rules::attacks::is_square_attacked;
 
 #[derive(Default)]
 struct MoveGenBuffer {
-    generator: BitBoardLarge,
-    g: BitBoardLarge,
-    p: BitBoardLarge,
-    shifted_g: BitBoardLarge,
-    shifted_p: BitBoardLarge,
     all_occupancy: BitBoardLarge,
-    empty: BitBoardLarge,
 }
 
 thread_local! {
@@ -102,48 +96,16 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
         let buffer = unsafe { &mut *buffer_cell.get() };
 
         let template = &board.pieces.white_occupancy;
-        buffer.generator.ensure_capacity_and_clear(template);
-        buffer.g.ensure_capacity_and_clear(template);
-        buffer.p.ensure_capacity_and_clear(template);
-        buffer.shifted_g.ensure_capacity_and_clear(template);
-        buffer.shifted_p.ensure_capacity_and_clear(template);
         buffer.all_occupancy.ensure_capacity_and_clear(template);
-        buffer.empty.ensure_capacity_and_clear(template);
 
-        // Compute all_occupancy and empty once for all pieces
+        // Compute all_occupancy once for pawn move generation
         board
             .pieces
             .white_occupancy
             .or_into(&board.pieces.black_occupancy, &mut buffer.all_occupancy);
-        // Compute empty = !all_occupancy (masked to valid cells)
-        // Use manual loop to avoid borrow conflict
-        {
-            let total_cells = board.total_cells();
-            let len = buffer.all_occupancy.data.len();
-            let mut remaining = total_cells;
-            for i in 0..len {
-                let limit = std::cmp::min(64, remaining);
-                let mask = if limit == 64 {
-                    !0u64
-                } else {
-                    (1u64 << limit) - 1
-                };
-                buffer.empty.data[i] = (!buffer.all_occupancy.data[i]) & mask;
-                remaining = remaining.saturating_sub(64);
-            }
-        }
         buffer.all_occupancy.recompute_range();
-        buffer.empty.recompute_range();
 
-        let MoveGenBuffer {
-            generator,
-            g,
-            p,
-            shifted_g,
-            shifted_p,
-            all_occupancy,
-            empty,
-        } = buffer;
+        let all_occupancy = &buffer.all_occupancy;
 
         for i in occupancy.iter_indices() {
             let coord = Coordinate::new(board.geo.cache.index_to_coords[i].clone());
@@ -184,62 +146,38 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
                     &board.geo.cache.king_targets[i],
                     &mut moves,
                 ),
-                PieceType::Rook => generate_slider_moves_bitwise(
+                PieceType::Rook => generate_slider_moves_scalar(
                     board,
                     i,
                     &coord,
                     player,
                     &board.geo.cache.rook_directions,
                     &mut moves,
-                    generator,
-                    g,
-                    p,
-                    shifted_g,
-                    shifted_p,
-                    empty,
                 ),
-                PieceType::Bishop => generate_slider_moves_bitwise(
+                PieceType::Bishop => generate_slider_moves_scalar(
                     board,
                     i,
                     &coord,
                     player,
                     &board.geo.cache.bishop_directions,
                     &mut moves,
-                    generator,
-                    g,
-                    p,
-                    shifted_g,
-                    shifted_p,
-                    empty,
                 ),
                 PieceType::Queen => {
-                    generate_slider_moves_bitwise(
+                    generate_slider_moves_scalar(
                         board,
                         i,
                         &coord,
                         player,
                         &board.geo.cache.rook_directions,
                         &mut moves,
-                        generator,
-                        g,
-                        p,
-                        shifted_g,
-                        shifted_p,
-                        empty,
                     );
-                    generate_slider_moves_bitwise(
+                    generate_slider_moves_scalar(
                         board,
                         i,
                         &coord,
                         player,
                         &board.geo.cache.bishop_directions,
                         &mut moves,
-                        generator,
-                        g,
-                        p,
-                        shifted_g,
-                        shifted_p,
-                        empty,
                     );
                 }
             }
@@ -248,222 +186,103 @@ pub fn generate_pseudo_legal_moves(board: &Board, player: Player) -> MoveList {
     moves
 }
 
-#[allow(clippy::too_many_arguments)]
-fn generate_slider_moves_bitwise(
+/// Scalar ray walker for slider move generation.
+/// Walks one step at a time along the ray using stride arithmetic.
+/// O(side) per direction vs O(len × log(side)) for Kogge-Stone.
+#[inline]
+fn generate_slider_moves_scalar(
     board: &Board,
     origin_idx: usize,
     origin_coord: &Coordinate,
     player: Player,
     directions: &[DirectionInfo],
     moves: &mut MoveList,
-
-    generator: &mut BitBoardLarge,
-    g: &mut BitBoardLarge,
-    p: &mut BitBoardLarge,
-    shifted_g: &mut BitBoardLarge,
-    shifted_p: &mut BitBoardLarge,
-    empty: &BitBoardLarge,
 ) {
-    generator.ensure_capacity_and_clear(empty);
-    generator.set_bit(origin_idx);
-
     let own_occupancy = match player {
         Player::White => &board.pieces.white_occupancy,
         Player::Black => &board.pieces.black_occupancy,
     };
 
     for dir_info in directions {
-        if dir_info.stride == 0 {
+        let stride = dir_info.stride;
+        if stride == 0 {
             continue;
         }
+        // validity_masks[dir_id * side + 1] = cells that can step 1 in this direction
+        let mask = &board.geo.cache.validity_masks[dir_info.id * board.side() + 1];
 
-        g.copy_from(generator);
-        p.copy_from(empty);
-
-        kogge_stone_fill_inplace(g, p, dir_info.stride, board, dir_info, shifted_g, shifted_p);
-
-        for to_idx in g.iter_indices() {
-            if to_idx == origin_idx {
-                continue;
+        let mut idx = origin_idx;
+        loop {
+            // Can this cell step one more in this direction?
+            if !mask.get_bit(idx) {
+                break;
             }
-            if own_occupancy.get_bit(to_idx) {
-                continue;
+            idx = (idx as isize + stride) as usize;
+
+            // Hit own piece — blocked, stop
+            if own_occupancy.get_bit(idx) {
+                break;
             }
 
             moves.push(Move {
                 from: origin_coord.clone(),
-                to: Coordinate::new(board.geo.cache.index_to_coords[to_idx].clone()),
+                to: Coordinate::new(board.geo.cache.index_to_coords[idx].clone()),
                 promotion: None,
             });
-        }
-    }
-}
 
-pub fn kogge_stone_fill_inplace(
-    g: &mut BitBoardLarge,
-    p: &mut BitBoardLarge,
-    stride: isize,
-    board: &Board,
-    dir_info: &DirectionInfo,
-
-    shifted_g: &mut BitBoardLarge,
-    shifted_p: &mut BitBoardLarge,
-) {
-    let len = g.data.len();
-    debug_assert_eq!(len, p.data.len());
-
-    let mask_base_idx = dir_info.id * board.side();
-    let abs_stride = stride.unsigned_abs();
-    let shift_right = stride < 0;
-
-    let mut shift_amt = 1;
-    while shift_amt < board.side() {
-        let mask = unsafe {
-            board
-                .geo
-                .cache
-                .validity_masks
-                .get_unchecked(mask_base_idx + shift_amt)
-        };
-
-        let total_shift = abs_stride * shift_amt;
-        let chunks_shift = total_shift / 64;
-        let bits_shift = total_shift % 64;
-
-        // Operate directly on raw data slices, bypassing range tracking.
-        let g_data = g.data.as_mut_ptr();
-        let p_data = p.data.as_mut_ptr();
-        let sg_data = shifted_g.data.as_mut_ptr();
-        let sp_data = shifted_p.data.as_mut_ptr();
-        let m_data = mask.data.as_ptr();
-
-        unsafe {
-            if shift_right {
-                raw_and_shr(g_data, m_data, sg_data, len, chunks_shift, bits_shift);
-                raw_and_shr(p_data, m_data, sp_data, len, chunks_shift, bits_shift);
-            } else {
-                raw_and_shl(g_data, m_data, sg_data, len, chunks_shift, bits_shift);
-                raw_and_shl(p_data, m_data, sp_data, len, chunks_shift, bits_shift);
-            }
-
-            // g |= shifted_g & p; p &= shifted_p (fused, with early-exit on dead p)
-            let mut any_p = false;
-            for i in 0..len {
-                *g_data.add(i) |= *sg_data.add(i) & *p_data.add(i);
-                let new_p = *p_data.add(i) & *sp_data.add(i);
-                *p_data.add(i) = new_p;
-                any_p |= new_p != 0;
-            }
-
-            if !any_p {
-                // p is all-zero — no further propagation possible.
+            // Hit any piece (must be enemy since we checked own above) — capture, stop
+            if board.pieces.white_occupancy.get_bit(idx)
+                || board.pieces.black_occupancy.get_bit(idx)
+            {
                 break;
             }
         }
-
-        shift_amt *= 2;
     }
+}
 
-    // Final mask and shift
-    let mask = unsafe {
-        board
-            .geo
-            .cache
-            .validity_masks
-            .get_unchecked(mask_base_idx + 1)
+/// Scalar ray walker for slider mobility counting.
+/// Returns the number of squares reachable from origin_idx along given directions.
+#[inline]
+pub fn count_slider_mobility_scalar(
+    board: &Board,
+    origin_idx: usize,
+    player: Player,
+    directions: &[DirectionInfo],
+) -> i32 {
+    let own_occupancy = match player {
+        Player::White => &board.pieces.white_occupancy,
+        Player::Black => &board.pieces.black_occupancy,
     };
 
-    *g &= mask;
-    if shift_right {
-        *g >>= abs_stride;
-    } else {
-        *g <<= abs_stride;
-    }
+    let mut count = 0;
+    for dir_info in directions {
+        let stride = dir_info.stride;
+        if stride == 0 {
+            continue;
+        }
+        let mask = &board.geo.cache.validity_masks[dir_info.id * board.side() + 1];
 
-    // Recompute ranges since we bypassed range tracking
-    g.recompute_range();
-    p.recompute_range();
-}
-
-/// Raw `dst = (a & b) >> shift` on u64 slices. No bounds/range tracking.
-#[inline(always)]
-unsafe fn raw_and_shr(
-    a: *const u64,
-    b: *const u64,
-    dst: *mut u64,
-    len: usize,
-    chunks_shift: usize,
-    bits_shift: usize,
-) {
-    unsafe {
-        if bits_shift == 0 {
-            // Pure chunk shift
-            for i in 0..len {
-                let src = i + chunks_shift;
-                *dst.add(i) = if src < len {
-                    *a.add(src) & *b.add(src)
-                } else {
-                    0
-                };
+        let mut idx = origin_idx;
+        loop {
+            if !mask.get_bit(idx) {
+                break;
             }
-        } else {
-            let inv = 64 - bits_shift;
-            for i in 0..len {
-                let src = i + chunks_shift;
-                let cur = if src < len {
-                    *a.add(src) & *b.add(src)
-                } else {
-                    0
-                };
-                let next = if src + 1 < len {
-                    *a.add(src + 1) & *b.add(src + 1)
-                } else {
-                    0
-                };
-                *dst.add(i) = (cur >> bits_shift) | (next << inv);
+            idx = (idx as isize + stride) as usize;
+
+            if own_occupancy.get_bit(idx) {
+                break;
+            }
+
+            count += 1;
+
+            if board.pieces.white_occupancy.get_bit(idx)
+                || board.pieces.black_occupancy.get_bit(idx)
+            {
+                break;
             }
         }
     }
-}
-
-/// Raw `dst = (a & b) << shift` on u64 slices. No bounds/range tracking.
-#[inline(always)]
-unsafe fn raw_and_shl(
-    a: *const u64,
-    b: *const u64,
-    dst: *mut u64,
-    len: usize,
-    chunks_shift: usize,
-    bits_shift: usize,
-) {
-    unsafe {
-        if bits_shift == 0 {
-            for i in (0..len).rev() {
-                *dst.add(i) = if i >= chunks_shift {
-                    *a.add(i - chunks_shift) & *b.add(i - chunks_shift)
-                } else {
-                    0
-                };
-            }
-        } else {
-            let inv = 64 - bits_shift;
-            for i in (0..len).rev() {
-                let cur = if i >= chunks_shift {
-                    let src = i - chunks_shift;
-                    *a.add(src) & *b.add(src)
-                } else {
-                    0
-                };
-                let prev = if i > chunks_shift {
-                    let src = i - chunks_shift - 1;
-                    *a.add(src) & *b.add(src)
-                } else {
-                    0
-                };
-                *dst.add(i) = (cur << bits_shift) | (prev >> inv);
-            }
-        }
-    }
+    count
 }
 
 pub fn calculate_stride(board: &Board, dir: &[isize]) -> isize {
