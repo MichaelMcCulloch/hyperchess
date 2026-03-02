@@ -14,6 +14,9 @@ pub struct PieceMap<R: BoardRepresentation> {
     pub bishops: R,
     pub queens: R,
     pub kings: R,
+    /// Cached king cell indices (avoids bitboard scan). u16::MAX = absent.
+    pub white_king_idx: u16,
+    pub black_king_idx: u16,
 }
 
 pub type Pieces = PieceMap<BitBoardLarge>;
@@ -30,6 +33,8 @@ impl<R: BoardRepresentation> PieceMap<R> {
             bishops: empty.clone(),
             queens: empty.clone(),
             kings: empty,
+            white_king_idx: u16::MAX,
+            black_king_idx: u16::MAX,
         }
     }
 
@@ -73,11 +78,22 @@ impl<R: BoardRepresentation> PieceMap<R> {
             PieceType::Knight => self.knights.set_bit(index),
             PieceType::Bishop => self.bishops.set_bit(index),
             PieceType::Queen => self.queens.set_bit(index),
-            PieceType::King => self.kings.set_bit(index),
+            PieceType::King => {
+                self.kings.set_bit(index);
+                match piece.owner {
+                    Player::White => self.white_king_idx = index as u16,
+                    Player::Black => self.black_king_idx = index as u16,
+                }
+            }
         }
     }
 
     pub fn remove_piece_at_index(&mut self, index: usize) {
+        if self.white_king_idx == index as u16 {
+            self.white_king_idx = u16::MAX;
+        } else if self.black_king_idx == index as u16 {
+            self.black_king_idx = u16::MAX;
+        }
         self.white_occupancy.clear_bit(index);
         self.black_occupancy.clear_bit(index);
         self.pawns.clear_bit(index);
@@ -86,5 +102,19 @@ impl<R: BoardRepresentation> PieceMap<R> {
         self.bishops.clear_bit(index);
         self.queens.clear_bit(index);
         self.kings.clear_bit(index);
+    }
+
+    /// O(1) king index lookup. Returns None if no king present.
+    #[inline]
+    pub fn king_index(&self, player: Player) -> Option<usize> {
+        let idx = match player {
+            Player::White => self.white_king_idx,
+            Player::Black => self.black_king_idx,
+        };
+        if idx == u16::MAX {
+            None
+        } else {
+            Some(idx as usize)
+        }
     }
 }

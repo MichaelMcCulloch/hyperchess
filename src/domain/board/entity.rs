@@ -560,18 +560,9 @@ impl<R: BoardRepresentation> GenericBoard<R> {
     }
 
     pub fn get_king_coordinate(&self, player: Player) -> Option<Coordinate> {
-        let occupancy = match player {
-            Player::White => &self.pieces.white_occupancy,
-            Player::Black => &self.pieces.black_occupancy,
-        };
-
-        // Iterate only set bits in kings bitboard (at most 2 kings)
-        for idx in self.pieces.kings.iter_indices() {
-            if occupancy.get_bit(idx) {
-                return Some(Coordinate::new(self.index_to_coords(idx)));
-            }
-        }
-        None
+        self.pieces
+            .king_index(player)
+            .map(|idx| Coordinate::new(self.index_to_coords(idx)))
     }
 
     pub fn set_piece(&mut self, coord: &Coordinate, piece: Piece) -> Result<(), String> {

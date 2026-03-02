@@ -3,10 +3,21 @@ use crate::domain::models::{PieceType, Player};
 use crate::domain::rules::move_gen::count_slider_mobility_scalar;
 
 pub fn count_piece_mobility(board: &Board, index: usize, piece_type: PieceType) -> i32 {
-    let player = board
-        .get_piece_at_index(index)
-        .map(|p| p.owner)
-        .unwrap_or(Player::White);
+    count_piece_mobility_for(board, index, piece_type, None)
+}
+
+pub fn count_piece_mobility_for(
+    board: &Board,
+    index: usize,
+    piece_type: PieceType,
+    known_player: Option<Player>,
+) -> i32 {
+    let player = known_player.unwrap_or_else(|| {
+        board
+            .get_piece_at_index(index)
+            .map(|p| p.owner)
+            .unwrap_or(Player::White)
+    });
 
     match piece_type {
         PieceType::Pawn | PieceType::King => 0,

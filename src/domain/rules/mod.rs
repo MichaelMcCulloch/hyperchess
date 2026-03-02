@@ -51,6 +51,15 @@ impl Rules {
         mobility::count_piece_mobility(board, index, piece_type)
     }
 
+    pub fn count_piece_mobility_for(
+        board: &Board,
+        index: usize,
+        piece_type: PieceType,
+        player: Player,
+    ) -> i32 {
+        mobility::count_piece_mobility_for(board, index, piece_type, Some(player))
+    }
+
     pub fn generate_legal_moves(board: &mut Board, player: Player) -> MoveList {
         move_gen::generate_legal_moves(board, player)
     }

@@ -260,7 +260,7 @@ impl Evaluator {
         board: &Board,
         index: usize,
         piece_type: PieceType,
-        _player: Player,
+        player: Player,
     ) -> (i32, i32, i32) {
         let mut mg = 0;
         let mut eg = 0;
@@ -310,7 +310,7 @@ impl Evaluator {
         eg += pst_eg;
 
         if piece_type != PieceType::Pawn && piece_type != PieceType::King {
-            let mobility = Rules::count_piece_mobility(board, index, piece_type);
+            let mobility = Rules::count_piece_mobility_for(board, index, piece_type, player);
             let (mob_mg, mob_eg) = match piece_type {
                 PieceType::Knight => (mobility * MOBILITY_KNIGHT_MG, mobility * MOBILITY_KNIGHT_EG),
                 PieceType::Bishop => (mobility * MOBILITY_BISHOP_MG, mobility * MOBILITY_BISHOP_EG),

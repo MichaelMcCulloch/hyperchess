@@ -41,25 +41,13 @@ pub fn is_square_attacked_idx<R: BoardRepresentation>(
 
     // Slider attacks via index-based ray walking
     for dir_info in &board.geo.cache.rook_directions {
-        if scan_ray_for_threat_idx(
-            board,
-            sq_idx,
-            dir_info,
-            by_player,
-            &[PieceType::Rook, PieceType::Queen],
-        ) {
+        if scan_ray_rook_queen(board, sq_idx, dir_info, by_player) {
             return true;
         }
     }
 
     for dir_info in &board.geo.cache.bishop_directions {
-        if scan_ray_for_threat_idx(
-            board,
-            sq_idx,
-            dir_info,
-            by_player,
-            &[PieceType::Bishop, PieceType::Queen],
-        ) {
+        if scan_ray_bishop_queen(board, sq_idx, dir_info, by_player) {
             return true;
         }
     }
@@ -78,8 +66,63 @@ pub fn is_square_attacked_idx<R: BoardRepresentation>(
     false
 }
 
-/// Index-based ray scan: walk along a direction by stride, using the step-1
-/// validity mask to prevent board-edge wrapping. No allocations.
+/// Specialized rook+queen ray scan — avoids slice/match overhead on the hot path.
+#[inline]
+pub fn scan_ray_rook_queen<R: BoardRepresentation>(
+    board: &GenericBoard<R>,
+    origin_idx: usize,
+    dir_info: &DirectionInfo,
+    attacker: Player,
+) -> bool {
+    let stride = dir_info.stride;
+    let mask = &board.geo.cache.validity_masks[dir_info.id * board.side() + 1];
+    let enemy_occupancy = match attacker {
+        Player::White => &board.pieces.white_occupancy,
+        Player::Black => &board.pieces.black_occupancy,
+    };
+
+    let mut idx = origin_idx;
+    loop {
+        if !mask.get_bit(idx) {
+            return false;
+        }
+        idx = (idx as isize + stride) as usize;
+        if board.pieces.white_occupancy.get_bit(idx) || board.pieces.black_occupancy.get_bit(idx) {
+            return enemy_occupancy.get_bit(idx)
+                && (board.pieces.rooks.get_bit(idx) || board.pieces.queens.get_bit(idx));
+        }
+    }
+}
+
+/// Specialized bishop+queen ray scan — avoids slice/match overhead on the hot path.
+#[inline]
+pub fn scan_ray_bishop_queen<R: BoardRepresentation>(
+    board: &GenericBoard<R>,
+    origin_idx: usize,
+    dir_info: &DirectionInfo,
+    attacker: Player,
+) -> bool {
+    let stride = dir_info.stride;
+    let mask = &board.geo.cache.validity_masks[dir_info.id * board.side() + 1];
+    let enemy_occupancy = match attacker {
+        Player::White => &board.pieces.white_occupancy,
+        Player::Black => &board.pieces.black_occupancy,
+    };
+
+    let mut idx = origin_idx;
+    loop {
+        if !mask.get_bit(idx) {
+            return false;
+        }
+        idx = (idx as isize + stride) as usize;
+        if board.pieces.white_occupancy.get_bit(idx) || board.pieces.black_occupancy.get_bit(idx) {
+            return enemy_occupancy.get_bit(idx)
+                && (board.pieces.bishops.get_bit(idx) || board.pieces.queens.get_bit(idx));
+        }
+    }
+}
+
+/// Generic ray scan (kept for backward compatibility / non-hot paths).
 #[inline]
 pub fn scan_ray_for_threat_idx<R: BoardRepresentation>(
     board: &GenericBoard<R>,
@@ -101,9 +144,7 @@ pub fn scan_ray_for_threat_idx<R: BoardRepresentation>(
             return false;
         }
         idx = (idx as isize + stride) as usize;
-        let is_white = board.pieces.white_occupancy.get_bit(idx);
-        let is_black = board.pieces.black_occupancy.get_bit(idx);
-        if is_white || is_black {
+        if board.pieces.white_occupancy.get_bit(idx) || board.pieces.black_occupancy.get_bit(idx) {
             if enemy_occupancy.get_bit(idx) {
                 for &t in threat_types {
                     let found = match t {
