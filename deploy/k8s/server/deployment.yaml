@@ -27,9 +27,21 @@ spec:
             value: "1"
           - name: HYPERCHESS_COMPUTE_CONCURRENCY
             value: "4"
+          - name: HYPERCHESS_API_PORT
+            value: "3123"
           imagePullPolicy: Always
           ports:
             - containerPort: 3123
+          readinessProbe:
+            tcpSocket:
+              port: 3123
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 3123
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             limits:
               cpu: "4"
