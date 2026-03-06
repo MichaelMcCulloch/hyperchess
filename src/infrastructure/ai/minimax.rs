@@ -12,22 +12,126 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::search_core::{VAL_BISHOP, VAL_KNIGHT, VAL_QUEEN, VAL_ROOK};
+use super::see::SEE;
 
 const CHECKMATE_SCORE: i32 = 30000;
 const TIMEOUT_CHECK_INTERVAL: usize = 2048;
 
-const MAX_HISTORY: i32 = 2000;
+/// History heuristic cap (Stockfish uses 7183; we use the same scale).
+const MAX_HISTORY: i32 = 7183;
 
 /// Razor margins by depth (indexed by depth: 1, 2, 3).
-/// If static_eval + margin < alpha, drop to qsearch.
 const RAZOR_MARGIN: [i32; 4] = [0, 300, 500, 700];
 
-/// Multi-cut: at non-PV cut nodes, try the first MC_M moves at reduced depth.
-/// If MC_C of them beat beta, prune the entire node.
-const MC_M: usize = 6; // number of moves to try
-const MC_C: usize = 3; // cutoff threshold
-const MC_DEPTH_MIN: usize = 5; // minimum depth to apply multi-cut
-const MC_REDUCTION: usize = 4; // depth reduction for verification
+/// Number of continuation history plies (#11): track up to 4 plies back.
+const CONT_HIST_PLIES: usize = 4;
+
+/// Low-ply history depth (#13): separate history for plies 0..LOW_PLY_MAX near root.
+const LOW_PLY_MAX: usize = 5;
+
+/// Pawn history table size (#12): pawn-hash-indexed move ordering.
+const PAWN_HIST_SIZE: usize = 8192;
+
+/// Multi-cut parameters
+const MC_M: usize = 6;
+const MC_C: usize = 3;
+const MC_DEPTH_MIN: usize = 5;
+const MC_REDUCTION: usize = 4;
+
+/// LMR reduction lookup table (indexed by depth and move count).
+/// Initialized as: reductions[d][m] = (2809/128 * ln(d)) * (ln(m) / ln(64))
+/// We use a 64×64 table covering practical ranges.
+const LMR_TABLE_SIZE: usize = 64;
+
+fn compute_lmr_table() -> [[i32; LMR_TABLE_SIZE]; LMR_TABLE_SIZE] {
+    let mut table = [[0i32; LMR_TABLE_SIZE]; LMR_TABLE_SIZE];
+    for d in 1..LMR_TABLE_SIZE {
+        for m in 1..LMR_TABLE_SIZE {
+            // Stockfish formula: 2809/128 * ln(d) * ln(m) / ln(64)
+            // Simplified: ~21.95 * ln(d) * ln(m) / 4.16 = ~5.27 * ln(d) * ln(m)
+            // But we want integer plies, so we scale differently.
+            // Stockfish stores reductions * 1024 for fractional plies.
+            // We'll store whole plies (simpler for our iterative framework).
+            let r = (0.8 + (d as f64).ln() * (m as f64).ln() / 2.4) as i32;
+            table[d][m] = r.max(0);
+        }
+    }
+    table
+}
+
+/// Stockfish-style history update with gravity/decay.
+/// val = val + clamp(bonus, -cap, cap) - val * abs(bonus) / cap
+#[inline]
+fn update_history(entry: &mut i32, bonus: i32) {
+    let clamped = bonus.clamp(-MAX_HISTORY, MAX_HISTORY);
+    *entry += clamped - *entry * clamped.abs() / MAX_HISTORY;
+}
+
+/// Build a child's ancestor_to_idx array: new_move_to becomes [0], parent's [0] becomes [1], etc.
+#[inline]
+fn shift_ancestors(
+    parent: &[Option<usize>; CONT_HIST_PLIES],
+    new_move_to: Option<usize>,
+) -> [Option<usize>; CONT_HIST_PLIES] {
+    let mut child = [None; CONT_HIST_PLIES];
+    child[0] = new_move_to;
+    for i in 1..CONT_HIST_PLIES {
+        child[i] = parent[i - 1];
+    }
+    child
+}
+
+/// Correction history (#18): tracks static eval error by pawn structure hash.
+/// Stores a weighted running average of (search_score - static_eval).
+const CORRECTION_TABLE_SIZE: usize = 16384;
+
+struct CorrectionHistory {
+    table: Vec<(i32, i32)>, // (weighted_sum, total_weight) per slot
+}
+
+impl CorrectionHistory {
+    fn new() -> Self {
+        Self {
+            table: vec![(0, 0); CORRECTION_TABLE_SIZE],
+        }
+    }
+
+    fn get(&self, pawn_hash: u64) -> i32 {
+        let idx = (pawn_hash as usize) & (CORRECTION_TABLE_SIZE - 1);
+        let (sum, weight) = self.table[idx];
+        if weight > 0 { sum / weight } else { 0 }
+    }
+
+    fn update(&mut self, pawn_hash: u64, error: i32, weight: i32) {
+        let idx = (pawn_hash as usize) & (CORRECTION_TABLE_SIZE - 1);
+        let entry = &mut self.table[idx];
+        // Exponential decay: halve old data when weight grows large
+        if entry.1 > 256 {
+            entry.0 /= 2;
+            entry.1 /= 2;
+        }
+        entry.0 += error * weight;
+        entry.1 += weight;
+    }
+}
+
+/// Map a piece at a board index to a 0-5 type index for capture history.
+#[inline]
+fn piece_type_index(board: &Board, idx: usize) -> usize {
+    if board.pieces.pawns.get_bit(idx) {
+        0
+    } else if board.pieces.knights.get_bit(idx) {
+        1
+    } else if board.pieces.bishops.get_bit(idx) {
+        2
+    } else if board.pieces.rooks.get_bit(idx) {
+        3
+    } else if board.pieces.queens.get_bit(idx) {
+        4
+    } else {
+        5
+    } // king
+}
 
 pub struct MinimaxBot {
     depth: usize,
@@ -36,6 +140,7 @@ pub struct MinimaxBot {
     stop_flag: Arc<AtomicBool>,
     nodes_searched: Arc<AtomicUsize>,
     num_threads: usize,
+    lmr_table: [[i32; LMR_TABLE_SIZE]; LMR_TABLE_SIZE],
 }
 
 impl MinimaxBot {
@@ -47,6 +152,7 @@ impl MinimaxBot {
             stop_flag: Arc::new(AtomicBool::new(false)),
             nodes_searched: Arc::new(AtomicUsize::new(0)),
             num_threads: config.compute.concurrency.max(1),
+            lmr_table: compute_lmr_table(),
         }
     }
 
@@ -64,6 +170,7 @@ impl MinimaxBot {
             stop_flag: Arc::new(AtomicBool::new(false)),
             nodes_searched: Arc::new(AtomicUsize::new(0)),
             num_threads: num_threads.max(1),
+            lmr_table: compute_lmr_table(),
         }
     }
 
@@ -151,9 +258,26 @@ impl MinimaxBot {
                 let hist_size = total_cells * total_cells;
                 let mut history = vec![vec![0i32; hist_size], vec![0i32; hist_size]];
                 let mut countermoves = vec![vec![None; total_cells], vec![None; total_cells]];
-                let mut cont_history = vec![vec![0i32; hist_size], vec![0i32; hist_size]];
+                let mut cont_history = vec![vec![0i32; hist_size]; CONT_HIST_PLIES * 2];
+                // Capture history (#10): [player][to_square * 6 + captured_piece_type]
+                let cap_hist_size = total_cells * 6;
+                let mut capture_history =
+                    vec![vec![0i32; cap_hist_size], vec![0i32; cap_hist_size]];
+                let mut correction_history = CorrectionHistory::new();
+                let pawn_hist_entry_size = PAWN_HIST_SIZE * total_cells;
+                let mut pawn_history = vec![
+                    vec![0i32; pawn_hist_entry_size],
+                    vec![0i32; pawn_hist_entry_size],
+                ];
+                let mut low_ply_history = vec![vec![0i32; hist_size]; LOW_PLY_MAX * 2];
 
-                for d in 1..=self.depth {
+                // Depth staggering (#27)
+                let start_depth = if thread_idx == 0 {
+                    1
+                } else {
+                    1 + (thread_idx % 3)
+                };
+                for d in start_depth..=self.depth {
                     let mut delta = 50;
                     let (mut alpha, mut beta) = if d > 4 {
                         (prev_score - delta, prev_score + delta)
@@ -183,6 +307,10 @@ impl MinimaxBot {
                                 &mut history,
                                 &mut countermoves,
                                 &mut cont_history,
+                                &mut capture_history,
+                                &mut correction_history,
+                                &mut pawn_history,
+                                &mut low_ply_history,
                                 mv_to_idx,
                             );
                             local_board.unmake_move(mv, info);
@@ -217,12 +345,12 @@ impl MinimaxBot {
                             if failed_low {
                                 beta = (alpha + beta) / 2;
                                 alpha -= delta;
-                                delta += delta / 2;
+                                delta += delta / 3;
                                 continue;
                             }
                             if failed_high {
                                 beta += delta;
-                                delta += delta / 2;
+                                delta += delta / 3;
                                 continue;
                             }
                         }
@@ -249,6 +377,52 @@ impl MinimaxBot {
         let completed = !self.stop_flag.load(Ordering::Relaxed);
         let best = results.into_iter().max_by_key(|r| r.1).unwrap();
         (best.0, best.1, total_nodes, completed)
+    }
+
+    /// Evaluate with correction history adjustment (#18).
+    fn evaluate_corrected(
+        &self,
+        board: &Board,
+        player_at_leaf: Option<Player>,
+        correction_history: &CorrectionHistory,
+    ) -> i32 {
+        let raw = self.evaluate(board, player_at_leaf);
+        let pawn_hash = Self::pawn_hash(board);
+        let correction = correction_history.get(pawn_hash);
+        // Apply correction scaled down to avoid overshooting
+        (raw + correction / 16).clamp(-CHECKMATE_SCORE + 100, CHECKMATE_SCORE - 100)
+    }
+
+    /// Update correction history based on search result vs static eval error.
+    fn update_correction(
+        board: &Board,
+        static_eval: i32,
+        search_score: i32,
+        depth: usize,
+        correction_history: &mut CorrectionHistory,
+    ) {
+        // Only update for non-mate scores and sufficient depth
+        if search_score.abs() > CHECKMATE_SCORE - 100 || depth < 2 {
+            return;
+        }
+        let error = search_score - static_eval;
+        let pawn_hash = Self::pawn_hash(board);
+        let weight = (depth as i32).min(16);
+        correction_history.update(pawn_hash, error, weight);
+    }
+
+    /// Compute a simple pawn hash for correction history indexing.
+    fn pawn_hash(board: &Board) -> u64 {
+        // XOR pawn Zobrist keys for both sides
+        let mut hash = 0u64;
+        for idx in board.pieces.pawns.iter_indices() {
+            if board.pieces.white_occupancy.get_bit(idx) {
+                hash ^= board.zobrist.piece_keys[idx]; // white pawn
+            } else if board.pieces.black_occupancy.get_bit(idx) {
+                hash ^= board.zobrist.piece_keys[idx].wrapping_mul(0x9E3779B97F4A7C15);
+            }
+        }
+        hash
     }
 
     fn evaluate(&self, board: &Board, player_at_leaf: Option<Player>) -> i32 {
@@ -278,6 +452,8 @@ impl MinimaxBot {
         )
     }
 
+    /// Score and sort moves. Captures are split into good (SEE >= 0) and bad (SEE < 0).
+    /// Bad captures are placed after all quiet moves (#9, #30).
     #[allow(clippy::too_many_arguments)]
     fn sort_moves(
         &self,
@@ -288,13 +464,19 @@ impl MinimaxBot {
         history: &[Vec<i32>],
         countermove: Option<&Move>,
         cont_history: &[Vec<i32>],
-        prev_move_idx: Option<usize>,
+        capture_history: &[Vec<i32>],
+        ancestors: &[Option<usize>; CONT_HIST_PLIES],
         player: Player,
+        pawn_history: &[Vec<i32>],
+        pawn_hash: u64,
+        low_ply_history: &[Vec<i32>],
+        ply: usize,
     ) {
         moves.sort_by_cached_key(|mv| {
             let from_idx = board.coords_to_index(&mv.from.values).unwrap_or(0);
             let to_idx = board.coords_to_index(&mv.to.values).unwrap_or(0);
 
+            // TT move always first
             if let Some(tm) = tt_move
                 && tm.from_idx as usize == from_idx
                 && tm.to_idx as usize == to_idx
@@ -307,11 +489,28 @@ impl MinimaxBot {
                 Player::Black => &board.pieces.white_occupancy,
             };
 
+            // Captures: split good/bad by SEE (#9), enhanced with capture history (#10)
             if enemy_occupancy.get_bit(to_idx) {
                 let victim_val = self.get_piece_value(board, to_idx);
                 let attacker_val = self.get_piece_value(board, from_idx);
+                let see_val = SEE::static_exchange_evaluation(board, mv);
 
-                return -(1_000_000 + 10 * victim_val - attacker_val);
+                // Capture history bonus: [player][to * 6 + captured_type]
+                let cap_type = piece_type_index(board, to_idx);
+                let cap_hist_idx = to_idx * 6 + cap_type;
+                let cap_hist_bonus = if cap_hist_idx < capture_history[player as usize].len() {
+                    capture_history[player as usize][cap_hist_idx] / 32
+                } else {
+                    0
+                };
+
+                if see_val >= 0 {
+                    // Good capture: MVV-LVA + capture history
+                    return -(1_000_000 + 10 * victim_val - attacker_val + cap_hist_bonus);
+                } else {
+                    // Bad capture: placed after all quiets
+                    return -(see_val + cap_hist_bonus);
+                }
             }
 
             if let Some(p) = mv.promotion {
@@ -338,29 +537,47 @@ impl MinimaxBot {
                 }
             }
 
-            // Countermove bonus
             if let Some(cm) = countermove
                 && cm == mv
             {
                 return -350_000;
             }
 
-            // Combine history + continuation history for quiet move ordering
+            // Quiet move score: history + multi-ply continuation history + pawn + low-ply
             let mut quiet_score: i32 = 0;
-            let hist_idx = from_idx * board.total_cells() + to_idx;
+            let total = board.total_cells();
+            let hist_idx = from_idx * total + to_idx;
 
             if hist_idx < history[0].len() {
                 quiet_score += history[player as usize][hist_idx];
             }
 
-            if let Some(prev_idx) = prev_move_idx {
-                let cont_idx = prev_idx * board.total_cells() + to_idx;
-                if cont_idx < cont_history[player as usize].len() {
-                    quiet_score += cont_history[player as usize][cont_idx];
+            // Multi-ply continuation history (#11)
+            for ply_back in 0..CONT_HIST_PLIES {
+                if let Some(anc_idx) = ancestors[ply_back] {
+                    let cont_idx = anc_idx * total + to_idx;
+                    let table_idx = ply_back * 2 + player as usize;
+                    if table_idx < cont_history.len() && cont_idx < cont_history[table_idx].len() {
+                        quiet_score += cont_history[table_idx][cont_idx];
+                    }
                 }
             }
 
-            -quiet_score
+            // Pawn history (#12)
+            let ph_idx = (pawn_hash as usize & (PAWN_HIST_SIZE - 1)) * total + to_idx;
+            if ph_idx < pawn_history[player as usize].len() {
+                quiet_score += pawn_history[player as usize][ph_idx] / 2;
+            }
+
+            // Low-ply history (#13)
+            if ply < LOW_PLY_MAX {
+                let lp_table = ply * 2 + player as usize;
+                if lp_table < low_ply_history.len() && hist_idx < low_ply_history[lp_table].len() {
+                    quiet_score += low_ply_history[lp_table][hist_idx] / 2;
+                }
+            }
+
+            -(200_000 + quiet_score)
         });
     }
 
@@ -380,13 +597,17 @@ impl MinimaxBot {
         history: &mut [Vec<i32>],
         countermoves: &mut [Vec<Option<Move>>],
         cont_history: &mut [Vec<i32>],
+        capture_history: &mut [Vec<i32>],
+        correction_history: &mut CorrectionHistory,
+        pawn_history: &mut [Vec<i32>],
+        low_ply_history: &mut [Vec<i32>],
         prev_move_to_idx: Option<usize>,
     ) -> i32 {
         let mut stack: Vec<SearchFrame> = Vec::with_capacity(depth + 1);
         let mut return_value: i32 = 0;
 
         let mut initial = SearchFrame::new(depth, alpha, beta, player, allow_null);
-        initial.prev_move_to_idx = prev_move_to_idx;
+        initial.ancestor_to_idx[0] = prev_move_to_idx;
         stack.push(initial);
 
         'outer: loop {
@@ -441,7 +662,8 @@ impl MinimaxBot {
                                 child_player,
                                 true,
                             );
-                            child.prev_move_to_idx = re_search_to;
+                            child.ancestor_to_idx =
+                                shift_ancestors(&stack[d].ancestor_to_idx, re_search_to);
                             stack.push(child);
                             continue 'outer;
                         }
@@ -463,13 +685,15 @@ impl MinimaxBot {
                                 child_player,
                                 true,
                             );
-                            child.prev_move_to_idx = re_search_to;
+                            child.ancestor_to_idx =
+                                shift_ancestors(&stack[d].ancestor_to_idx, re_search_to);
                             stack.push(child);
                             continue 'outer;
                         }
                     }
 
                     // Process the score
+                    let ply = self.depth.saturating_sub(stack[d].depth);
                     self.process_move_result(
                         &mut stack[d],
                         board,
@@ -479,6 +703,10 @@ impl MinimaxBot {
                         history,
                         countermoves,
                         cont_history,
+                        capture_history,
+                        pawn_history,
+                        low_ply_history,
+                        ply,
                     );
                     board.unmake_move(&mv, info);
 
@@ -534,7 +762,7 @@ impl MinimaxBot {
                             child_player,
                             true,
                         );
-                        child.prev_move_to_idx = re_to;
+                        child.ancestor_to_idx = shift_ancestors(&stack[d].ancestor_to_idx, re_to);
                         stack.push(child);
                         continue 'outer;
                     }
@@ -543,6 +771,7 @@ impl MinimaxBot {
                     let (mv, info) = stack[d].pending_unmake.take().unwrap();
                     let mv_clone = mv.clone();
 
+                    let ply = self.depth.saturating_sub(stack[d].depth);
                     self.process_move_result(
                         &mut stack[d],
                         board,
@@ -552,6 +781,10 @@ impl MinimaxBot {
                         history,
                         countermoves,
                         cont_history,
+                        capture_history,
+                        pawn_history,
+                        low_ply_history,
+                        ply,
                     );
                     board.unmake_move(&mv, info);
 
@@ -598,10 +831,28 @@ impl MinimaxBot {
                 }
 
                 SearchPhase::SingularSearchReturn => {
-                    // Verification search returned. If the score is below singular_beta,
-                    // the TT move is singular — give it an extra extension ply.
+                    // (#6): Enhanced singular extension handling with negative extensions
                     if return_value < stack[d].singular_beta {
+                        // TT move is singular — extend it
                         stack[d].singular_extension = 1;
+                        // Double extension if far below singular beta
+                        if return_value < stack[d].singular_beta - 2 * stack[d].depth as i32 {
+                            stack[d].singular_extension = 2;
+                        }
+                    } else if return_value >= stack[d].beta {
+                        // Multicut: if even the verification search beats beta, prune
+                        stack.pop();
+                        if stack.is_empty() {
+                            return return_value;
+                        }
+                        continue;
+                    } else {
+                        // Non-singular: apply negative extension to TT move (#6)
+                        let is_pv_node = stack[d].beta > stack[d].alpha.saturating_add(1);
+                        if !is_pv_node {
+                            // Negative extension: reduce the TT move's effective depth
+                            stack[d].singular_extension = 0; // no extension (effectively -1 vs normal)
+                        }
                     }
                     stack[d].phase = SearchPhase::ProcessMoves;
                     // fall through to ProcessMoves
@@ -611,6 +862,7 @@ impl MinimaxBot {
                     let score = -return_value;
                     let (mv, info) = stack[d].pending_unmake.take().unwrap();
 
+                    let ply = self.depth.saturating_sub(stack[d].depth);
                     self.process_move_result(
                         &mut stack[d],
                         board,
@@ -620,6 +872,10 @@ impl MinimaxBot {
                         history,
                         countermoves,
                         cont_history,
+                        capture_history,
+                        pawn_history,
+                        low_ply_history,
+                        ply,
                     );
                     board.unmake_move(&mv, info);
 
@@ -643,6 +899,52 @@ impl MinimaxBot {
                     }
 
                     stack[d].phase = SearchPhase::ProcessMoves;
+                }
+
+                SearchPhase::TryTTMoveReturn => {
+                    let score = -return_value;
+                    let (mv, info) = stack[d].pending_unmake.take().unwrap();
+
+                    let ply = self.depth.saturating_sub(stack[d].depth);
+                    self.process_move_result(
+                        &mut stack[d],
+                        board,
+                        &mv,
+                        score,
+                        killers,
+                        history,
+                        countermoves,
+                        cont_history,
+                        capture_history,
+                        pawn_history,
+                        low_ply_history,
+                        ply,
+                    );
+                    board.unmake_move(&mv, info);
+
+                    if self.stop_flag.load(Ordering::Relaxed) {
+                        return_value = 0;
+                        stack.pop();
+                        if stack.is_empty() {
+                            return return_value;
+                        }
+                        continue;
+                    }
+
+                    if stack[d].alpha >= stack[d].beta {
+                        // TT move caused cutoff — skip generating remaining moves
+                        self.store_tt(board, &stack[d]);
+                        return_value = stack[d].best_score;
+                        stack.pop();
+                        if stack.is_empty() {
+                            return return_value;
+                        }
+                        continue;
+                    }
+
+                    // TT move didn't cause cutoff, proceed to generate all moves
+                    stack[d].phase = SearchPhase::GenerateMoves;
+                    // fall through
                 }
 
                 _ => {} // Init, GenerateMoves, ProcessMoves — handled below
@@ -704,6 +1006,35 @@ impl MinimaxBot {
 
                 stack[d].original_alpha = stack[d].alpha;
 
+                // Mate distance pruning (#2): tighten bounds based on shortest possible mate
+                {
+                    let ply = self.depth - stack[d].depth;
+                    let mating_value = CHECKMATE_SCORE - ply as i32;
+                    if mating_value < stack[d].beta {
+                        stack[d].beta = mating_value;
+                        if stack[d].alpha >= mating_value {
+                            return_value = mating_value;
+                            stack.pop();
+                            if stack.is_empty() {
+                                return return_value;
+                            }
+                            continue;
+                        }
+                    }
+                    let mated_value = -CHECKMATE_SCORE + ply as i32;
+                    if mated_value > stack[d].alpha {
+                        stack[d].alpha = mated_value;
+                        if stack[d].beta <= mated_value {
+                            return_value = mated_value;
+                            stack.pop();
+                            if stack.is_empty() {
+                                return return_value;
+                            }
+                            continue;
+                        }
+                    }
+                }
+
                 if stack[d].depth == 0 {
                     return_value =
                         self.q_search(board, stack[d].alpha, stack[d].beta, stack[d].player);
@@ -725,13 +1056,15 @@ impl MinimaxBot {
                     let child_beta = stack[d].beta;
                     let child_player = stack[d].player;
 
-                    stack.push(SearchFrame::new(
+                    let mut iid_child = SearchFrame::new(
                         iid_depth,
                         child_alpha,
                         child_beta,
                         child_player,
                         stack[d].allow_null,
-                    ));
+                    );
+                    iid_child.ancestor_to_idx = stack[d].ancestor_to_idx;
+                    stack.push(iid_child);
                     continue 'outer;
                 }
 
@@ -743,45 +1076,187 @@ impl MinimaxBot {
                         false
                     };
 
-                // Null move pruning
-                if stack[d].allow_null && stack[d].depth >= 3 {
-                    let static_eval = self.evaluate(board, Some(stack[d].player));
-                    if static_eval >= stack[d].beta && !stack[d].in_check_at_entry {
-                        let r = if stack[d].depth > 6 { 3 } else { 2 };
-                        let null_info = board.make_null_move();
-                        stack[d].null_move_info = Some(null_info);
-                        stack[d].phase = SearchPhase::NullMoveReturn;
+                // Static eval (cached for use by null move, futility, razoring, probcut)
+                // Uses correction history (#18) when available
+                let static_eval =
+                    self.evaluate_corrected(board, Some(stack[d].player), correction_history);
+                stack[d].static_eval = static_eval;
 
-                        let child_depth = stack[d].depth - 1 - r;
-                        let child_alpha = -stack[d].beta;
-                        let child_beta = -stack[d].beta + 1;
-                        let child_player = stack[d].player.opponent();
+                // Null move pruning (#4): adaptive R = 3 + depth/3
+                if stack[d].allow_null
+                    && stack[d].depth >= 3
+                    && !stack[d].in_check_at_entry
+                    && static_eval >= stack[d].beta
+                {
+                    let r = (3 + stack[d].depth / 3).min(stack[d].depth - 1);
+                    let null_info = board.make_null_move();
+                    stack[d].null_move_info = Some(null_info);
+                    stack[d].phase = SearchPhase::NullMoveReturn;
 
-                        stack.push(SearchFrame::new(
-                            child_depth,
-                            child_alpha,
-                            child_beta,
-                            child_player,
-                            false,
-                        ));
-                        continue 'outer;
+                    let child_depth = stack[d].depth - 1 - r;
+                    let child_alpha = -stack[d].beta;
+                    let child_beta = -stack[d].beta + 1;
+                    let child_player = stack[d].player.opponent();
+
+                    let mut child =
+                        SearchFrame::new(child_depth, child_alpha, child_beta, child_player, false);
+                    // Null move verification (#4): set nmp_min_ply to prevent
+                    // consecutive null moves near the verification boundary
+                    child.nmp_min_ply = self.depth - stack[d].depth + 3 * (stack[d].depth - r) / 4;
+                    child.ancestor_to_idx = shift_ancestors(&stack[d].ancestor_to_idx, None);
+                    stack.push(child);
+                    continue 'outer;
+                }
+
+                // ProbCut (#1): if a shallow search at beta+margin proves a cutoff,
+                // skip the expensive full-depth search.
+                let is_pv_here = stack[d].beta > stack[d].alpha.saturating_add(1);
+                if !is_pv_here
+                    && stack[d].depth >= 5
+                    && !stack[d].in_check_at_entry
+                    && stack[d].beta.abs() < CHECKMATE_SCORE - 100
+                {
+                    let probcut_beta = stack[d].beta + 200;
+                    let pc_depth = stack[d].depth - 4;
+
+                    // Generate loud moves (captures + promotions) with SEE >= probcut threshold
+                    let loud = Rules::generate_loud_moves(board, stack[d].player);
+                    for mv in &loud {
+                        let see_val = SEE::static_exchange_evaluation(board, mv);
+                        if see_val < probcut_beta - static_eval {
+                            continue;
+                        }
+                        if let Ok(info) = board.apply_move(mv) {
+                            let illegal = if let Some(kp) =
+                                board.get_king_coordinate(stack[d].player)
+                            {
+                                Rules::is_square_attacked(board, &kp, stack[d].player.opponent())
+                            } else {
+                                false
+                            };
+                            if !illegal {
+                                // Quick q-search first
+                                let qval = -self.q_search(
+                                    board,
+                                    -probcut_beta,
+                                    -probcut_beta + 1,
+                                    stack[d].player.opponent(),
+                                );
+                                if qval >= probcut_beta {
+                                    // Verify with a shallow search
+                                    let val = -super::search_core::minimax_shallow(
+                                        board,
+                                        pc_depth,
+                                        -probcut_beta,
+                                        -probcut_beta + 1,
+                                        stack[d].player.opponent(),
+                                        &self.nodes_searched,
+                                        &self.stop_flag,
+                                        Some(&self.tt),
+                                    );
+                                    if val >= probcut_beta {
+                                        board.unmake_move(mv, info);
+                                        // Store in TT at depth+1 (Stockfish does this)
+                                        self.tt.store(
+                                            stack[d].hash,
+                                            val - (probcut_beta - stack[d].beta),
+                                            (stack[d].depth + 1) as u8,
+                                            Flag::LowerBound,
+                                            stack[d].tt_move,
+                                        );
+                                        return_value = val - (probcut_beta - stack[d].beta);
+                                        stack.pop();
+                                        if stack.is_empty() {
+                                            return return_value;
+                                        }
+                                        continue 'outer;
+                                    }
+                                }
+                            }
+                            board.unmake_move(mv, info);
+                        }
                     }
                 }
 
                 // Razor pruning: at shallow depths, if static eval is far below
                 // alpha, drop straight to qsearch.
-                if stack[d].depth <= 3 && !stack[d].in_check_at_entry {
-                    let static_eval = self.evaluate(board, Some(stack[d].player));
-                    if static_eval + RAZOR_MARGIN[stack[d].depth] < stack[d].alpha {
-                        let qval =
-                            self.q_search(board, stack[d].alpha, stack[d].beta, stack[d].player);
-                        if qval < stack[d].alpha {
-                            return_value = qval;
-                            stack.pop();
-                            if stack.is_empty() {
-                                return return_value;
-                            }
-                            continue;
+                if stack[d].depth <= 3
+                    && !stack[d].in_check_at_entry
+                    && stack[d].static_eval + RAZOR_MARGIN[stack[d].depth] < stack[d].alpha
+                {
+                    let qval = self.q_search(board, stack[d].alpha, stack[d].beta, stack[d].player);
+                    if qval < stack[d].alpha {
+                        return_value = qval;
+                        stack.pop();
+                        if stack.is_empty() {
+                            return return_value;
+                        }
+                        continue;
+                    }
+                }
+
+                // Staged move generation (#8): try TT move before generating all moves
+                if let Some(tm) = stack[d].tt_move {
+                    let from_coords = board.index_to_coords(tm.from_idx as usize);
+                    let to_coords = board.index_to_coords(tm.to_idx as usize);
+                    let promotion = match tm.promotion {
+                        1 => Some(PieceType::Queen),
+                        2 => Some(PieceType::Rook),
+                        3 => Some(PieceType::Bishop),
+                        4 => Some(PieceType::Knight),
+                        _ => None,
+                    };
+                    let tt_mv = Move {
+                        from: crate::domain::coordinate::Coordinate::new(from_coords),
+                        to: crate::domain::coordinate::Coordinate::new(to_coords),
+                        promotion,
+                    };
+                    if let Ok(info) = board.apply_move(&tt_mv) {
+                        let illegal = if let Some(king_pos) =
+                            board.get_king_coordinate(stack[d].player)
+                        {
+                            Rules::is_square_attacked(board, &king_pos, stack[d].player.opponent())
+                        } else {
+                            false
+                        };
+                        if !illegal {
+                            stack[d].tt_move_tried = true;
+                            stack[d].legal_count += 1;
+                            stack[d].current_move_index = 0;
+                            stack[d].current_reduction = 0;
+
+                            let gives_check = if let Some(opp_king) =
+                                board.get_king_coordinate(stack[d].player.opponent())
+                            {
+                                Rules::is_square_attacked(board, &opp_king, stack[d].player)
+                            } else {
+                                false
+                            };
+                            let extension: usize = if gives_check { 1 } else { 0 };
+                            stack[d].current_extension = extension;
+
+                            let move_to_idx = board.coords_to_index(&tt_mv.to.values);
+                            stack[d].pending_unmake = Some((tt_mv, info));
+                            stack[d].phase = SearchPhase::TryTTMoveReturn;
+
+                            let child_depth = stack[d].depth - 1 + extension;
+                            let child_alpha = -stack[d].beta;
+                            let child_beta = -stack[d].alpha;
+                            let child_player = stack[d].player.opponent();
+
+                            let mut child = SearchFrame::new(
+                                child_depth,
+                                child_alpha,
+                                child_beta,
+                                child_player,
+                                true,
+                            );
+                            child.ancestor_to_idx =
+                                shift_ancestors(&stack[d].ancestor_to_idx, move_to_idx);
+                            stack.push(child);
+                            continue 'outer;
+                        } else {
+                            board.unmake_move(&tt_mv, info);
                         }
                     }
                 }
@@ -813,10 +1288,11 @@ impl MinimaxBot {
                     continue;
                 }
 
-                // Futility pruning setup
-                if stack[d].depth == 1 {
-                    let eval = self.evaluate(board, Some(stack[d].player));
-                    if eval + 500 < stack[d].alpha {
+                // Multi-depth futility pruning (#5): depth-scaled margin
+                // Margin = 77*depth (Stockfish-inspired, simplified for N-dim)
+                if stack[d].depth <= 6 && !stack[d].in_check {
+                    let futility_margin = 77 * stack[d].depth as i32;
+                    if stack[d].static_eval + futility_margin < stack[d].alpha {
                         stack[d].do_futility = true;
                     }
                 }
@@ -831,7 +1307,7 @@ impl MinimaxBot {
                 };
 
                 // Look up countermove for this position
-                let cm = if let Some(prev_to) = stack[d].prev_move_to_idx {
+                let cm = if let Some(prev_to) = stack[d].ancestor_to_idx[0] {
                     let opp = stack[d].player.opponent() as usize;
                     if prev_to < countermoves[opp].len() {
                         countermoves[opp][prev_to].as_ref()
@@ -842,6 +1318,8 @@ impl MinimaxBot {
                     None
                 };
 
+                let sort_ply = self.depth.saturating_sub(stack[d].depth);
+                let sort_pawn_hash = Self::pawn_hash(board);
                 self.sort_moves(
                     board,
                     &mut moves,
@@ -850,8 +1328,13 @@ impl MinimaxBot {
                     history,
                     cm,
                     cont_history,
-                    stack[d].prev_move_to_idx,
+                    capture_history,
+                    &stack[d].ancestor_to_idx,
                     stack[d].player,
+                    pawn_history,
+                    sort_pawn_hash,
+                    low_ply_history,
+                    sort_ply,
                 );
 
                 stack[d].moves = moves;
@@ -894,6 +1377,10 @@ impl MinimaxBot {
                                     history,
                                     countermoves,
                                     cont_history,
+                                    capture_history,
+                                    correction_history,
+                                    pawn_history,
+                                    low_ply_history,
                                     board.coords_to_index(&mv.to.values),
                                 );
                                 if child_score >= stack[d].beta {
@@ -918,7 +1405,7 @@ impl MinimaxBot {
                 // If we have a TT move at sufficient depth with a non-upper-bound score,
                 // verify it's singular by searching all other moves at reduced depth.
                 // If they all fail low by a margin, extend the TT move.
-                if stack[d].depth >= 8
+                if stack[d].depth >= 6
                     && stack[d].tt_move.is_some()
                     && !stack[d].in_check
                     && let Some((tt_score, tt_depth, tt_flag, _)) = self.tt.get(stack[d].hash)
@@ -939,13 +1426,15 @@ impl MinimaxBot {
                     let se_alpha = stack[d].singular_beta - 1;
                     let se_beta = stack[d].singular_beta;
 
-                    stack.push(SearchFrame::new(
+                    let mut se_child = SearchFrame::new(
                         se_depth,
                         se_alpha,
                         se_beta,
                         stack[d].player,
                         false, // no null move in verification
-                    ));
+                    );
+                    se_child.ancestor_to_idx = stack[d].ancestor_to_idx;
+                    stack.push(se_child);
                     // The singular verification child will search the full position.
                     // The TT move will get its TT cutoff; if others all fail low,
                     // the result will be < singular_beta.
@@ -962,6 +1451,17 @@ impl MinimaxBot {
                     let i = stack[d].move_idx;
                     let mv = stack[d].moves[i].clone();
                     stack[d].move_idx += 1;
+
+                    // Skip TT move if already tried in staged phase (#8)
+                    if stack[d].tt_move_tried
+                        && let Some(tm) = stack[d].tt_move
+                    {
+                        let from_idx = board.coords_to_index(&mv.from.values).unwrap_or(usize::MAX);
+                        let to_idx = board.coords_to_index(&mv.to.values).unwrap_or(usize::MAX);
+                        if tm.from_idx as usize == from_idx && tm.to_idx as usize == to_idx {
+                            continue;
+                        }
+                    }
 
                     let info = match board.apply_move(&mv) {
                         Ok(info) => info,
@@ -1014,18 +1514,45 @@ impl MinimaxBot {
                         continue;
                     }
 
-                    // LMR reduction
-                    let mut reduction = 0;
-                    if legal_idx >= 4
+                    // LMR reduction (#3): log-based table with dynamic adjustments
+                    let mut reduction: usize = 0;
+                    let is_pv_node = stack[d].beta > stack[d].alpha.saturating_add(1);
+                    if legal_idx >= 2
                         && stack[d].depth >= 3
                         && !is_capture
                         && !is_promotion
                         && !stack[d].in_check
-                        && !gives_check
                     {
-                        reduction = if stack[d].depth > 6 { 2 } else { 1 };
+                        let d_idx = stack[d].depth.min(LMR_TABLE_SIZE - 1);
+                        let m_idx = legal_idx.min(LMR_TABLE_SIZE - 1);
+                        let mut r = self.lmr_table[d_idx][m_idx];
+
+                        // Dynamic adjustments:
+                        // Reduce less for PV nodes
+                        if is_pv_node {
+                            r -= 1;
+                        }
+                        // Reduce less if giving check
+                        if gives_check {
+                            r -= 1;
+                        }
+                        // Reduce more at non-PV cut nodes
+                        if !is_pv_node {
+                            r += 1;
+                        }
+                        // Adjust by history score (good history = less reduction)
+                        let from_idx_h = board.coords_to_index(&mv.from.values).unwrap_or(0);
+                        let to_idx_h = board.coords_to_index(&mv.to.values).unwrap_or(0);
+                        let hist_idx = from_idx_h * board.total_cells() + to_idx_h;
+                        if hist_idx < history[stack[d].player as usize].len() {
+                            let h = history[stack[d].player as usize][hist_idx];
+                            r -= (h / 2048).clamp(-2, 2);
+                        }
+
+                        reduction = r.max(0) as usize;
+                        // Don't reduce into negative depth
                         if stack[d].depth - 1 + extension < reduction {
-                            reduction = 0;
+                            reduction = (stack[d].depth - 1 + extension).saturating_sub(1);
                         }
                     }
 
@@ -1052,7 +1579,8 @@ impl MinimaxBot {
                             child_player,
                             true,
                         );
-                        child.prev_move_to_idx = move_to_idx;
+                        child.ancestor_to_idx =
+                            shift_ancestors(&stack[d].ancestor_to_idx, move_to_idx);
                         stack.push(child);
                     } else {
                         // Scout/LMR search: null window
@@ -1067,7 +1595,8 @@ impl MinimaxBot {
                             child_player,
                             true,
                         );
-                        child.prev_move_to_idx = move_to_idx;
+                        child.ancestor_to_idx =
+                            shift_ancestors(&stack[d].ancestor_to_idx, move_to_idx);
                         stack.push(child);
                     }
                     continue 'outer;
@@ -1087,6 +1616,14 @@ impl MinimaxBot {
                     continue;
                 }
 
+                // Update correction history (#18) before storing TT
+                Self::update_correction(
+                    board,
+                    stack[d].static_eval,
+                    stack[d].best_score,
+                    stack[d].depth,
+                    correction_history,
+                );
                 self.store_tt(board, &stack[d]);
                 return_value = stack[d].best_score;
                 stack.pop();
@@ -1099,6 +1636,7 @@ impl MinimaxBot {
     }
 
     /// Process the result of a child search for a move.
+    /// Uses Stockfish-style history gravity (#29) and penalties for non-cutoff moves (#14).
     #[allow(clippy::too_many_arguments)]
     fn process_move_result(
         &self,
@@ -1110,7 +1648,19 @@ impl MinimaxBot {
         history: &mut [Vec<i32>],
         countermoves: &mut [Vec<Option<Move>>],
         cont_history: &mut [Vec<i32>],
+        capture_history: &mut [Vec<i32>],
+        pawn_history: &mut [Vec<i32>],
+        low_ply_history: &mut [Vec<i32>],
+        ply: usize,
     ) {
+        let is_capture = frame
+            .pending_unmake
+            .as_ref()
+            .map(|(_, info)| info.captured.is_some())
+            .unwrap_or(false);
+        let is_promotion = mv.promotion.is_some();
+        let is_quiet = !is_capture && !is_promotion;
+
         if score > frame.best_score {
             frame.best_score = score;
             frame.best_move_obj = Some(mv.clone());
@@ -1118,64 +1668,101 @@ impl MinimaxBot {
 
         if score > frame.alpha {
             frame.alpha = score;
+        }
 
-            let is_capture = frame
-                .pending_unmake
-                .as_ref()
-                .map(|(_, info)| info.captured.is_some())
-                .unwrap_or(false);
-            let is_promotion = mv.promotion.is_some();
+        // Track searched quiet moves for fail-low penalty (#14)
+        if is_quiet {
+            let from_idx = board.coords_to_index(&mv.from.values).unwrap_or(0);
+            let to_idx = board.coords_to_index(&mv.to.values).unwrap_or(0);
+            frame.searched_quiets.push((from_idx, to_idx));
+        }
 
-            if !is_capture && !is_promotion {
-                let from_idx = board.coords_to_index(&mv.from.values).unwrap_or(0);
-                let to_idx = board.coords_to_index(&mv.to.values).unwrap_or(0);
-                let hist_idx = from_idx * board.total_cells() + to_idx;
+        if frame.alpha >= frame.beta && is_quiet {
+            let bonus = ((121 * frame.depth as i32 - 75).min(932)).max(0);
+            let from_idx = board.coords_to_index(&mv.from.values).unwrap_or(0);
+            let to_idx = board.coords_to_index(&mv.to.values).unwrap_or(0);
+            let total = board.total_cells();
 
-                if hist_idx < history[frame.player as usize].len() {
-                    let bonus = (frame.depth * frame.depth) as i32;
-                    let current = history[frame.player as usize][hist_idx];
-                    if current + bonus < MAX_HISTORY {
-                        history[frame.player as usize][hist_idx] += bonus;
+            // Bonus for the cutoff move (history gravity #29)
+            let hist_idx = from_idx * total + to_idx;
+            if hist_idx < history[frame.player as usize].len() {
+                update_history(&mut history[frame.player as usize][hist_idx], bonus);
+            }
+
+            // Multi-ply continuation history bonus (#11)
+            for ply_back in 0..CONT_HIST_PLIES {
+                if let Some(anc_to) = frame.ancestor_to_idx[ply_back] {
+                    let cont_idx = anc_to * total + to_idx;
+                    let table_idx = ply_back * 2 + frame.player as usize;
+                    if table_idx < cont_history.len() && cont_idx < cont_history[table_idx].len() {
+                        update_history(&mut cont_history[table_idx][cont_idx], bonus);
                     }
+                }
+            }
+
+            // Pawn history bonus (#12)
+            let pawn_hash = Self::pawn_hash(board);
+            let ph_idx = (pawn_hash as usize & (PAWN_HIST_SIZE - 1)) * total + to_idx;
+            if ph_idx < pawn_history[frame.player as usize].len() {
+                update_history(&mut pawn_history[frame.player as usize][ph_idx], bonus);
+            }
+
+            // Low-ply history bonus (#13)
+            if ply < LOW_PLY_MAX {
+                let lp_table = ply * 2 + frame.player as usize;
+                if lp_table < low_ply_history.len() && hist_idx < low_ply_history[lp_table].len() {
+                    update_history(&mut low_ply_history[lp_table][hist_idx], bonus);
+                }
+            }
+
+            // Penalty for all previously searched quiets that didn't cause cutoff (#14)
+            let penalty = -bonus;
+            for &(f, t) in &frame.searched_quiets {
+                if f == from_idx && t == to_idx {
+                    continue;
+                }
+                let idx = f * total + t;
+                if idx < history[frame.player as usize].len() {
+                    update_history(&mut history[frame.player as usize][idx], penalty);
+                }
+                // Multi-ply cont history penalty
+                for ply_back in 0..CONT_HIST_PLIES {
+                    if let Some(anc_to) = frame.ancestor_to_idx[ply_back] {
+                        let cidx = anc_to * total + t;
+                        let ti = ply_back * 2 + frame.player as usize;
+                        if ti < cont_history.len() && cidx < cont_history[ti].len() {
+                            update_history(&mut cont_history[ti][cidx], penalty);
+                        }
+                    }
+                }
+            }
+
+            // Killer moves
+            if frame.depth < killers.len() {
+                killers[frame.depth][1] = killers[frame.depth][0].clone();
+                killers[frame.depth][0] = Some(mv.clone());
+            }
+
+            // Countermove
+            if let Some(prev_to) = frame.ancestor_to_idx[0] {
+                let opp = frame.player.opponent() as usize;
+                if prev_to < countermoves[opp].len() {
+                    countermoves[opp][prev_to] = Some(mv.clone());
                 }
             }
         }
 
-        if frame.alpha >= frame.beta {
-            let is_capture = frame
-                .pending_unmake
-                .as_ref()
-                .map(|(_, info)| info.captured.is_some())
-                .unwrap_or(false);
-            let is_promotion = mv.promotion.is_some();
-
-            if !is_capture && !is_promotion {
-                // Killer moves
-                if frame.depth < killers.len() {
-                    killers[frame.depth][1] = killers[frame.depth][0].clone();
-                    killers[frame.depth][0] = Some(mv.clone());
-                }
-
-                // Countermove: store this move as the refutation of the previous move
-                if let Some(prev_to) = frame.prev_move_to_idx {
-                    let opp = frame.player.opponent() as usize;
-                    if prev_to < countermoves[opp].len() {
-                        countermoves[opp][prev_to] = Some(mv.clone());
-                    }
-                }
-
-                // Continuation history: update score for (prev_move_to, this_move_to) pair
-                let to_idx = board.coords_to_index(&mv.to.values).unwrap_or(0);
-                if let Some(prev_to) = frame.prev_move_to_idx {
-                    let cont_idx = prev_to * board.total_cells() + to_idx;
-                    if cont_idx < cont_history[frame.player as usize].len() {
-                        let bonus = (frame.depth * frame.depth) as i32;
-                        let current = cont_history[frame.player as usize][cont_idx];
-                        if current + bonus < MAX_HISTORY {
-                            cont_history[frame.player as usize][cont_idx] += bonus;
-                        }
-                    }
-                }
+        // Capture history update (#10): bonus for captures that cause cutoff
+        if frame.alpha >= frame.beta && is_capture {
+            let to_idx = board.coords_to_index(&mv.to.values).unwrap_or(0);
+            let cap_type = piece_type_index(board, to_idx);
+            let cap_hist_idx = to_idx * 6 + cap_type;
+            let bonus = ((121 * frame.depth as i32 - 75).min(932)).max(0);
+            if cap_hist_idx < capture_history[frame.player as usize].len() {
+                update_history(
+                    &mut capture_history[frame.player as usize][cap_hist_idx],
+                    bonus,
+                );
             }
         }
     }
@@ -1227,6 +1814,7 @@ enum SearchPhase {
     NullMoveReturn,
     IidReturn,
     SingularSearchReturn,
+    TryTTMoveReturn,
     GenerateMoves,
     ProcessMoves,
     MoveSearchReturn,
@@ -1257,12 +1845,21 @@ struct SearchFrame {
     current_extension: usize,
     pending_unmake: Option<(Move, UnmakeInfo)>,
     null_move_info: Option<UnmakeInfo>,
-    /// The to-index of the move that led to this node (from parent).
-    prev_move_to_idx: Option<usize>,
+    /// The to-index of the move that led to this node (from parent), up to CONT_HIST_PLIES ancestors.
+    /// ancestor_to_idx[0] = parent's move-to, [1] = grandparent's, etc.
+    ancestor_to_idx: [Option<usize>; CONT_HIST_PLIES],
     /// Singular extension fields
     singular_beta: i32,
     singular_tt_move: Option<PackedMove>,
     singular_extension: usize,
+    /// Searched quiet moves (from_idx, to_idx) for fail-low penalty (#14)
+    searched_quiets: Vec<(usize, usize)>,
+    /// Cached static eval for this node
+    static_eval: i32,
+    /// Null-move verification: minimum ply before allowing another null move (#4)
+    nmp_min_ply: usize,
+    /// Whether the TT move was already tried in the staged phase (#8)
+    tt_move_tried: bool,
 }
 
 impl SearchFrame {
@@ -1290,10 +1887,14 @@ impl SearchFrame {
             current_extension: 0,
             pending_unmake: None,
             null_move_info: None,
-            prev_move_to_idx: None,
+            ancestor_to_idx: [None; CONT_HIST_PLIES],
             singular_beta: 0,
             singular_tt_move: None,
             singular_extension: 0,
+            searched_quiets: Vec::new(),
+            static_eval: 0,
+            nmp_min_ply: 0,
+            tt_move_tried: false,
         }
     }
 }
@@ -1374,9 +1975,32 @@ impl PlayerStrategy for MinimaxBot {
                 let hist_size = total_cells * total_cells;
                 let mut history = vec![vec![0i32; hist_size], vec![0i32; hist_size]];
                 let mut countermoves = vec![vec![None; total_cells], vec![None; total_cells]];
-                let mut cont_history = vec![vec![0i32; hist_size], vec![0i32; hist_size]];
+                let mut cont_history = vec![vec![0i32; hist_size]; CONT_HIST_PLIES * 2];
+                let cap_hist_size = total_cells * 6;
+                let mut capture_history =
+                    vec![vec![0i32; cap_hist_size], vec![0i32; cap_hist_size]];
+                let mut correction_history = CorrectionHistory::new();
+                let pawn_hist_entry_size = PAWN_HIST_SIZE * total_cells;
+                let mut pawn_history = vec![
+                    vec![0i32; pawn_hist_entry_size],
+                    vec![0i32; pawn_hist_entry_size],
+                ];
+                let mut low_ply_history = vec![vec![0i32; hist_size]; LOW_PLY_MAX * 2];
 
-                for d in 1..=self.depth {
+                // Adaptive time management (#24, #25)
+                let mut best_move_stable_count: usize = 0;
+                let mut prev_best_move: Option<Move> = None;
+                let mut prev_iter_score: i32 = 0;
+                let base_time = self.time_limit;
+
+                // Depth staggering (#27): helper threads start at higher depths
+                // to diversify TT population. Thread 0 starts at 1, thread 1 at 2, etc.
+                let start_depth = if thread_idx == 0 {
+                    1
+                } else {
+                    1 + (thread_idx % 3)
+                };
+                for d in start_depth..=self.depth {
                     let mut delta = 50;
                     let mut alpha;
                     let mut beta;
@@ -1411,6 +2035,10 @@ impl PlayerStrategy for MinimaxBot {
                                 &mut history,
                                 &mut countermoves,
                                 &mut cont_history,
+                                &mut capture_history,
+                                &mut correction_history,
+                                &mut pawn_history,
+                                &mut low_ply_history,
                                 mv_to_idx,
                             );
                             local_board.unmake_move(mv, info);
@@ -1445,12 +2073,12 @@ impl PlayerStrategy for MinimaxBot {
                             if failed_low {
                                 beta = (alpha + beta) / 2;
                                 alpha -= delta;
-                                delta += delta / 2;
+                                delta += delta / 3;
                                 continue;
                             }
                             if failed_high {
                                 beta += delta;
-                                delta += delta / 2;
+                                delta += delta / 3;
                                 continue;
                             }
                         }
@@ -1462,6 +2090,43 @@ impl PlayerStrategy for MinimaxBot {
                     }
                     if self.stop_flag.load(Ordering::Relaxed) {
                         break;
+                    }
+
+                    // Adaptive time: check if we should stop early (#24, #25)
+                    if d >= 5 && thread_idx == 0 {
+                        // Best move stability (#25)
+                        if local_best_move == prev_best_move {
+                            best_move_stable_count += 1;
+                        } else {
+                            best_move_stable_count = 0;
+                        }
+                        prev_best_move = local_best_move.clone();
+
+                        // Falling eval factor (#24): if eval is dropping, use more time
+                        let eval_drop = (prev_iter_score - local_best_score).max(0);
+                        prev_iter_score = local_best_score;
+                        let falling_eval_factor = if eval_drop > 50 {
+                            1.5_f64 // eval falling significantly: 50% more time
+                        } else if eval_drop > 20 {
+                            1.2
+                        } else {
+                            1.0
+                        };
+
+                        // Stability factor: stable best move → reduce time
+                        let stability_factor = match best_move_stable_count {
+                            0..=1 => 1.2, // unstable: more time
+                            2..=3 => 1.0, // normal
+                            4..=6 => 0.7, // stable: less time
+                            _ => 0.5,     // very stable: much less time
+                        };
+
+                        let adjusted_time =
+                            base_time.as_secs_f64() * falling_eval_factor * stability_factor;
+                        if start_time.elapsed().as_secs_f64() > adjusted_time * 0.6 {
+                            // Used 60% of adjusted time — stop iterating
+                            break;
+                        }
                     }
                 }
 

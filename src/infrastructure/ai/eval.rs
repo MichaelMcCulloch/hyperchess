@@ -140,6 +140,29 @@ const CASTLING_RIGHTS_BONUS_EG: i32 = 0;
 const TRADE_BONUS_MG: i32 = 0; // negligible in middlegame
 const TRADE_BONUS_EG: i32 = 48; // ~½ pawn at maximum simplification
 
+// ── Tempo bonus (#19) ────────────────────────────────────────────────
+const TEMPO_BONUS: i32 = 15;
+
+// ── Rule50 / shuffle damping (#20) ──────────────────────────────────
+// Dampens eval toward draw as 50-move rule approaches.
+const RULE50_DIVISOR: i32 = 199;
+
+// ── Outpost bonus (#21) ─────────────────────────────────────────────
+// Knight/bishop on squares that can't be attacked by enemy pawns.
+const OUTPOST_KNIGHT_MG: i32 = 20;
+const OUTPOST_KNIGHT_EG: i32 = 15;
+const OUTPOST_BISHOP_MG: i32 = 10;
+const OUTPOST_BISHOP_EG: i32 = 8;
+
+// ── Rook on 7th rank (#22) ──────────────────────────────────────────
+const ROOK_ON_7TH_MG: i32 = 20;
+const ROOK_ON_7TH_EG: i32 = 30;
+
+// ── Space advantage (#23) ───────────────────────────────────────────
+// Bonus for controlling squares beyond the pawn line in own half.
+const SPACE_BONUS_MG: i32 = 2;
+const SPACE_BONUS_EG: i32 = 0;
+
 pub struct Evaluator;
 
 impl Evaluator {
@@ -149,7 +172,20 @@ impl Evaluator {
         let start_phase = board.state.start_phase.max(1);
         let phase = phase.min(start_phase);
 
-        (mg_score * phase + eg_score * (start_phase - phase)) / start_phase
+        let mut v = (mg_score * phase + eg_score * (start_phase - phase)) / start_phase;
+
+        // Tempo bonus (#19): side to move gets a small advantage
+        // (board always evaluates from White's perspective, caller negates for Black)
+        // We add tempo unconditionally; the search handles negation.
+        v += TEMPO_BONUS;
+
+        // Rule50 / shuffle damping (#20): dampen eval toward draw
+        let rule50 = board.state.halfmove_clock as i32;
+        if rule50 > 0 {
+            v -= v * rule50 / RULE50_DIVISOR;
+        }
+
+        v
     }
 
     fn gather_scores(board: &Board) -> (i32, i32, i32) {
@@ -215,6 +251,19 @@ impl Evaluator {
         let npm_norm = npm_diff / ROOK_MG.max(1);
         mg_score += npm_norm * TRADE_BONUS_MG * simplification / start_phase;
         eg_score += npm_norm * TRADE_BONUS_EG * simplification / start_phase;
+
+        // Outposts (#21), rook on 7th (#22), space (#23)
+        let (out_mg, out_eg) = Self::evaluate_outposts(board);
+        mg_score += out_mg;
+        eg_score += out_eg;
+
+        let (r7_mg, r7_eg) = Self::evaluate_rook_7th(board);
+        mg_score += r7_mg;
+        eg_score += r7_eg;
+
+        let (sp_mg, sp_eg) = Self::evaluate_space(board);
+        mg_score += sp_mg;
+        eg_score += sp_eg;
 
         (mg_score, eg_score, phase)
     }
@@ -789,6 +838,169 @@ impl Evaluator {
 
         let mg = (white_rights - black_rights) * CASTLING_RIGHTS_BONUS_MG;
         let eg = (white_rights - black_rights) * CASTLING_RIGHTS_BONUS_EG;
+
+        (mg, eg)
+    }
+
+    // ── Outpost detection (#21) ──────────────────────────────────────
+    // A knight/bishop is on an outpost if no enemy pawn can attack it
+    // (no enemy pawn on adjacent files ahead). N-dimensional: uses
+    // axis 0 = rank, axis 1 = file, higher dims must match.
+
+    fn evaluate_outposts(board: &Board) -> (i32, i32) {
+        let mut mg = 0;
+        let mut eg = 0;
+        let dim = board.dimension();
+
+        for player in [Player::White, Player::Black] {
+            let sign = if player == Player::White { 1 } else { -1 };
+            let occ = match player {
+                Player::White => &board.pieces.white_occupancy,
+                Player::Black => &board.pieces.black_occupancy,
+            };
+            let enemy_pawns = Self::get_pawn_indices(board, player.opponent());
+
+            for idx in occ.iter_indices() {
+                let is_knight = board.pieces.knights.get_bit(idx);
+                let is_bishop = board.pieces.bishops.get_bit(idx);
+                if !is_knight && !is_bishop {
+                    continue;
+                }
+
+                let coords = &board.geo.cache.index_to_coords[idx];
+                // Check if any enemy pawn can attack this square
+                // (enemy pawn on adjacent file, ahead of this piece)
+                let mut is_outpost = true;
+                let rank = coords[0];
+                let file = coords[1];
+
+                for &ep_idx in &enemy_pawns {
+                    let ec = &board.geo.cache.index_to_coords[ep_idx];
+                    if !higher_dims_match(coords, ec, dim) {
+                        continue;
+                    }
+                    let file_diff = (ec[1] as i32 - file as i32).abs();
+                    if file_diff != 1 {
+                        continue;
+                    }
+                    // Is enemy pawn ahead (can potentially attack)?
+                    let ahead = match player {
+                        Player::White => ec[0] > rank,
+                        Player::Black => ec[0] < rank,
+                    };
+                    if ahead {
+                        is_outpost = false;
+                        break;
+                    }
+                }
+
+                if is_outpost {
+                    // Also require the piece to be in enemy half
+                    let in_enemy_half = match player {
+                        Player::White => rank as usize >= board.side() / 2,
+                        Player::Black => (rank as usize) < board.side() / 2,
+                    };
+                    if in_enemy_half {
+                        if is_knight {
+                            mg += sign * OUTPOST_KNIGHT_MG;
+                            eg += sign * OUTPOST_KNIGHT_EG;
+                        } else {
+                            mg += sign * OUTPOST_BISHOP_MG;
+                            eg += sign * OUTPOST_BISHOP_EG;
+                        }
+                    }
+                }
+            }
+        }
+
+        (mg, eg)
+    }
+
+    // ── Rook on 7th rank (#22) ───────────────────────────────────────
+    // Bonus for rook on the penultimate rank (rank N-2 for white, rank 1 for black).
+
+    fn evaluate_rook_7th(board: &Board) -> (i32, i32) {
+        let mut mg = 0;
+        let mut eg = 0;
+        let last_rank = board.side() - 1;
+
+        for player in [Player::White, Player::Black] {
+            let sign = if player == Player::White { 1 } else { -1 };
+            let occ = match player {
+                Player::White => &board.pieces.white_occupancy,
+                Player::Black => &board.pieces.black_occupancy,
+            };
+            let seventh = match player {
+                Player::White => last_rank - 1,
+                Player::Black => 1,
+            };
+
+            for idx in occ.iter_indices() {
+                if !board.pieces.rooks.get_bit(idx) {
+                    continue;
+                }
+                let rank = board.geo.cache.index_to_coords[idx][0] as usize;
+                if rank == seventh {
+                    mg += sign * ROOK_ON_7TH_MG;
+                    eg += sign * ROOK_ON_7TH_EG;
+                }
+            }
+        }
+
+        (mg, eg)
+    }
+
+    // ── Space advantage (#23) ────────────────────────────────────────
+    // Count squares in the center region of own half that are behind
+    // own pawns (safe, controlled space). N-dimensional: uses
+    // center distance + rank-based filtering.
+
+    fn evaluate_space(board: &Board) -> (i32, i32) {
+        let mut mg = 0;
+        let mut eg = 0;
+        let side = board.side();
+        let half = side / 2;
+
+        for player in [Player::White, Player::Black] {
+            let sign = if player == Player::White { 1 } else { -1 };
+            let mut space_count = 0i32;
+
+            // Count safe squares in own half that are:
+            // 1. In the center region (low center distance)
+            // 2. Behind own pawns on that file
+            let my_occ = match player {
+                Player::White => &board.pieces.white_occupancy,
+                Player::Black => &board.pieces.black_occupancy,
+            };
+
+            for idx in 0..board.total_cells() {
+                let coords = &board.geo.cache.index_to_coords[idx];
+                let rank = coords[0] as usize;
+
+                // Only count squares in own extended half
+                let in_own_half = match player {
+                    Player::White => rank < half + 1,
+                    Player::Black => rank >= half.saturating_sub(1),
+                };
+                if !in_own_half {
+                    continue;
+                }
+
+                // Prefer central squares (low distance from center)
+                let dist = board.geo.cache.center_dist[idx];
+                if dist > 2 {
+                    continue;
+                }
+
+                // Not occupied by own piece
+                if !my_occ.get_bit(idx) && !board.pieces.all_occupancy.get_bit(idx) {
+                    space_count += 1;
+                }
+            }
+
+            mg += sign * space_count * SPACE_BONUS_MG;
+            eg += sign * space_count * SPACE_BONUS_EG;
+        }
 
         (mg, eg)
     }
