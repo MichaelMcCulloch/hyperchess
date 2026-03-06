@@ -63,10 +63,16 @@ impl LockFreeTT {
         let num_buckets = (bytes / (BUCKET_SIZE * 16)).next_power_of_two().max(1);
 
         let num_atomics = num_buckets * BUCKET_SIZE * 2;
-        let mut table = Vec::with_capacity(num_atomics);
-        for _ in 0..num_atomics {
-            table.push(AtomicU64::new(0));
-        }
+        // Use zeroed allocation: AtomicU64(0) is all-zero bytes, so we can bulk-allocate
+        // via calloc instead of pushing one-by-one (avoids millions of page faults).
+        let table = unsafe {
+            let layout = std::alloc::Layout::array::<AtomicU64>(num_atomics).unwrap();
+            let ptr = std::alloc::alloc_zeroed(layout) as *mut AtomicU64;
+            if ptr.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
+            Vec::from_raw_parts(ptr, num_atomics, num_atomics)
+        };
 
         LockFreeTT {
             table,

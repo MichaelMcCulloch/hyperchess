@@ -3,7 +3,7 @@
 PROFILE_BIN = ./target/release/bench_profile
 PROFILES_DIR = profiles
 CONCURRENCY = 1
-MINUTES = 1
+MINUTES = 2
 
 build-profile:
 	RUSTFLAGS="-C target-cpu=native" cargo build --release --bin bench_profile

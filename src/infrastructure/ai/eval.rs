@@ -2,7 +2,7 @@ use smallvec::SmallVec;
 
 use crate::domain::board::Board;
 use crate::domain::models::{PieceType, Player};
-use crate::domain::rules::{Rules, attacks};
+use crate::domain::rules::Rules;
 
 // ── Material values ──────────────────────────────────────────────────
 
@@ -223,7 +223,11 @@ impl Evaluator {
         mg_score += ks_mg;
         eg_score += ks_eg;
 
-        let (ps_mg, ps_eg) = Self::evaluate_pawn_structure(board);
+        // Cache pawn indices once (used by pawn structure + outposts)
+        let white_pawns = Self::get_pawn_indices(board, Player::White);
+        let black_pawns = Self::get_pawn_indices(board, Player::Black);
+
+        let (ps_mg, ps_eg) = Self::evaluate_pawn_structure(board, &white_pawns, &black_pawns);
         mg_score += ps_mg;
         eg_score += ps_eg;
 
@@ -240,20 +244,15 @@ impl Evaluator {
         eg_score += cr_eg;
 
         // ── Trade bonus ──
-        // npm_diff > 0 → white has more material → white benefits from trades.
-        // simplification = (start_phase - phase) / start_phase ∈ [0, 1].
-        // We multiply in integer arithmetic to avoid float.
         let start_phase = board.state.start_phase.max(1);
         let npm_diff = white_npm - black_npm;
         let simplification = start_phase - phase.min(start_phase);
-        // trade = npm_diff_sign * BONUS * simplification / start_phase
-        // Normalize npm_diff to roughly ±1..±5 range by dividing by rook value.
         let npm_norm = npm_diff / ROOK_MG.max(1);
         mg_score += npm_norm * TRADE_BONUS_MG * simplification / start_phase;
         eg_score += npm_norm * TRADE_BONUS_EG * simplification / start_phase;
 
         // Outposts (#21), rook on 7th (#22), space (#23)
-        let (out_mg, out_eg) = Self::evaluate_outposts(board);
+        let (out_mg, out_eg) = Self::evaluate_outposts(board, &white_pawns, &black_pawns);
         mg_score += out_mg;
         eg_score += out_eg;
 
@@ -423,8 +422,6 @@ impl Evaluator {
                 Player::White => &board.pieces.black_occupancy,
                 Player::Black => &board.pieces.white_occupancy,
             };
-            let enemy = player.opponent();
-
             let forward_size = match player {
                 Player::White => forward_white,
                 Player::Black => forward_black,
@@ -454,38 +451,28 @@ impl Evaluator {
             }
 
             // ── Signal 2: Open lines toward king ──
+            // Single-pass ray walk: checks pawn shield in first max_scan steps,
+            // then continues to find threats if no shield was found.
 
             let mut open_count = 0i32;
             let mut attacked_count = 0i32;
 
             for dir_info in &board.geo.cache.rook_directions {
-                if !Self::ray_has_pawn_shield_idx(board, king_idx, dir_info, my_occ, max_scan) {
-                    open_count += 1;
-                    if attacks::scan_ray_for_threat_idx(
-                        board,
-                        king_idx,
-                        dir_info,
-                        enemy,
-                        &[PieceType::Rook, PieceType::Queen],
-                    ) {
-                        attacked_count += 1;
-                    }
-                }
+                let (open, attacked) = Self::ray_shield_and_threat(
+                    board, king_idx, dir_info, my_occ, enemy_occ, max_scan,
+                    |b, i| b.pieces.rooks.get_bit(i) || b.pieces.queens.get_bit(i),
+                );
+                open_count += open as i32;
+                attacked_count += attacked as i32;
             }
 
             for dir_info in &board.geo.cache.bishop_directions {
-                if !Self::ray_has_pawn_shield_idx(board, king_idx, dir_info, my_occ, max_scan) {
-                    open_count += 1;
-                    if attacks::scan_ray_for_threat_idx(
-                        board,
-                        king_idx,
-                        dir_info,
-                        enemy,
-                        &[PieceType::Bishop, PieceType::Queen],
-                    ) {
-                        attacked_count += 1;
-                    }
-                }
+                let (open, attacked) = Self::ray_shield_and_threat(
+                    board, king_idx, dir_info, my_occ, enemy_occ, max_scan,
+                    |b, i| b.pieces.bishops.get_bit(i) || b.pieces.queens.get_bit(i),
+                );
+                open_count += open as i32;
+                attacked_count += attacked as i32;
             }
 
             if total_dirs > 0 {
@@ -558,49 +545,76 @@ impl Evaluator {
         (mg, eg)
     }
 
-    /// Index-based pawn shield scan — no allocations.
-    fn ray_has_pawn_shield_idx(
+    /// Combined pawn-shield + threat scan in a single ray walk.
+    /// Returns (is_open, is_attacked).
+    #[inline]
+    fn ray_shield_and_threat(
         board: &Board,
         origin_idx: usize,
         dir_info: &crate::domain::board::cache::DirectionInfo,
         friendly_occ: &crate::domain::board::BitBoardLarge,
-        max_steps: usize,
-    ) -> bool {
+        enemy_occ: &crate::domain::board::BitBoardLarge,
+        max_shield_steps: usize,
+        is_threat: impl Fn(&Board, usize) -> bool,
+    ) -> (bool, bool) {
         let stride = dir_info.stride;
         let mask = &board.geo.cache.validity_masks[dir_info.id * board.side() + 1];
         let mut idx = origin_idx;
-        for _ in 0..max_steps {
+        let mut steps = 0;
+
+        // Phase 1: check for pawn shield within max_shield_steps
+        while steps < max_shield_steps {
             if !mask.get_bit(idx) {
-                return false;
+                return (false, false); // ray ends — not open
             }
             idx = (idx as isize + stride) as usize;
+            steps += 1;
             if friendly_occ.get_bit(idx) && board.pieces.pawns.get_bit(idx) {
-                return true;
+                return (false, false); // shielded
             }
             if board.pieces.all_occupancy.get_bit(idx) {
-                return false;
+                // Blocked by non-pawn piece — open, check if it's a threat
+                let attacked = enemy_occ.get_bit(idx) && is_threat(board, idx);
+                return (true, attacked);
             }
         }
-        false
+
+        // Phase 2: no shield found, continue walking to find threats
+        loop {
+            if !mask.get_bit(idx) {
+                return (true, false); // open, no threat
+            }
+            idx = (idx as isize + stride) as usize;
+            if board.pieces.all_occupancy.get_bit(idx) {
+                let attacked = enemy_occ.get_bit(idx) && is_threat(board, idx);
+                return (true, attacked);
+            }
+        }
     }
 
     // ── Pawn Structure (N-dimensional) ───────────────────────────────
 
-    fn evaluate_pawn_structure(board: &Board) -> (i32, i32) {
+    fn evaluate_pawn_structure(
+        board: &Board,
+        white_pawns: &SmallVec<[usize; 16]>,
+        black_pawns: &SmallVec<[usize; 16]>,
+    ) -> (i32, i32) {
         let mut mg = 0;
         let mut eg = 0;
         let dim = board.dimension();
 
         for player in [Player::White, Player::Black] {
             let sign = if player == Player::White { 1 } else { -1 };
-            let my_pawns = Self::get_pawn_indices(board, player);
-            let enemy_pawns = Self::get_pawn_indices(board, player.opponent());
+            let (my_pawns, enemy_pawns) = match player {
+                Player::White => (white_pawns, black_pawns),
+                Player::Black => (black_pawns, white_pawns),
+            };
 
-            for &pawn_idx in &my_pawns {
+            for &pawn_idx in my_pawns {
                 let coords = &board.geo.cache.index_to_coords[pawn_idx];
 
                 // Passed pawn: no enemy pawn ahead on same or adjacent file column
-                if Self::is_passed_pawn(board, coords, player, &enemy_pawns, dim) {
+                if Self::is_passed_pawn(board, coords, player, enemy_pawns, dim) {
                     let advancement = match player {
                         Player::White => coords[0] as i32,
                         Player::Black => (board.side() as i32 - 1) - coords[0] as i32,
@@ -610,13 +624,13 @@ impl Evaluator {
                 }
 
                 // Isolated pawn: no friendly pawn on adjacent file columns
-                if Self::is_isolated_pawn(board, coords, &my_pawns, dim) {
+                if Self::is_isolated_pawn(board, coords, my_pawns, dim) {
                     mg -= sign * ISOLATED_PAWN_PENALTY_MG;
                     eg -= sign * ISOLATED_PAWN_PENALTY_EG;
                 }
 
                 // Doubled pawn: another friendly pawn on same file column
-                if Self::is_doubled_pawn(board, coords, &my_pawns, pawn_idx, dim) {
+                if Self::is_doubled_pawn(board, coords, my_pawns, pawn_idx, dim) {
                     mg -= sign * DOUBLED_PAWN_PENALTY_MG;
                     eg -= sign * DOUBLED_PAWN_PENALTY_EG;
                 }
@@ -847,7 +861,11 @@ impl Evaluator {
     // (no enemy pawn on adjacent files ahead). N-dimensional: uses
     // axis 0 = rank, axis 1 = file, higher dims must match.
 
-    fn evaluate_outposts(board: &Board) -> (i32, i32) {
+    fn evaluate_outposts(
+        board: &Board,
+        white_pawns: &SmallVec<[usize; 16]>,
+        black_pawns: &SmallVec<[usize; 16]>,
+    ) -> (i32, i32) {
         let mut mg = 0;
         let mut eg = 0;
         let dim = board.dimension();
@@ -858,7 +876,10 @@ impl Evaluator {
                 Player::White => &board.pieces.white_occupancy,
                 Player::Black => &board.pieces.black_occupancy,
             };
-            let enemy_pawns = Self::get_pawn_indices(board, player.opponent());
+            let enemy_pawns = match player {
+                Player::White => black_pawns,
+                Player::Black => white_pawns,
+            };
 
             for idx in occ.iter_indices() {
                 let is_knight = board.pieces.knights.get_bit(idx);
@@ -874,7 +895,7 @@ impl Evaluator {
                 let rank = coords[0];
                 let file = coords[1];
 
-                for &ep_idx in &enemy_pawns {
+                for &ep_idx in enemy_pawns {
                     let ec = &board.geo.cache.index_to_coords[ep_idx];
                     if !higher_dims_match(coords, ec, dim) {
                         continue;
@@ -956,6 +977,12 @@ impl Evaluator {
     // center distance + rank-based filtering.
 
     fn evaluate_space(board: &Board) -> (i32, i32) {
+        // Skip for high-dimensional boards (>3D): scanning all cells is too
+        // expensive for a marginal 2cp/square bonus.
+        if board.total_cells() > 512 {
+            return (0, 0);
+        }
+
         let mut mg = 0;
         let mut eg = 0;
         let side = board.side();
@@ -965,9 +992,6 @@ impl Evaluator {
             let sign = if player == Player::White { 1 } else { -1 };
             let mut space_count = 0i32;
 
-            // Count safe squares in own half that are:
-            // 1. In the center region (low center distance)
-            // 2. Behind own pawns on that file
             let my_occ = match player {
                 Player::White => &board.pieces.white_occupancy,
                 Player::Black => &board.pieces.black_occupancy,
@@ -977,7 +1001,6 @@ impl Evaluator {
                 let coords = &board.geo.cache.index_to_coords[idx];
                 let rank = coords[0] as usize;
 
-                // Only count squares in own extended half
                 let in_own_half = match player {
                     Player::White => rank < half + 1,
                     Player::Black => rank >= half.saturating_sub(1),
@@ -986,13 +1009,11 @@ impl Evaluator {
                     continue;
                 }
 
-                // Prefer central squares (low distance from center)
                 let dist = board.geo.cache.center_dist[idx];
                 if dist > 2 {
                     continue;
                 }
 
-                // Not occupied by own piece
                 if !my_occ.get_bit(idx) && !board.pieces.all_occupancy.get_bit(idx) {
                     space_count += 1;
                 }

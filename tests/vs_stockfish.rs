@@ -362,6 +362,15 @@ fn play_vs_stockfish(mut bot: Box<dyn PlayerStrategy>, label: &str) {
                 board.apply_move(&mv).unwrap();
                 uci_history.push(uci.clone());
                 pgn_moves.push(format!("{}. {}", move_number, uci));
+
+                // Show White's move before Stockfish responds
+                print_position(&board, move_number, &last_white, "...", label);
+                print!("  Moves: ");
+                let start = if pgn_moves.len() > 20 { pgn_moves.len() - 20 } else { 0 };
+                for token in &pgn_moves[start..] {
+                    print!("{} ", token);
+                }
+                println!();
             }
             Player::Black => {
                 let sf_uci = sf.best_move(&uci_history, 5000);
