@@ -1,6 +1,7 @@
 # The hyperchess AppProject forbids cluster-scoped resources, so the Namespace
-# is not managed here: CreateNamespace=true keeps it present, and its
-# shared-gateway-access label is maintained out-of-band on the live namespace.
+# is not managed here and CreateNamespace is NOT used (it would inject a
+# Namespace object that the project also rejects). The hyperchess namespace is
+# provisioned out-of-band, and carries the shared-gateway-access label there.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -27,7 +28,6 @@ spec:
       prune: true
       selfHeal: true
     syncOptions:
-      - CreateNamespace=true
       - ServerSideApply=true
     retry:
       limit: 3
