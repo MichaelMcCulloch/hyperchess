@@ -12,3 +12,14 @@ resources:
   - server-deployment.yaml
   - worker-deployment.yaml
   - httproutes.yaml
+# Image tags are GitOps-pinned: the CI `bump_manifests` job rewrites each
+# `newTag` to the commit short SHA and commits it back to master, which ArgoCD
+# then rolls out. Bootstrap value is `latest`; do not hand-edit — let CI own it.
+# (redis is an upstream image and is not bumped.)
+images:
+  - name: registry.semanticallyinvalid.net/michaelmcculloch/hyperchess/client
+    newTag: "latest"
+  - name: registry.semanticallyinvalid.net/michaelmcculloch/hyperchess/gateway
+    newTag: "latest"
+  - name: registry.semanticallyinvalid.net/michaelmcculloch/hyperchess/worker
+    newTag: "latest"

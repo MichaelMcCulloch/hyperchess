@@ -4,6 +4,8 @@ variables:
   DOCKER_HOST: tcp://docker:2375
   DOCKER_TLS_CERTDIR: ""
   DOCKER_DRIVER: overlay2
+  # Immutable, per-commit image tag — the unit of a release (what GitOps pins).
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
 
 services:
   - name: docker:dind
@@ -14,6 +16,7 @@ stages:
   - context
   - test
   - build
+  - deploy
 
 
 feed_repo_md:
@@ -34,32 +37,106 @@ test_server:
     - docker build --target builder -f Dockerfile.gateway -t server-builder .
     - docker run server-builder cargo test --release --features distributed -- --test-threads=1
 
+
+# Each image rebuilds ONLY when its own sources change, and drops a build-info
+# marker so the bump job knows which tags to re-pin. gateway and worker share
+# the Rust sources, so a Rust change rebuilds both. Each build publishes the
+# immutable $IMAGE_TAG (what GitOps pins) plus :latest for convenience.
 build_client:
   stage: build
   before_script:
-  - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+    - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+      changes:
+        - client/**/*
+  artifacts:
+    paths: [build-info/client]
+    expire_in: 1 day
   script:
-    - docker build -t $CI_REGISTRY_IMAGE/client client/
-    - docker push $CI_REGISTRY_IMAGE/client
-  only:
-    - master
+    - mkdir -p build-info
+    - docker build -t $CI_REGISTRY_IMAGE/client:$IMAGE_TAG -t $CI_REGISTRY_IMAGE/client:latest client/
+    - docker push $CI_REGISTRY_IMAGE/client:$IMAGE_TAG
+    - docker push $CI_REGISTRY_IMAGE/client:latest
+    - echo "$IMAGE_TAG" > build-info/client
 
 build_gateway:
   stage: build
   before_script:
-  - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+    - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+      changes:
+        - src/**/*
+        - proto/**/*
+        - build.rs
+        - Cargo.toml
+        - Cargo.lock
+        - .cargo/**/*
+        - Dockerfile.gateway
+  artifacts:
+    paths: [build-info/gateway]
+    expire_in: 1 day
   script:
-    - docker build -f Dockerfile.gateway -t $CI_REGISTRY_IMAGE/gateway .
-    - docker push $CI_REGISTRY_IMAGE/gateway
-  only:
-    - master
+    - mkdir -p build-info
+    - docker build -f Dockerfile.gateway -t $CI_REGISTRY_IMAGE/gateway:$IMAGE_TAG -t $CI_REGISTRY_IMAGE/gateway:latest .
+    - docker push $CI_REGISTRY_IMAGE/gateway:$IMAGE_TAG
+    - docker push $CI_REGISTRY_IMAGE/gateway:latest
+    - echo "$IMAGE_TAG" > build-info/gateway
 
 build_worker:
   stage: build
   before_script:
-  - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+    - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+      changes:
+        - src/**/*
+        - proto/**/*
+        - build.rs
+        - Cargo.toml
+        - Cargo.lock
+        - .cargo/**/*
+        - Dockerfile.worker
+  artifacts:
+    paths: [build-info/worker]
+    expire_in: 1 day
   script:
-    - docker build -f Dockerfile.worker -t $CI_REGISTRY_IMAGE/worker .
-    - docker push $CI_REGISTRY_IMAGE/worker
-  only:
-    - master
+    - mkdir -p build-info
+    - docker build -f Dockerfile.worker -t $CI_REGISTRY_IMAGE/worker:$IMAGE_TAG -t $CI_REGISTRY_IMAGE/worker:latest .
+    - docker push $CI_REGISTRY_IMAGE/worker:$IMAGE_TAG
+    - docker push $CI_REGISTRY_IMAGE/worker:latest
+    - echo "$IMAGE_TAG" > build-info/worker
+
+
+# GitOps write-back: re-pin ONLY the images that rebuilt this pipeline (per the
+# build-info markers) and push the bump to master, which ArgoCD watches.
+# `[skip ci]` stops the bump commit from looping CI.
+#
+# Requires a masked CI variable GITOPS_TOKEN = a token with repo write access.
+bump_manifests:
+  stage: deploy
+  image: alpine:3.20
+  needs:
+    - job: build_client
+      optional: true
+      artifacts: true
+    - job: build_gateway
+      optional: true
+      artifacts: true
+    - job: build_worker
+      optional: true
+      artifacts: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+  script:
+    - 'apk add --no-cache git'
+    - 'BUILT=""; for c in client gateway worker; do [ -f build-info/$c ] && BUILT="$BUILT $c"; done; echo "rebuilt:$BUILT"'
+    - '[ -n "$BUILT" ] || { echo "no images rebuilt; nothing to bump"; exit 0; }'
+    - 'sh deploy/ci/bump-tags.sh "$BUILT"'
+    - 'git config user.email "ci@semanticallyinvalid.net"'
+    - 'git config user.name "hyperchess-ci"'
+    - 'git add deploy/k8s/kustomization.yaml'
+    - 'git diff --cached --quiet && echo "tags already current; nothing to bump" && exit 0 || true'
+    - 'git commit -m "chore(deploy): release $IMAGE_TAG [skip ci]"'
+    - 'git push "https://gitops:${GITOPS_TOKEN}@git.semanticallyinvalid.net/MichaelMcCulloch/hyperchess.git" HEAD:master'
