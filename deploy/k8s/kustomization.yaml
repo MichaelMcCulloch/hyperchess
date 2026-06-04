@@ -7,7 +7,6 @@ labels:
       app.kubernetes.io/part-of: hyperchess
     includeSelectors: false
 resources:
-  - namespace.yaml
   - client-deployment.yaml
   - redis-deployment.yaml
   - server-deployment.yaml

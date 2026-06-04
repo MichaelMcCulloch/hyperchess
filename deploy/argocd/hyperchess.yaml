@@ -1,4 +1,6 @@
-# Namespace's shared-gateway-access label is set by deploy/k8s/namespace.yaml (not via CreateNamespace).
+# The hyperchess AppProject forbids cluster-scoped resources, so the Namespace
+# is not managed here: CreateNamespace=true keeps it present, and its
+# shared-gateway-access label is maintained out-of-band on the live namespace.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
