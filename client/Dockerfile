@@ -21,8 +21,11 @@ FROM nginx:alpine
 # Copy built assets
 COPY --from=builder /app/dist /usr/share/nginx/html
 
+# SPA history fallback + /api/v1 reverse proxy to the in-cluster gateway
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
 # Expose port 80
 EXPOSE 80
 
-# Nginx default config runs on port 80 and serves /usr/share/nginx/html
+# Serves /usr/share/nginx/html and proxies /api/v1 (see nginx.conf)
 CMD ["nginx", "-g", "daemon off;"]
