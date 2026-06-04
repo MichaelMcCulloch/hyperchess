@@ -1,0 +1,35 @@
+# Namespace's shared-gateway-access label is set by deploy/k8s/namespace.yaml (not via CreateNamespace).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hyperchess
+  namespace: argocd
+spec:
+  project: hyperchess
+  source:
+    repoURL: https://git.semanticallyinvalid.net/MichaelMcCulloch/hyperchess.git
+    path: deploy/k8s
+    targetRevision: master
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hyperchess
+  # The Cilium gateway controller defaults backendRefs[].weight to 1, which the
+  # manifests omit — ignore that field so the HTTPRoutes don't read OutOfSync.
+  ignoreDifferences:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      jqPathExpressions:
+        - .spec.rules[].backendRefs[].weight
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

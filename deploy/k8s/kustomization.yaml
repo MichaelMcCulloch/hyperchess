@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hyperchess
+# Grouping label only — keep it out of selectors (those are immutable).
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: hyperchess
+    includeSelectors: false
+resources:
+  - namespace.yaml
+  - client-deployment.yaml
+  - redis-deployment.yaml
+  - server-deployment.yaml
+  - worker-deployment.yaml
+  - httproutes.yaml

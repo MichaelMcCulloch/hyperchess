@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: hyperchess-client
-  namespace: hyperchess
   labels:
     app: hyperchess-client
 spec:
@@ -27,7 +26,6 @@ apiVersion: v1
 kind: Service
 metadata:
   name: hyperchess-client
-  namespace: hyperchess
 spec:
   selector:
     app: hyperchess-client

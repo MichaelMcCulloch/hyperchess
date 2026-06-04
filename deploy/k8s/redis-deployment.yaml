@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: hyperchess-redis
-  namespace: hyperchess
   labels:
     app: hyperchess-redis
 spec:
@@ -30,7 +29,6 @@ apiVersion: v1
 kind: Service
 metadata:
   name: hyperchess-redis
-  namespace: hyperchess
 spec:
   selector:
     app: hyperchess-redis
