@@ -73,6 +73,7 @@ build_gateway:
         - Cargo.toml
         - Cargo.lock
         - .cargo/**/*
+        - Config.toml
         - Dockerfile.gateway
   artifacts:
     paths: [build-info/gateway]
@@ -97,6 +98,7 @@ build_worker:
         - Cargo.toml
         - Cargo.lock
         - .cargo/**/*
+        - Config.toml
         - Dockerfile.worker
   artifacts:
     paths: [build-info/worker]
