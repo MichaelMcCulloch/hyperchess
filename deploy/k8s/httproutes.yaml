@@ -4,7 +4,9 @@ metadata:
   name: hyperchess-http-route-redirect
 spec:
   parentRefs:
-    - name: gateway
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: gateway
       namespace: gateway
       sectionName: http
   hostnames:
@@ -28,7 +30,9 @@ metadata:
   name: hyperchess-server-http-route
 spec:
   parentRefs:
-    - name: gateway
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: gateway
       namespace: gateway
       sectionName: https
   hostnames:
@@ -48,7 +52,9 @@ metadata:
   name: hyperchess-client-http-route
 spec:
   parentRefs:
-    - name: gateway
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: gateway
       namespace: gateway
       sectionName: https
   hostnames:
