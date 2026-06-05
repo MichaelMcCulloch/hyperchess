@@ -1,29 +1,4 @@
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: hyperchess-http-route-redirect
-spec:
-  parentRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: gateway
-      namespace: gateway
-      sectionName: http
-  hostnames:
-    - hyperchess.semanticallyinvalid.net
-  rules:
-    # Explicit catch-all match: the gateway controller defaults this when
-    # omitted, which otherwise shows as perpetual drift in Argo.
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /
-      filters:
-        - type: RequestRedirect
-          requestRedirect:
-            scheme: https
-            statusCode: 301
----
+
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
